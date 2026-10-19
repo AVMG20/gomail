@@ -78,6 +78,8 @@ func addrsJSON(a []models.Address) string {
 type ApplyResult struct {
 	// New lists local ids of messages that did not exist before.
 	New []string
+
+	newWords []string
 }
 
 // ApplySync stores a provider sync round atomically: upserts, deletions,
@@ -141,6 +143,12 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 			return err
 		}
 		defer pl.close()
+		vins, err := tx.Prepare(`INSERT OR IGNORE INTO vocab(term) VALUES(?)`)
+		if err != nil {
+			return err
+		}
+		defer vins.Close()
+		var newWords []string
 
 		now := time.Now().UnixMilli()
 		for _, m := range r.Upserts {
@@ -167,6 +175,13 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 			}
 			if err := recomputeKinds(tx, id, ""); err != nil {
 				return err
+			}
+			for _, vw := range vocabWords(m) {
+				if r, err := vins.Exec(vw); err != nil {
+					return err
+				} else if n, _ := r.RowsAffected(); n > 0 {
+					newWords = append(newWords, vw)
+				}
 			}
 			var lids []string
 			for _, name := range m.Labels {
@@ -221,8 +236,24 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		if err := refreshJunk(tx, accountID, now); err != nil {
 			return err
 		}
-		return recountStarred(tx, accountID)
+		if err := recountStarred(tx, accountID); err != nil {
+			return err
+		}
+		res.newWords = newWords
+		return nil
 	})
+	if err == nil && len(res.newWords) > 0 {
+		s.vocabMu.Lock()
+		if v := s.vocab; v != nil {
+			v.mu.Lock()
+			for _, w := range res.newWords {
+				v.add(w)
+			}
+			v.mu.Unlock()
+		}
+		s.vocabMu.Unlock()
+	}
+	res.newWords = nil
 	return res, err
 }
 

@@ -68,6 +68,7 @@ CREATE INDEX messages_date ON messages(date DESC, id DESC);
 CREATE INDEX messages_account_date ON messages(account_id, date DESC, id DESC);
 CREATE INDEX messages_thread ON messages(account_id, thread_id, date);
 CREATE INDEX messages_account_kinds ON messages(account_id, folder_kinds);
+CREATE INDEX messages_unread_cover ON messages(unread, account_id, folder_kinds);
 CREATE INDEX messages_unread_date ON messages(unread, date DESC, id DESC) WHERE unread = 1;
 
 CREATE TABLE message_folders (
@@ -129,23 +130,8 @@ CREATE VIRTUAL TABLE messages_fts USING fts5(
 
 INSERT INTO messages_fts(messages_fts, rank) VALUES('rank', 'bm25(10.0, 5.0, 3.0, 2.0, 1.0)');
 
--- Trigram index over subject + sender for typo-tolerant / substring search.
-CREATE VIRTUAL TABLE messages_trgm USING fts5(
-	subject, sender,
-	content='', contentless_delete=1,
-	tokenize='trigram remove_diacritics 1'
-);
-
-CREATE TRIGGER messages_trgm_ai AFTER INSERT ON messages BEGIN
-	INSERT INTO messages_trgm(rowid, subject, sender) VALUES (new.rid, new.subject, new.from_name || ' ' || new.from_email);
-END;
-CREATE TRIGGER messages_trgm_ad AFTER DELETE ON messages BEGIN
-	DELETE FROM messages_trgm WHERE rowid = old.rid;
-END;
-CREATE TRIGGER messages_trgm_au AFTER UPDATE OF subject, from_name, from_email ON messages BEGIN
-	DELETE FROM messages_trgm WHERE rowid = old.rid;
-	INSERT INTO messages_trgm(rowid, subject, sender) VALUES (new.rid, new.subject, new.from_name || ' ' || new.from_email);
-END;
+-- Words seen in subjects and senders, for spelling correction in search.
+CREATE TABLE vocab (term TEXT PRIMARY KEY) WITHOUT ROWID;
 
 CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
 	INSERT INTO messages_fts(rowid, subject, sender, recipients, snippet, body)

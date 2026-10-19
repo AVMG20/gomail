@@ -1,0 +1,253 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, ref } from 'vue'
+import {
+  ClipboardPasteIcon, CopyIcon, Maximize2Icon, Minimize2Icon, MinusIcon, PaperclipIcon, ScissorsIcon,
+  SendIcon, SparklesIcon, Trash2Icon, XIcon, LoaderIcon, TextSelectIcon,
+} from '@lucide/vue'
+import { toast } from 'vue-sonner'
+import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import Tip from '@/components/common/Tip.vue'
+import { api, errorMessage } from '@/lib/api'
+import { formatBytes } from '@/lib/format'
+import { shortcutLabel, uid } from '@/lib/platform'
+import { useAccountsStore } from '@/stores/accounts'
+import { useComposeStore, type Draft } from '@/stores/compose'
+import { useSettingsStore } from '@/stores/settings'
+import RecipientField from './RecipientField.vue'
+import RichEditor from './RichEditor.vue'
+
+const props = defineProps<{ draft: Draft }>()
+const compose = useComposeStore()
+const accounts = useAccountsStore()
+const settings = useSettingsStore()
+
+const d = computed(() => props.draft)
+const title = computed(() => d.value.subject.trim() || (d.value.mode === 'forward' ? 'Forward' : d.value.mode === 'new' ? 'New message' : 'Reply'))
+const fileInput = ref<HTMLInputElement | null>(null)
+const toField = ref<InstanceType<typeof RecipientField> | null>(null)
+const editorRef = ref<InstanceType<typeof RichEditor> | null>(null)
+const subjectInput = ref<HTMLInputElement | null>(null)
+
+onMounted(async () => {
+  await nextTick()
+  if (d.value.mode === 'new' || !d.value.to.length) toField.value?.focus()
+  else editorRef.value?.editor?.commands.focus('start')
+})
+
+function onKey(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault()
+    void compose.send(d.value.id)
+  } else if (e.key === 'Escape') {
+    e.stopPropagation()
+    d.value.minimized = true
+  }
+}
+
+async function onFiles(e: Event) {
+  const files = Array.from((e.target as HTMLInputElement).files ?? [])
+  for (const f of files) {
+    if (f.size > 25 * 1024 * 1024) {
+      toast.error(`${f.name} is larger than 25 MB`)
+      continue
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(String(r.result))
+      r.onerror = () => reject(r.error)
+      r.readAsDataURL(f)
+    })
+    d.value.attachments.push({ id: uid('att'), filename: f.name, mimeType: f.type || 'application/octet-stream', size: f.size, dataBase64: dataUrl.slice(dataUrl.indexOf(',') + 1) })
+  }
+  if (fileInput.value) fileInput.value.value = ''
+}
+
+function discard() {
+  const snapshot = { ...d.value }
+  compose.close(d.value.id)
+  toast('Draft discarded', {
+    action: { label: 'Undo', onClick: () => { compose.drafts.push({ ...snapshot, minimized: false }) } },
+  })
+}
+
+// ---------------------------------------------------------------- subject context menu + grammar
+const subjSel = ref<{ start: number; end: number }>({ start: 0, end: 0 })
+const subjPending = ref<{ start: number; end: number } | null>(null)
+const subjArrived = ref(false)
+
+function snapSubject(e: MouseEvent) {
+  if (e.button !== 2) return
+  const el = subjectInput.value
+  if (el) subjSel.value = { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 }
+}
+const subjHasSel = computed(() => subjSel.value.end > subjSel.value.start)
+
+async function subjCopy() {
+  await api.clipboardSet(d.value.subject.slice(subjSel.value.start, subjSel.value.end))
+}
+async function subjCut() {
+  const { start, end } = subjSel.value
+  await api.clipboardSet(d.value.subject.slice(start, end))
+  d.value.subject = d.value.subject.slice(0, start) + d.value.subject.slice(end)
+}
+async function subjPaste() {
+  const text = (await api.clipboardGet()).replace(/\s*\n\s*/g, ' ')
+  const { start, end } = subjSel.value
+  d.value.subject = d.value.subject.slice(0, start) + text + d.value.subject.slice(end)
+}
+function subjSelectAll() {
+  subjectInput.value?.focus()
+  subjectInput.value?.select()
+}
+
+async function improveSubject() {
+  const before = d.value.subject
+  if (!before.trim() || subjPending.value) return
+  const { start, end } = subjHasSel.value ? subjSel.value : { start: 0, end: before.length }
+  subjPending.value = { start, end }
+  subjectInput.value?.setSelectionRange(before.length, before.length)
+  subjectInput.value?.blur()
+  try {
+    const result = (await api.improveGrammar(before.slice(start, end))).replace(/\s*\n\s*/g, ' ')
+    if (d.value.subject !== before) return // edited meanwhile; drop the result
+    if (!result.trim() || result === before.slice(start, end)) {
+      toast('Looks good already')
+      return
+    }
+    d.value.subject = before.slice(0, start) + result + before.slice(end)
+    subjArrived.value = true
+    setTimeout(() => (subjArrived.value = false), 1200)
+    toast.success('Subject improved', { action: { label: 'Undo', onClick: () => (d.value.subject = before) } })
+  } catch (e) {
+    toast.error('Could not improve grammar', { description: errorMessage(e) })
+  } finally {
+    subjPending.value = null
+  }
+}
+
+const subjParts = computed(() => {
+  const p = subjPending.value
+  const s = d.value.subject
+  return p ? [s.slice(0, p.start), s.slice(p.start, p.end), s.slice(p.end)] : ['', '', '']
+})
+
+const fromAccount = computed(() => accounts.accountMap.get(d.value.accountId))
+</script>
+
+<template>
+  <div
+    :class="[
+      'bg-background border-border pointer-events-auto flex flex-col overflow-hidden border shadow-2xl',
+      d.expanded ? 'fixed inset-x-[8vw] top-[6vh] bottom-[6vh] z-50 rounded-xl' : 'h-[min(560px,calc(100vh-80px))] w-[min(540px,calc(100vw-120px))] rounded-t-xl',
+    ]"
+    role="dialog"
+    :aria-label="title"
+    @keydown="onKey"
+  >
+    <!-- Title bar -->
+    <div class="bg-muted/60 border-border flex h-10 shrink-0 cursor-default items-center gap-1 border-b pr-1.5 pl-4" @dblclick="d.expanded = !d.expanded">
+      <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{{ title }}</span>
+      <Tip label="Minimize"><Button variant="ghost" size="icon-xs" aria-label="Minimize" @click="d.minimized = true"><MinusIcon /></Button></Tip>
+      <Tip :label="d.expanded ? 'Exit full size' : 'Full size'">
+        <Button variant="ghost" size="icon-xs" :aria-label="d.expanded ? 'Exit full size' : 'Full size'" @click="d.expanded = !d.expanded">
+          <Minimize2Icon v-if="d.expanded" /><Maximize2Icon v-else />
+        </Button>
+      </Tip>
+      <Tip label="Close"><Button variant="ghost" size="icon-xs" aria-label="Close" @click="compose.close(d.id)"><XIcon /></Button></Tip>
+    </div>
+
+    <!-- Header fields -->
+    <div class="divide-border/70 shrink-0 divide-y px-4">
+      <div v-if="accounts.accounts.length > 1" class="flex h-9 items-center gap-1">
+        <span class="text-muted-foreground w-10 shrink-0 text-[13px]">From</span>
+        <Select v-model="d.accountId">
+          <SelectTrigger size="sm" class="h-7 border-0 px-1.5 shadow-none focus-visible:ring-0 dark:bg-transparent">
+            <SelectValue>
+              <span v-if="fromAccount" class="flex items-center gap-2 text-[13px]">
+                <span class="size-2 rounded-full" :style="{ background: fromAccount.color }" />{{ fromAccount.email }}
+              </span>
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="a in accounts.accounts" :key="a.id" :value="a.id">
+              <span class="size-2 rounded-full" :style="{ background: a.color }" /> {{ a.displayName }} · {{ a.email }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div class="flex items-start">
+        <RecipientField ref="toField" v-model="d.to" label="To" class="flex-1" />
+        <button v-if="!d.showCc" type="button" class="text-muted-foreground hover:text-foreground mt-2.5 shrink-0 text-xs" @click="d.showCc = true">Cc Bcc</button>
+      </div>
+      <template v-if="d.showCc">
+        <RecipientField v-model="d.cc" label="Cc" />
+        <RecipientField v-model="d.bcc" label="Bcc" />
+      </template>
+      <ContextMenu>
+        <ContextMenuTrigger as-child>
+          <div class="relative" style="--default-contextmenu: hide" @mousedown.capture="snapSubject">
+            <input
+              ref="subjectInput"
+              v-model="d.subject"
+              type="text"
+              placeholder="Subject"
+              :readonly="!!subjPending"
+              :class="['h-10 w-full bg-transparent text-[13.5px] font-medium outline-none', subjPending && 'text-transparent caret-transparent selection:bg-transparent', subjArrived && 'ai-arrive']"
+              aria-label="Subject"
+            />
+            <!-- Shimmer overlay while grammar runs -->
+            <div v-if="subjPending" class="pointer-events-none absolute inset-0 flex items-center overflow-hidden text-[13.5px] font-medium whitespace-pre" aria-hidden="true">
+              <span>{{ subjParts[0] }}</span><span class="ai-shimmer">{{ subjParts[1] }}</span><span>{{ subjParts[2] }}</span>
+            </div>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent class="w-52">
+          <ContextMenuItem :disabled="!subjHasSel" @click="subjCut"><ScissorsIcon /> Cut <ContextMenuShortcut>{{ shortcutLabel('mod+x') }}</ContextMenuShortcut></ContextMenuItem>
+          <ContextMenuItem :disabled="!subjHasSel" @click="subjCopy"><CopyIcon /> Copy <ContextMenuShortcut>{{ shortcutLabel('mod+c') }}</ContextMenuShortcut></ContextMenuItem>
+          <ContextMenuItem @click="subjPaste"><ClipboardPasteIcon /> Paste <ContextMenuShortcut>{{ shortcutLabel('mod+v') }}</ContextMenuShortcut></ContextMenuItem>
+          <ContextMenuItem @click="subjSelectAll"><TextSelectIcon /> Select all</ContextMenuItem>
+          <template v-if="settings.grammarReady">
+            <ContextMenuSeparator />
+            <ContextMenuItem :disabled="!!subjPending || !d.subject.trim()" @click="improveSubject">
+              <SparklesIcon class="text-violet-500" /> {{ subjHasSel ? 'Improve grammar of selection' : 'Improve grammar' }}
+            </ContextMenuItem>
+          </template>
+        </ContextMenuContent>
+      </ContextMenu>
+    </div>
+    <div class="border-border/70 mx-4 border-t" />
+
+    <!-- Body -->
+    <RichEditor ref="editorRef" v-model="d.html" :version="d.version" @submit="compose.send(d.id)">
+      <template #start>
+        <Button size="sm" class="gap-1.5 px-3" :disabled="d.sending" @click="compose.send(d.id)">
+          <LoaderIcon v-if="d.sending" class="animate-spin" /><SendIcon v-else />
+          Send
+        </Button>
+        <span class="text-muted-foreground ml-1 hidden text-[11px] sm:inline">{{ shortcutLabel('mod+enter') }}</span>
+      </template>
+      <template #end>
+        <Tip label="Attach files">
+          <Button variant="ghost" size="icon-sm" class="text-muted-foreground" aria-label="Attach files" @click="fileInput?.click()"><PaperclipIcon /></Button>
+        </Tip>
+        <Tip label="Discard draft">
+          <Button variant="ghost" size="icon-sm" class="text-muted-foreground" aria-label="Discard draft" @click="discard"><Trash2Icon /></Button>
+        </Tip>
+      </template>
+    </RichEditor>
+    <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles" />
+
+    <div v-if="d.attachments.length" class="border-border flex shrink-0 flex-wrap gap-1.5 border-t px-4 py-2">
+      <span v-for="a in d.attachments" :key="a.id" class="bg-muted inline-flex h-7 max-w-56 items-center gap-1.5 rounded-md pr-1 pl-2 text-xs">
+        <PaperclipIcon class="text-muted-foreground size-3.5" />
+        <span class="truncate">{{ a.filename }}</span>
+        <span class="text-muted-foreground">{{ formatBytes(a.size) }}</span>
+        <button type="button" class="text-muted-foreground hover:text-foreground rounded p-0.5" :aria-label="`Remove ${a.filename}`" @click="d.attachments = d.attachments.filter((x) => x.id !== a.id)"><XIcon class="size-3" /></button>
+      </span>
+    </div>
+  </div>
+</template>

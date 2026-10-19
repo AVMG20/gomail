@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,9 @@ type Store struct {
 	db           *sql.DB
 	labels       labelIndex
 	hideProvider atomic.Bool
+
+	vocabMu sync.Mutex
+	vocab   *vocab // lazily loaded spelling vocabulary
 }
 
 // SetHideProviderLabels hides (true) or shows provider-sourced label

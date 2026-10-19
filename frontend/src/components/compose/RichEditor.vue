@@ -1,0 +1,234 @@
+<script setup lang="ts">
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { EditorContent, useEditor } from '@tiptap/vue-3'
+import StarterKit from '@tiptap/starter-kit'
+import { Placeholder } from '@tiptap/extensions'
+import { DOMSerializer } from '@tiptap/pm/model'
+import {
+  BoldIcon, ItalicIcon, LinkIcon, ListIcon, ListOrderedIcon, QuoteIcon, UnderlineIcon, ScissorsIcon, CopyIcon,
+  ClipboardPasteIcon, SparklesIcon, TextSelectIcon,
+} from '@lucide/vue'
+import { toast } from 'vue-sonner'
+import {
+  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import Tip from '@/components/common/Tip.vue'
+import { api, errorMessage } from '@/lib/api'
+import { shortcutLabel } from '@/lib/platform'
+import { useSettingsStore } from '@/stores/settings'
+import { AiPending, clearArrived, clearPending, markArrived, pendingRange, setPending } from './aiPending'
+
+const props = defineProps<{ modelValue: string; version: number; placeholder?: string }>()
+const emit = defineEmits<{ 'update:modelValue': [html: string]; submit: [] }>()
+const settings = useSettingsStore()
+
+const editor = useEditor({
+  content: props.modelValue,
+  extensions: [
+    StarterKit.configure({
+      heading: false, codeBlock: false, code: false, horizontalRule: false,
+      link: { openOnClick: false, autolink: true, defaultProtocol: 'https' },
+    }),
+    Placeholder.configure({ placeholder: props.placeholder ?? 'Write your message…' }),
+    AiPending,
+  ],
+  editorProps: {
+    attributes: { class: 'compose-editor-content', spellcheck: 'true' },
+    handleKeyDown(_view, e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        emit('submit')
+        return true
+      }
+      return false
+    },
+  },
+  onUpdate({ editor: ed }) {
+    emit('update:modelValue', ed.getHTML())
+  },
+})
+
+// External content replacement (e.g. reply prefill on reuse).
+watch(() => props.version, () => {
+  if (editor.value && props.modelValue !== editor.value.getHTML()) editor.value.commands.setContent(props.modelValue, { emitUpdate: false })
+})
+
+onBeforeUnmount(() => editor.value?.destroy())
+
+function setLink() {
+  const ed = editor.value
+  if (!ed) return
+  const prev = ed.getAttributes('link').href as string | undefined
+  const url = window.prompt('Link URL', prev ?? 'https://')
+  if (url === null) return
+  if (!url) ed.chain().focus().extendMarkRange('link').unsetLink().run()
+  else ed.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+}
+
+// ---------------------------------------------------------------- context menu
+// Snapshot the selection on right mouse-down, before WebKit moves it to the word under the cursor.
+const snap = ref<{ from: number; to: number } | null>(null)
+function onMouseDown(e: MouseEvent) {
+  if (e.button !== 2 || !editor.value) return
+  const { from, to } = editor.value.state.selection
+  snap.value = { from, to }
+}
+
+function selectedText(): string {
+  const ed = editor.value
+  if (!ed || !snap.value) return ''
+  return ed.state.doc.textBetween(snap.value.from, snap.value.to, '\n')
+}
+
+async function copy() {
+  await api.clipboardSet(selectedText())
+}
+async function cut() {
+  const ed = editor.value
+  if (!ed || !snap.value || snap.value.from === snap.value.to) return
+  await api.clipboardSet(selectedText())
+  ed.chain().focus().deleteRange(snap.value).run()
+}
+async function paste() {
+  const ed = editor.value
+  if (!ed) return
+  const text = await api.clipboardGet()
+  if (!text) return
+  const range = snap.value ?? ed.state.selection
+  ed.chain().focus().insertContentAt({ from: range.from, to: range.to }, { type: 'text', text }).run()
+}
+function selectAll() {
+  editor.value?.chain().focus().selectAll().run()
+}
+
+const improving = ref(false)
+
+async function improveGrammar() {
+  const ed = editor.value
+  if (!ed || improving.value) return
+  const { state } = ed
+  const sel = snap.value && snap.value.from !== snap.value.to ? snap.value : null
+  const from = sel ? sel.from : 0
+  const to = sel ? sel.to : state.doc.content.size
+  if (!state.doc.textBetween(from, to, ' ').trim()) {
+    toast('Nothing to improve yet')
+    return
+  }
+  // Send HTML when the range spans formatting or several blocks; plain text otherwise.
+  const slice = state.doc.slice(from, to)
+  let rich = !sel
+  if (sel) {
+    let blocks = 0
+    slice.content.descendants((node) => {
+      if (node.isBlock) blocks++
+      if (node.marks.length) rich = true
+      return true
+    })
+    if (blocks > 1 || slice.openStart !== slice.openEnd) rich = true
+  }
+  let input: string
+  if (!sel) input = ed.getHTML()
+  else if (rich) {
+    const div = document.createElement('div')
+    div.appendChild(DOMSerializer.fromSchema(state.schema).serializeFragment(slice.content))
+    input = div.innerHTML
+  } else input = state.doc.textBetween(from, to, '\n')
+
+  const before = ed.getHTML()
+  improving.value = true
+  ed.view.dispatch(setPending(ed.state.tr, from, to))
+  try {
+    const result = await api.improveGrammar(input)
+    const range = pendingRange(ed.state) ?? { from, to }
+    ed.view.dispatch(clearPending(ed.state.tr))
+    if (!result.trim() || result === input) {
+      toast('Looks good already', { description: 'No grammar changes suggested.' })
+      return
+    }
+    if (!sel) {
+      ed.commands.setContent(result)
+      ed.view.dispatch(markArrived(ed.state.tr, 0, ed.state.doc.content.size))
+    } else {
+      const startSize = ed.state.doc.content.size
+      if (rich) ed.chain().insertContentAt(range, result).run()
+      else ed.chain().insertContentAt(range, { type: 'text', text: result }).run()
+      const end = range.to + (ed.state.doc.content.size - startSize)
+      ed.view.dispatch(markArrived(ed.state.tr, range.from, Math.max(range.from, end)))
+    }
+    setTimeout(() => editor.value && editor.value.view.dispatch(clearArrived(editor.value.state.tr)), 1300)
+    emit('update:modelValue', ed.getHTML())
+    toast.success('Grammar improved', {
+      action: { label: 'Undo', onClick: () => { ed.commands.setContent(before); emit('update:modelValue', ed.getHTML()) } },
+    })
+  } catch (e) {
+    ed.view.dispatch(clearPending(ed.state.tr))
+    toast.error('Could not improve grammar', { description: errorMessage(e) })
+  } finally {
+    improving.value = false
+  }
+}
+
+defineExpose({ editor, improveGrammar })
+</script>
+
+<template>
+  <div class="flex min-h-0 flex-1 flex-col">
+    <ContextMenu>
+      <ContextMenuTrigger as-child>
+        <div class="compose-editor thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3" style="--default-contextmenu: hide" @mousedown.capture="onMouseDown" @click="editor?.chain().focus().run()">
+          <EditorContent :editor="editor" class="h-full" />
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent class="w-52">
+        <ContextMenuItem :disabled="!snap || snap.from === snap.to" @click="cut"><ScissorsIcon /> Cut <ContextMenuShortcut>{{ shortcutLabel('mod+x') }}</ContextMenuShortcut></ContextMenuItem>
+        <ContextMenuItem :disabled="!snap || snap.from === snap.to" @click="copy"><CopyIcon /> Copy <ContextMenuShortcut>{{ shortcutLabel('mod+c') }}</ContextMenuShortcut></ContextMenuItem>
+        <ContextMenuItem @click="paste"><ClipboardPasteIcon /> Paste <ContextMenuShortcut>{{ shortcutLabel('mod+v') }}</ContextMenuShortcut></ContextMenuItem>
+        <ContextMenuItem @click="selectAll"><TextSelectIcon /> Select all</ContextMenuItem>
+        <template v-if="settings.grammarReady">
+          <ContextMenuSeparator />
+          <ContextMenuItem :disabled="improving" @click="improveGrammar">
+            <SparklesIcon class="text-violet-500" />
+            {{ snap && snap.from !== snap.to ? 'Improve grammar of selection' : 'Improve grammar' }}
+          </ContextMenuItem>
+        </template>
+      </ContextMenuContent>
+    </ContextMenu>
+
+    <div v-if="editor" class="flex items-center gap-0.5 px-3 pb-1">
+      <slot name="start" />
+      <div class="bg-border mx-1 h-4 w-px" />
+      <Tip label="Bold" shortcut="mod+b">
+        <button type="button" :class="['tb', editor.isActive('bold') && 'tb-on']" aria-label="Bold" @click="editor.chain().focus().toggleBold().run()"><BoldIcon class="size-4" /></button>
+      </Tip>
+      <Tip label="Italic" shortcut="mod+i">
+        <button type="button" :class="['tb', editor.isActive('italic') && 'tb-on']" aria-label="Italic" @click="editor.chain().focus().toggleItalic().run()"><ItalicIcon class="size-4" /></button>
+      </Tip>
+      <Tip label="Underline" shortcut="mod+u">
+        <button type="button" :class="['tb', editor.isActive('underline') && 'tb-on']" aria-label="Underline" @click="editor.chain().focus().toggleUnderline().run()"><UnderlineIcon class="size-4" /></button>
+      </Tip>
+      <Tip label="Link">
+        <button type="button" :class="['tb', editor.isActive('link') && 'tb-on']" aria-label="Link" @click="setLink"><LinkIcon class="size-4" /></button>
+      </Tip>
+      <Tip label="Bulleted list">
+        <button type="button" :class="['tb', editor.isActive('bulletList') && 'tb-on']" aria-label="Bulleted list" @click="editor.chain().focus().toggleBulletList().run()"><ListIcon class="size-4" /></button>
+      </Tip>
+      <Tip label="Numbered list">
+        <button type="button" :class="['tb', editor.isActive('orderedList') && 'tb-on']" aria-label="Numbered list" @click="editor.chain().focus().toggleOrderedList().run()"><ListOrderedIcon class="size-4" /></button>
+      </Tip>
+      <Tip label="Quote">
+        <button type="button" :class="['tb', editor.isActive('blockquote') && 'tb-on']" aria-label="Quote" @click="editor.chain().focus().toggleBlockquote().run()"><QuoteIcon class="size-4" /></button>
+      </Tip>
+      <div class="flex-1" />
+      <slot name="end" />
+    </div>
+  </div>
+</template>
+
+<style scoped>
+@reference "../../style.css";
+.tb {
+  @apply text-muted-foreground hover:text-foreground hover:bg-muted flex size-7 items-center justify-center rounded-md transition-colors;
+}
+.tb-on {
+  @apply bg-muted text-foreground;
+}
+</style>

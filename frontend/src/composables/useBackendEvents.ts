@@ -1,0 +1,62 @@
+import { onBeforeUnmount } from 'vue'
+import { useDebounceFn } from '@vueuse/core'
+import { toast } from 'vue-sonner'
+import { api } from '@/lib/api'
+import { displayName } from '@/lib/format'
+import { useAccountsStore } from '@/stores/accounts'
+import { useAiStore } from '@/stores/ai'
+import { useMailStore } from '@/stores/mail'
+
+/** Subscribe to backend events and refresh the affected state (debounced). */
+export function useBackendEvents() {
+  const accounts = useAccountsStore()
+  const mail = useMailStore()
+  const ai = useAiStore()
+
+  const refreshList = useDebounceFn(() => {
+    mail.invalidateThread()
+    void mail.softRefresh()
+  }, 250)
+  const reloadAccounts = useDebounceFn(async () => {
+    await accounts.load()
+    mail.ensureValidMailbox()
+  }, 200)
+
+  const offs = [
+    api.on('sync:started', (p) => p?.accountId && accounts.setSyncing(p.accountId, true)),
+    api.on('sync:finished', (p) => {
+      if (!p) return
+      accounts.setSyncing(p.accountId, false)
+      if (p.error) {
+        const acc = accounts.accountMap.get(p.accountId)
+        toast.error(`Sync failed${acc ? ` for ${acc.email}` : ''}`, { description: p.error })
+      }
+      accounts.refreshCounts()
+      if (p.newMessages > 0) refreshList()
+    }),
+    api.on('messages:changed', (p) => {
+      // Only refresh the list when the change can affect the current view.
+      if (!p?.accountId || !mail.mailbox.accountId || p.accountId === mail.mailbox.accountId) refreshList()
+      accounts.refreshCounts()
+    }),
+    api.on('accounts:changed', () => void reloadAccounts()),
+    api.on('classify:progress', (p) => p && ai.onProgress(p)),
+    api.on('classify:finished', (p) => ai.onFinished(p ?? {})),
+    api.on('mail:new', (p) => {
+      if (!p?.latest) return
+      const acc = accounts.accountMap.get(p.accountId)
+      toast(`${p.count > 1 ? `${p.count} new messages` : `New mail from ${displayName(p.latest.from)}`}`, {
+        description: p.latest.subject + (acc && accounts.accounts.length > 1 ? ` · ${acc.displayName || acc.email}` : ''),
+        action: {
+          label: 'Open',
+          onClick: () => {
+            mail.switchAccount(p.accountId)
+            setTimeout(() => mail.open(p.latest.id), 300)
+          },
+        },
+      })
+    }),
+  ]
+
+  onBeforeUnmount(() => offs.forEach((off) => off()))
+}

@@ -24,7 +24,7 @@ const MAILBOX_KEY = 'gomail.mailbox.v1'
 const LAST_BY_ACCOUNT_KEY = 'gomail.lastMailbox.v1'
 
 export const UNIFIED_NAMES: Record<string, string> = {
-  inbox: 'All inboxes', starred: 'Starred', sent: 'Sent', drafts: 'Drafts', archive: 'Archive', spam: 'Junk', trash: 'Trash',
+  all: 'All mail', inbox: 'All inboxes', starred: 'Starred', sent: 'Sent', drafts: 'Drafts', archive: 'Archive', spam: 'Junk', trash: 'Trash',
 }
 
 export function mailboxKey(m: Mailbox): string {
@@ -85,7 +85,7 @@ export const useMailStore = defineStore('mail', () => {
   const query = computed<ListQuery>(() => ({
     accountId: mailbox.value.accountId,
     folderId: mailbox.value.folderId,
-    folderKind: mailbox.value.folderId ? '' : mailbox.value.kind,
+    folderKind: mailbox.value.folderId || mailbox.value.kind === 'all' ? '' : mailbox.value.kind,
     labels: labelFilter.value.labels,
     unlabeled: labelFilter.value.unlabeled,
     search: search.value.trim(),
@@ -113,7 +113,7 @@ export const useMailStore = defineStore('mail', () => {
 
   const mailboxName = computed(() => {
     const mb = mailbox.value
-    if (!mb.accountId) return UNIFIED_NAMES[mb.kind] ?? 'Mail'
+    if (!mb.accountId || mb.kind === 'all') return UNIFIED_NAMES[mb.kind] ?? 'Mail'
     const f = mb.folderId ? accounts.folderMap.get(mb.folderId) : accounts.folderOf(mb.accountId, mb.kind)
     if (f) return f.kind === 'spam' ? 'Junk' : f.name
     return UNIFIED_NAMES[mb.kind] ?? 'Mail'

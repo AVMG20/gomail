@@ -99,12 +99,12 @@ const date = computed(() => listDate(props.message.date))
 
     <!-- Compact: one line -->
     <div v-else class="flex min-w-0 flex-1 items-center gap-3">
-      <span :class="['w-40 shrink-0 truncate text-[13px]', message.unread ? 'font-semibold' : 'text-foreground/80']">{{ who }}</span>
+      <span :class="['w-[28%] max-w-44 min-w-24 shrink-0 truncate text-[13px]', message.unread ? 'font-semibold' : 'text-foreground/80']">{{ who }}</span>
       <span class="min-w-0 flex-1 truncate text-[13px]">
         <span :class="message.unread ? 'font-medium' : 'text-foreground/80'">{{ message.subject || '(no subject)' }}</span>
         <span class="text-muted-foreground"> — {{ message.snippet }}</span>
       </span>
-      <span v-if="pills.length" class="flex shrink-0 items-center gap-1">
+      <span v-if="pills.length" class="hidden shrink-0 items-center gap-1 @[560px]:flex">
         <LabelPill :label="pills[0].label" :detail="pills[0].detail" />
         <span v-if="pills.length > 1" class="text-muted-foreground text-[10.5px] font-medium">+{{ pills.length - 1 }}</span>
       </span>

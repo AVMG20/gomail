@@ -225,7 +225,8 @@ class MockBackend {
   }
 
   private highlight(m: Message, p: ParsedSearch, matchedIn: string): string {
-    const source = matchedIn === 'subject' ? m.subject : matchedIn === 'from' ? `${m.from.name} <${m.from.email}>` : (m.bodyText || m.snippet).replace(/\s+/g, ' ')
+    const body = (m.bodyText || m.snippet).replace(/\s+/g, ' ')
+    const source = matchedIn === 'from' ? `${m.from.name} <${m.from.email}>` : body
     const needles = [...p.phrases, ...p.terms, ...p.from, ...p.subject].filter((n) => n.length > 0)
     const lower = source.toLowerCase()
     let start = 0
@@ -335,9 +336,26 @@ class MockBackend {
     }))
   }
 
+  /** Conversation view: only the newest message of each thread. */
+  private latestPerThread(list: Message[]): Message[] {
+    const seen = new Set<string>()
+    return list.filter((m) => {
+      const key = `${m.accountId}:${m.threadId}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
+  /** Thread-level actions apply to every message of the conversation. */
+  private withThreads(ids: string[]): string[] {
+    const threads = new Set(ids.map((id) => this.messages.get(id)).filter(Boolean).map((m) => `${m!.accountId}:${m!.threadId}`))
+    return [...this.messages.values()].filter((m) => threads.has(`${m.accountId}:${m.threadId}`)).map((m) => m.id)
+  }
+
   async ListMessages(q: ListQuery): Promise<MessagePage> {
     await latency(90, 260)
-    const all = this.filter(q)
+    const all = this.latestPerThread(this.filter(q))
     let start = 0
     if (q.cursor) {
       const [date, id] = atob(q.cursor).split('|')
@@ -385,7 +403,7 @@ class MockBackend {
 
   async MarkRead(ids: string[], read: boolean): Promise<void> {
     await latency(30, 90)
-    this.mutate(ids, (m) => (m.unread = !read))
+    this.mutate(this.withThreads(ids), (m) => (m.unread = !read))
   }
 
   async SetStarred(ids: string[], starred: boolean): Promise<void> {
@@ -395,7 +413,7 @@ class MockBackend {
 
   async Archive(ids: string[]): Promise<void> {
     await latency(50, 140)
-    this.mutate(ids, (m) => {
+    this.mutate(this.withThreads(ids), (m) => {
       m.folderIds = [...m.folderIds.filter((f) => this.kindOf(f) !== 'inbox' && this.kindOf(f) !== 'custom'), `${m.accountId}:archive`]
       m.folderIds = [...new Set(m.folderIds)]
     })
@@ -403,12 +421,12 @@ class MockBackend {
 
   async Trash(ids: string[]): Promise<void> {
     await latency(50, 140)
-    this.mutate(ids, (m) => (m.folderIds = [`${m.accountId}:trash`]))
+    this.mutate(this.withThreads(ids), (m) => (m.folderIds = [`${m.accountId}:trash`]))
   }
 
   async MoveToFolder(ids: string[], folderId: string): Promise<void> {
     await latency(50, 140)
-    this.mutate(ids, (m) => {
+    this.mutate(this.withThreads(ids), (m) => {
       if (folderId.split(':')[0] !== m.accountId) return
       m.folderIds = this.kindOf(folderId) === 'custom' ? [`${m.accountId}:inbox`, folderId] : [folderId]
     })
@@ -631,7 +649,7 @@ class MockBackend {
 
   async ResolveQueryIDs(q: ListQuery, max: number): Promise<string[]> {
     await latency()
-    return this.filter({ ...q, cursor: '' }).slice(0, max > 0 ? max : 10000).map((m) => m.id)
+    return this.latestPerThread(this.filter({ ...q, cursor: '' })).slice(0, max > 0 ? max : 10000).map((m) => m.id)
   }
 
   private classifyTargets(q: ListQuery, onlyUnlabeled: boolean): Message[] {

@@ -16,7 +16,7 @@ export const SEED_LABELS: Label[] = [
   { id: 'finance', name: 'Finance', description: 'Invoices, receipts, bank statements, payments and taxes.', color: '#22c55e' },
   { id: 'travel', name: 'Travel', description: 'Flights, hotels, bookings and itineraries.', color: '#f97316' },
   { id: 'newsletters', name: 'Newsletters', description: 'Newsletters, digests, product announcements and marketing.', color: '#8b5cf6' },
-  { id: 'social', name: 'Personal', description: 'Friends and family, personal conversations and social invites.', color: '#ec4899' },
+  { id: 'social', name: 'Friends', description: 'Friends and family, personal conversations and social invites.', color: '#ec4899' },
   { id: 'updates', name: 'Notifications', description: 'Automated notifications from apps and services (GitHub, calendars, security alerts).', color: '#64748b' },
 ]
 
@@ -466,7 +466,8 @@ export function buildSeedMessages(): Message[] {
       t.replies.forEach(([from, text], j) => {
         const last = j === t.replies!.length - 1
         const subject = t.subject.startsWith('Re:') ? t.subject : `Re: ${t.subject}`
-        out.push(buildMessage({ ...t, from, text, html: undefined, subject, att: undefined, read: last ? t.read : true, starred: last ? t.starred : false, to: [t.from] },
+        const fromMe = from.email === me[t.acc].email
+        out.push(buildMessage({ ...t, from, text, html: undefined, subject, att: undefined, read: last ? t.read : true, starred: last ? t.starred : false, to: fromMe ? [t.from] : [me[t.acc]] },
           last ? date : date - (t.replies!.length - j) * 2.5 * HOUR, threadId, { inReplyTo: first.messageId }))
       })
       // Only the newest message keeps the label folder; older ones live in the thread.

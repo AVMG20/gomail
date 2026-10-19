@@ -182,7 +182,7 @@ const emptyState = computed(() => {
 <template>
   <section class="bg-background flex h-full min-w-0 flex-col" aria-label="Messages">
     <!-- Header -->
-    <header class="border-border shrink-0 border-b px-3 pt-3 pb-2">
+    <header class="border-border @container shrink-0 border-b px-3 pt-3 pb-2">
       <div class="flex h-9 items-center gap-1">
         <template v-if="mail.selection.size || mail.selectAllQuery">
           <BulkBar class="flex-1" />
@@ -267,7 +267,7 @@ const emptyState = computed(() => {
     <!-- List -->
     <ContextMenu>
       <ContextMenuTrigger as-child>
-        <div ref="scroller" class="thin-scroll relative min-h-0 flex-1 overflow-y-auto" role="listbox" aria-label="Message list" @scroll.passive="onScroll" @contextmenu="onContext">
+        <div ref="scroller" class="thin-scroll @container relative min-h-0 flex-1 overflow-y-auto" role="listbox" aria-label="Message list" @scroll.passive="onScroll" @contextmenu="onContext">
           <div v-if="mail.status === 'loading'" aria-busy="true">
             <div v-for="i in 9" :key="i" class="border-border/60 flex gap-3 border-b px-4" :style="{ height: `${rowHeight}px` }">
               <div class="flex flex-1 flex-col justify-center gap-2 pl-5">

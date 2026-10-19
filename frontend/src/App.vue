@@ -1,1 +1,129 @@
-<template><div>hi</div></template>
+<script setup lang="ts">
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { TooltipProvider } from 'reka-ui'
+import { Toaster } from '@/components/ui/sonner'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+import { Skeleton } from '@/components/ui/skeleton'
+import AccountRail from '@/components/mail/AccountRail.vue'
+import FolderSidebar from '@/components/mail/FolderSidebar.vue'
+import MessageList from '@/components/mail/MessageList.vue'
+import Onboarding from '@/components/dialogs/Onboarding.vue'
+import ClassifyProgress from '@/components/dialogs/ClassifyProgress.vue'
+import { useBackendEvents } from '@/composables/useBackendEvents'
+import { useShortcuts } from '@/composables/useShortcuts'
+import { errorMessage } from '@/lib/api'
+import { useAccountsStore } from '@/stores/accounts'
+import { useAiStore } from '@/stores/ai'
+import { useComposeStore } from '@/stores/compose'
+import { useMailStore } from '@/stores/mail'
+import { useSettingsStore } from '@/stores/settings'
+import { useUiStore } from '@/stores/ui'
+
+// Heavier, not-always-needed UI is code-split.
+const ReadingPane = defineAsyncComponent(() => import('@/components/mail/ReadingPane.vue'))
+const ComposeDock = defineAsyncComponent(() => import('@/components/compose/ComposeDock.vue'))
+const SettingsDialog = defineAsyncComponent(() => import('@/components/settings/SettingsDialog.vue'))
+const CommandPalette = defineAsyncComponent(() => import('@/components/dialogs/CommandPalette.vue'))
+const AddAccountDialog = defineAsyncComponent(() => import('@/components/dialogs/AddAccountDialog.vue'))
+const ShortcutsDialog = defineAsyncComponent(() => import('@/components/dialogs/ShortcutsDialog.vue'))
+const ClassifyConfirmDialog = defineAsyncComponent(() => import('@/components/dialogs/ClassifyConfirmDialog.vue'))
+
+const settings = useSettingsStore()
+const accounts = useAccountsStore()
+const mail = useMailStore()
+const ui = useUiStore()
+const compose = useComposeStore()
+const ai = useAiStore()
+
+const booted = ref(false)
+const bootError = ref('')
+
+useShortcuts()
+useBackendEvents()
+
+// Mount lazily-loaded dialogs on first use, then keep them mounted for instant reopen.
+const used = ref({ settings: false, palette: false, addAccount: false, shortcuts: false, classify: false })
+watch(() => ui.settingsOpen, (v) => v && (used.value.settings = true))
+watch(() => ui.paletteOpen, (v) => v && (used.value.palette = true))
+watch(() => ui.addAccountOpen, (v) => v && (used.value.addAccount = true))
+watch(() => ui.shortcutsOpen, (v) => v && (used.value.shortcuts = true))
+watch(() => ai.bulkRequest, (v) => v && (used.value.classify = true))
+
+onMounted(async () => {
+  try {
+    await Promise.all([settings.load(), accounts.load()])
+    mail.ensureValidMailbox()
+    await accounts.loadLabelCounts(mail.mailbox.accountId)
+    void mail.reload()
+  } catch (e) {
+    bootError.value = errorMessage(e)
+  } finally {
+    booted.value = true
+  }
+  // Warm the reading pane chunk.
+  void import('@/components/mail/ReadingPane.vue')
+})
+
+watch(() => mail.mailbox.accountId, (id) => void accounts.loadLabelCounts(id))
+
+// Narrow windows: collapse the folder sidebar first (the rail stays).
+watch(() => ui.narrow, (n) => (ui.folderSidebarOpen = !n), { immediate: true })
+
+const accountColor = computed(() => mail.mailboxAccount?.color ?? 'var(--muted-foreground)')
+const toasterTheme = computed(() => (settings.settings?.theme === 'light' || settings.settings?.theme === 'dark' ? settings.settings.theme : 'system') as 'light' | 'dark' | 'system')
+
+watch(() => mail.mailboxName, (name) => {
+  document.title = name ? `${name} — gomail` : 'gomail'
+}, { immediate: true })
+</script>
+
+<template>
+  <TooltipProvider :delay-duration="350" :skip-delay-duration="200">
+    <div class="relative flex h-full w-full overflow-hidden" :style="{ '--account': accountColor }">
+      <AccountRail />
+
+      <div v-if="!booted" class="flex flex-1">
+        <div class="bg-sidebar border-sidebar-border w-60 space-y-2 border-r p-4">
+          <Skeleton v-for="i in 7" :key="i" class="h-7 w-full" />
+        </div>
+        <div class="flex-1" />
+      </div>
+
+      <div v-else-if="bootError" class="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+        <p class="font-medium">gomail couldn’t start</p>
+        <p class="text-muted-foreground max-w-md text-sm">{{ bootError }}</p>
+      </div>
+
+      <Onboarding v-else-if="!accounts.accounts.length" />
+
+      <template v-else>
+        <div
+          v-if="ui.folderSidebarOpen"
+          :class="ui.narrow ? 'absolute inset-y-0 left-14 z-30 w-60 shadow-2xl' : 'w-60 shrink-0'"
+        >
+          <FolderSidebar />
+        </div>
+        <div v-if="ui.narrow && ui.folderSidebarOpen" class="absolute inset-y-0 right-0 left-14 z-20 bg-black/10" @click="ui.folderSidebarOpen = false" />
+
+        <ResizablePanelGroup direction="horizontal" auto-save-id="gomail.panes.v1" class="min-w-0 flex-1">
+          <ResizablePanel :default-size="42" :min-size="30" :max-size="65" class="min-w-0">
+            <MessageList />
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel :default-size="58" :min-size="35" class="min-w-0">
+            <ReadingPane />
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </template>
+    </div>
+
+    <ComposeDock v-if="compose.drafts.length" />
+    <ClassifyProgress />
+    <SettingsDialog v-if="used.settings" />
+    <CommandPalette v-if="used.palette" />
+    <AddAccountDialog v-if="used.addAccount" />
+    <ShortcutsDialog v-if="used.shortcuts" />
+    <ClassifyConfirmDialog v-if="used.classify" />
+    <Toaster position="bottom-center" :theme="toasterTheme" close-button />
+  </TooltipProvider>
+</template>

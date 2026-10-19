@@ -47,7 +47,14 @@ function sanitize(html: string, allowRemote: boolean): { html: string; blocked: 
             const h = el.getAttribute('height')
             // Hide tracking pixels entirely; keep a soft placeholder box for real images.
             if ((w && +w <= 2) || (h && +h <= 2)) el.setAttribute('style', 'display:none')
-            else el.setAttribute('data-blocked', '1')
+            else {
+              el.setAttribute('data-blocked', '1')
+              const hh = h && +h > 0 ? Math.min(+h, 240) : 48
+              el.setAttribute('style', `${el.getAttribute('style') ?? ''};height:${hh}px !important`)
+              // Transparent pixel avoids the broken-image icon; CSS draws a soft placeholder.
+              el.setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7')
+              el.removeAttribute('alt')
+            }
           }
           blocked++
         }
@@ -91,7 +98,7 @@ const srcdoc = computed(() => {
   html,body{margin:0;padding:0;background:#fff;color:#1f2328}
   body{padding:20px 22px;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Ubuntu,Roboto,"Helvetica Neue",Arial,sans-serif;word-wrap:break-word;overflow-wrap:anywhere;overflow-y:hidden}
   img{max-width:100%;height:auto}
-  img[data-blocked]{background:#f1f3f5;min-height:24px;min-width:24px;border-radius:4px}
+  img[data-blocked]{background:#f1f3f5;min-height:48px;min-width:24px;border-radius:4px}
   table{max-width:100%}
   pre{white-space:pre-wrap}
   blockquote{margin:0 0 0 .8ex;border-left:2px solid #d0d7de;padding-left:1ex;color:#57606a}

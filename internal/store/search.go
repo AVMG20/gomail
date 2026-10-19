@@ -6,11 +6,13 @@ import (
 	"html"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 )
 
@@ -171,7 +173,8 @@ func (ps ParsedSearch) FTSQuery() string {
 	var parts []string
 	for i, t := range ps.Terms {
 		p := ftsString(t.Text)
-		if i == len(ps.Terms)-1 && ps.PrefixLast {
+		// A one-letter prefix would match nearly everything.
+		if i == len(ps.Terms)-1 && ps.PrefixLast && len([]rune(t.Text)) >= 2 {
 			p += "*"
 		}
 		parts = append(parts, p)
@@ -186,7 +189,7 @@ func (ps ParsedSearch) FTSQuery() string {
 	col("sender", ps.From)
 	col("recipients", ps.To)
 	col("subject", ps.Subject)
-	return strings.Join(parts, " ")
+	return strings.Join(parts, " AND ")
 }
 
 // highlightTerms are the words to mark in excerpts.
@@ -215,9 +218,12 @@ type candidate struct {
 	terms []hlTerm
 }
 
-// Search ranks messages across accounts for the command palette: FTS5 bm25
-// (subject > from > recipients > snippet > body) with a recency boost and a
-// trigram typo-tolerant fallback over subject and sender.
+// Search ranks messages across accounts for the command palette: an FTS5
+// match (prefix on the last word) over subject, sender, recipients, snippet
+// and cached body text, scored by field weights (subject > from > to >
+// snippet > body) times a recency boost. When there are few hits, query
+// words are spell-corrected against the vocabulary of subjects and senders
+// (edit distance) and searched again (Fuzzy results).
 func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 	limit := q.Limit
 	if limit <= 0 {
@@ -236,7 +242,6 @@ func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 	}
 	s.addSearchFilters(w, ps)
 	nowMs := now().UnixMilli()
-	// recency multiplier in [1, 2): 2 for brand new mail, ~1.5 after 30 days.
 	recency := fmt.Sprintf(`(1.0 + 1.0 / (1.0 + max(0, %d - m.date) / 2592000000.0))`, nowMs) // == recencyBoost
 
 	var cands []candidate
@@ -259,10 +264,11 @@ func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 			seen[c.sum.ID] = true
 		}
 		if len(cands) < limit/2+1 && len(ps.Terms) > 0 {
-			fz, err := s.fuzzySearch(ps, w, recency, limit, seen)
+			fz, err := s.fuzzySearch(ps, w, nowMs, seen)
 			if err != nil {
 				return nil, err
 			}
+			sort.SliceStable(fz, func(i, j int) bool { return fz[i].score > fz[j].score })
 			cands = append(cands, fz...)
 		}
 	} else {
@@ -388,83 +394,182 @@ func (s *Store) fillSummaries(cands []candidate) error {
 	return nil
 }
 
-// fuzzySearch finds typo'd matches via the trigram index over subject and
-// sender, then verifies them with an edit distance on whole words.
-func (s *Store) fuzzySearch(ps ParsedSearch, w *where, recency string, limit int, seen map[string]bool) ([]candidate, error) {
-	var grams []string
-	gramSet := map[string]bool{}
-	var qterms [][]rune
-	for _, t := range ps.Terms {
+// fuzzySearch spell-corrects the free-text words against the vocabulary
+// and runs the corrected full-text query.
+func (s *Store) fuzzySearch(ps ParsedSearch, w *where, nowMs int64, seen map[string]bool) ([]candidate, error) {
+	vocab, err := s.vocabulary()
+	if err != nil {
+		return nil, err
+	}
+	var groups []string
+	var terms []hlTerm
+	corrected := false
+	for i, t := range ps.Terms {
+		prefix := i == len(ps.Terms)-1 && ps.PrefixLast
 		for _, word := range words(t.Text) {
-			if len(word) < 3 {
+			alts := vocab.similar(word, prefix)
+			if len(word) < 3 || len(alts) == 0 {
+				// Keep short / unknown words as typed.
+				q := ftsString(string(word))
+				if prefix && len(word) >= 2 {
+					q += "*"
+				}
+				groups = append(groups, q)
+				terms = append(terms, hlTerm{text: string(word), prefix: prefix})
 				continue
 			}
-			qterms = append(qterms, word)
-			for i := 0; i+3 <= len(word); i++ {
-				g := string(word[i : i+3])
-				if !gramSet[g] {
-					gramSet[g] = true
-					grams = append(grams, ftsString(g))
-				}
+			corrected = true
+			var ors []string
+			for _, a := range alts {
+				ors = append(ors, ftsString(a))
+				terms = append(terms, hlTerm{text: a})
 			}
+			groups = append(groups, "("+strings.Join(ors, " OR ")+")")
 		}
 	}
-	if len(grams) == 0 {
+	if !corrected {
 		return nil, nil
 	}
-	filter := ""
-	if len(w.conds) > 0 {
-		filter = " AND " + strings.Join(w.conds, " AND ")
+	// Operators other than free text still apply.
+	col := func(c string, vals []string) {
+		for _, v := range vals {
+			if hasWordChar(v) {
+				groups = append(groups, c+" : "+ftsString(v)+"*")
+			}
+		}
 	}
-	args := append([]any{strings.Join(grams, " OR ")}, w.args...)
-	rows, err := s.db.Query(`WITH hits AS (SELECT rowid AS rid, rank FROM messages_trgm WHERE messages_trgm MATCH ? ORDER BY rank LIMIT 400)
-		SELECT `+s.summaryCols()+`, `+recency+` FROM hits JOIN messages m ON m.rid = hits.rid WHERE 1=1`+filter, args...)
+	col("sender", ps.From)
+	col("recipients", ps.To)
+	col("subject", ps.Subject)
+	cands, err := s.ftsCandidates(strings.Join(groups, " AND "), w, terms, nowMs)
 	if err != nil {
-		return nil, fmt.Errorf("search failed: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-	var out []candidate
-	for rows.Next() {
-		var rec float64
-		sum, err := scanSummary(rows, &rec)
-		if err != nil {
-			return nil, err
-		}
-		if seen[sum.ID] {
+	out := cands[:0]
+	for _, c := range cands {
+		if seen[c.sum.ID] {
 			continue
 		}
-		hay := append(words(sum.Subject), words(sum.From.Name+" "+sum.From.Email)...)
-		total := 0.0
-		var matched []hlTerm
-		ok := true
-		for _, qt := range qterms {
-			best, bestWord := 0.0, []rune(nil)
-			for _, hw := range hay {
-				sim := wordSimilarity(qt, hw)
-				if sim > best {
-					best, bestWord = sim, hw
-				}
-			}
-			if best == 0 {
-				ok = false
-				break
-			}
-			total += best
-			matched = append(matched, hlTerm{text: string(bestWord)})
-		}
-		if !ok {
-			continue
-		}
-		c := candidate{sum: sum, fuzzy: true, terms: matched}
-		// Fuzzy hits rank below exact ones of similar age.
-		c.score = total / float64(len(qterms)) * rec * 0.5
+		c.fuzzy = true
+		c.score *= 0.6 // rank below exact matches of similar age
 		out = append(out, c)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })
-	if len(out) > limit {
-		out = out[:limit]
+	return out, nil
+}
+
+// vocab is the in-memory set of words seen in subjects and senders, bucketed
+// by length, used for spelling correction.
+type vocab struct {
+	mu    sync.RWMutex
+	byLen map[int][][]rune
+	seen  map[string]bool
+}
+
+func (v *vocab) add(w string) {
+	if v.seen[w] {
+		return
 	}
-	return out, rows.Err()
+	v.seen[w] = true
+	r := []rune(w)
+	v.byLen[len(r)] = append(v.byLen[len(r)], r)
+}
+
+// similar returns up to 8 vocabulary words close to w (and, for prefix
+// matching, words whose beginning is close to w), best first. w itself is
+// included when it is a known word.
+func (v *vocab) similar(w []rune, prefix bool) []string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	type hit struct {
+		word string
+		d    int
+	}
+	var hits []hit
+	allowed := 1
+	if len(w) >= 7 {
+		allowed = 2
+	}
+	maxLen := len(w) + allowed
+	if prefix {
+		maxLen = len(w) + 30
+	}
+	for l := max(1, len(w)-allowed); l <= maxLen; l++ {
+		for _, cand := range v.byLen[l] {
+			// Cheap filter: typos rarely change both of the first two letters.
+			if cand[0] != w[0] && (len(cand) < 2 || len(w) < 2 || cand[1] != w[1]) {
+				continue
+			}
+			d := osaDistance(w, cand)
+			if prefix && len(cand) > len(w) {
+				d = min(d, osaDistance(w, cand[:len(w)]), osaDistance(w, cand[:len(w)+1]))
+			}
+			if d <= allowed {
+				hits = append(hits, hit{string(cand), d})
+			}
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].d != hits[j].d {
+			return hits[i].d < hits[j].d
+		}
+		return len(hits[i].word) < len(hits[j].word)
+	})
+	if len(hits) > 8 {
+		hits = hits[:8]
+	}
+	out := make([]string, len(hits))
+	for i, h := range hits {
+		out[i] = h.word
+	}
+	return out
+}
+
+// vocabulary loads the vocabulary on first use.
+func (s *Store) vocabulary() (*vocab, error) {
+	s.vocabMu.Lock()
+	defer s.vocabMu.Unlock()
+	if s.vocab != nil {
+		return s.vocab, nil
+	}
+	v := &vocab{byLen: map[int][][]rune{}, seen: map[string]bool{}}
+	rows, err := s.db.Query(`SELECT term FROM vocab`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		v.add(t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.vocab = v
+	return v, nil
+}
+
+// vocabWords returns the folded words of a message worth remembering for
+// spelling correction (subject and sender).
+func vocabWords(m mail.Message) []string {
+	var out []string
+	for _, w := range words(m.Subject + " " + m.From.Name + " " + m.From.Email) {
+		if len(w) >= 3 && len(w) <= 30 && !allDigits(w) {
+			out = append(out, string(w))
+		}
+	}
+	return out
+}
+
+func allDigits(r []rune) bool {
+	for _, c := range r {
+		if !unicode.IsDigit(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // wordSimilarity returns a score in (0, 1] when the (folded) query word is

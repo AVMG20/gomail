@@ -1,5 +1,13 @@
-import {createApp} from 'vue'
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import 'vue-sonner/style.css'
+import './style.css'
 import App from './App.vue'
-import './style.css';
+import { applyTheme, readCachedTheme } from './lib/theme'
 
-createApp(App).mount('#app')
+// The inline script in index.html already applied the cached theme before
+// first paint; re-apply here so the OS-theme listener is registered.
+const cached = readCachedTheme()
+if (cached) applyTheme(cached, false)
+
+createApp(App).use(createPinia()).mount('#app')

@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import { ArchiveIcon, MailIcon, MailOpenIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, TagsIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import Tip from '@/components/common/Tip.vue'
 import LabelMenuItems from './LabelMenuItems.vue'
@@ -12,15 +11,9 @@ import { useMailStore } from '@/stores/mail'
 const mail = useMailStore()
 const ai = useAiStore()
 
-const allLoaded = computed(() => mail.messages.length > 0 && mail.selection.size === mail.messages.length)
-const checkState = computed<boolean | 'indeterminate'>(() => (mail.selectAllQuery || allLoaded.value ? true : mail.selection.size ? 'indeterminate' : false))
 const anyUnread = computed(() => [...mail.selection].some((id) => mail.byId.get(id)?.unread))
 const allStarred = computed(() => mail.selection.size > 0 && [...mail.selection].every((id) => mail.byId.get(id)?.starred))
 
-function toggleAll() {
-  if (checkState.value === true) mail.clearSelection()
-  else mail.selectAllLoaded()
-}
 
 async function run(fn: (ids: string[]) => Promise<void> | void) {
   const ids = await mail.targetIds()
@@ -43,8 +36,7 @@ async function labelWithAi() {
 
 <template>
   <div class="flex h-full items-center gap-1">
-    <Checkbox :model-value="checkState" class="mr-2 ml-1" aria-label="Select all" @update:model-value="toggleAll" />
-    <span class="mr-2 text-sm font-medium tabular-nums">{{ mail.selectionCount.toLocaleString() }} selected</span>
+    <span class="mr-2 pl-1 text-sm font-medium whitespace-nowrap tabular-nums">{{ mail.selectionCount.toLocaleString() }} selected</span>
     <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="run(mail.archive)"><ArchiveIcon /></Button></Tip>
     <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="run(mail.trash)"><Trash2Icon /></Button></Tip>
     <Tip :label="anyUnread ? 'Mark as read' : 'Mark as unread'">
@@ -54,26 +46,26 @@ async function labelWithAi() {
     </Tip>
     <Tip :label="allStarred ? 'Unstar' : 'Star'"><Button variant="ghost" size="icon-sm" aria-label="Star" @click="run((ids) => mail.setStarred(ids, !allStarred))"><StarIcon /></Button></Tip>
     <DropdownMenu>
-      <Tip label="Add label">
-        <DropdownMenuTrigger as-child><Button variant="ghost" size="icon-sm" aria-label="Add label"><TagIcon /></Button></DropdownMenuTrigger>
-      </Tip>
+      <DropdownMenuTrigger as-child>
+        <Tip label="Add label"><Button variant="ghost" size="icon-sm" aria-label="Add label"><TagIcon /></Button></Tip>
+      </DropdownMenuTrigger>
       <DropdownMenuContent align="start" class="w-52">
         <DropdownMenuLabel class="text-muted-foreground text-xs">Add label</DropdownMenuLabel>
         <LabelMenuItems @pick="(id) => run((ids) => mail.addLabel(ids, id))" />
       </DropdownMenuContent>
     </DropdownMenu>
     <DropdownMenu>
-      <Tip label="Remove label">
-        <DropdownMenuTrigger as-child><Button variant="ghost" size="icon-sm" aria-label="Remove label"><TagsIcon /></Button></DropdownMenuTrigger>
-      </Tip>
+      <DropdownMenuTrigger as-child>
+        <Tip label="Remove label"><Button variant="ghost" size="icon-sm" aria-label="Remove label"><TagsIcon /></Button></Tip>
+      </DropdownMenuTrigger>
       <DropdownMenuContent align="start" class="w-52">
         <DropdownMenuLabel class="text-muted-foreground text-xs">Remove label</DropdownMenuLabel>
         <LabelMenuItems @pick="(id) => run((ids) => mail.removeLabel(ids, id))" />
       </DropdownMenuContent>
     </DropdownMenu>
     <Tip label="Label with AI">
-      <Button variant="ghost" size="sm" class="gap-1.5 px-2" @click="labelWithAi">
-        <SparklesIcon class="text-violet-500" /> <span class="text-xs">Label with AI</span>
+      <Button variant="ghost" size="sm" class="gap-1.5 px-2" aria-label="Label with AI" @click="labelWithAi">
+        <SparklesIcon class="text-violet-500" /> <span class="hidden text-xs @[460px]:inline">Label with AI</span>
       </Button>
     </Tip>
     <div class="flex-1" />

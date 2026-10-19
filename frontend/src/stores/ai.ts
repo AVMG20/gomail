@@ -6,6 +6,7 @@ import type { ClassifyJobProgress, ListQuery } from '@/lib/types'
 import { useMailStore } from './mail'
 import { useSettingsStore } from './settings'
 import { useAccountsStore } from './accounts'
+import { useUiStore } from './ui'
 
 export interface BulkRequest {
   /** null = explicit ids (selection) */
@@ -33,7 +34,7 @@ export const useAiStore = defineStore('ai', () => {
   async function labelMessages(ids: string[]) {
     if (!ids.length) return
     if (!settings.aiReady) {
-      toast('Connect OpenRouter to label with AI', { action: { label: 'Open settings', onClick: () => import('./ui').then((m) => m.useUiStore().openSettings('ai')) } })
+      toast('Connect OpenRouter to label with AI', { action: { label: 'Open settings', onClick: () => useUiStore().openSettings('ai') } })
       return
     }
     labeling.value = new Set([...labeling.value, ...ids])
@@ -93,7 +94,7 @@ export const useAiStore = defineStore('ai', () => {
 
   function requestBulk(req: BulkRequest) {
     if (!settings.aiReady) {
-      toast('Connect OpenRouter to label with AI', { action: { label: 'Open settings', onClick: () => import('./ui').then((m) => m.useUiStore().openSettings('ai')) } })
+      toast('Connect OpenRouter to label with AI', { action: { label: 'Open settings', onClick: () => useUiStore().openSettings('ai') } })
       return
     }
     bulkRequest.value = req

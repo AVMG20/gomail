@@ -213,7 +213,10 @@ type ClassifyJob struct {
 // ClassifyEstimate is the expected size and cost of a labeling job.
 type ClassifyEstimate struct {
 	Count            int     `json:"count"`
+	Requests         int     `json:"requests"`        // Decisions API calls (labels are sent in chunks of 20)
+	EstimatedTokens  int     `json:"estimatedTokens"` // input tokens (~chars/4)
 	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
+	PriceKnown       bool    `json:"priceKnown"` // false when OpenRouter lists no price for the classifier model
 }
 
 // LabelCount is the number of messages carrying a label.
@@ -261,13 +264,48 @@ type ClassificationResult struct {
 	Error     string             `json:"error"` // per-message failure, "" on success
 }
 
-// Event names emitted to the frontend via the Wails runtime.
+// Event names emitted to the frontend.
 const (
-	EventSyncStarted      = "sync:started"      // payload: {accountId}
-	EventSyncFinished     = "sync:finished"     // payload: {accountId, newMessages, error}
-	EventMessagesChanged  = "messages:changed"  // payload: {accountId}
-	EventAccountsChanged  = "accounts:changed"  // payload: none
-	EventClassifyProgress = "classify:progress" // payload: {jobId, done, total, labeled, skipped, failed, cost}
-	EventClassifyFinished = "classify:finished" // payload: {jobId, done, total, labeled, skipped, failed, cost, cancelled, error}
-	EventNewMail          = "mail:new"          // payload: {accountId, count, latest: MessageSummary}
+	EventSyncStarted      = "sync:started"      // SyncEvent
+	EventSyncFinished     = "sync:finished"     // SyncEvent
+	EventMessagesChanged  = "messages:changed"  // AccountEvent ("" accountId = several accounts)
+	EventAccountsChanged  = "accounts:changed"  // AccountEvent
+	EventLabelsChanged    = "labels:changed"    // AccountEvent: label definitions changed (re-read GetSettings) or counts changed
+	EventClassifyProgress = "classify:progress" // ClassifyProgress
+	EventClassifyFinished = "classify:finished" // ClassifyProgress
+	EventNewMail          = "mail:new"          // NewMailEvent
 )
+
+// AccountEvent is the payload of account-scoped change events.
+type AccountEvent struct {
+	AccountID string `json:"accountId"`
+}
+
+// SyncEvent is the payload of sync:started / sync:finished.
+type SyncEvent struct {
+	AccountID   string `json:"accountId"`
+	NewMessages int    `json:"newMessages"`
+	Error       string `json:"error"`
+}
+
+// NewMailEvent announces newly arrived inbox mail.
+type NewMailEvent struct {
+	AccountID string         `json:"accountId"`
+	Count     int            `json:"count"`
+	Latest    MessageSummary `json:"latest"`
+}
+
+// ClassifyProgress is the payload of classify:progress / classify:finished.
+// JobID is "auto" for automatic labeling of new mail and "selection" for
+// ClassifyMessages.
+type ClassifyProgress struct {
+	JobID     string  `json:"jobId"`
+	Done      int     `json:"done"`
+	Total     int     `json:"total"`
+	Labeled   int     `json:"labeled"` // messages whose labels changed
+	Skipped   int     `json:"skipped"`
+	Failed    int     `json:"failed"`
+	Cost      float64 `json:"cost"` // USD so far
+	Cancelled bool    `json:"cancelled"`
+	Error     string  `json:"error"`
+}
