@@ -68,6 +68,7 @@ func DefaultSettings() models.Settings {
 		ClassifyRemoveThreshold:  DefaultRemoveThreshold,
 		AICorrectsProviderLabels: true,
 		ImportProviderLabels:     true,
+		Notifications:            true,
 		Labels:                   DefaultLabels(),
 		PrimaryColor:             DefaultPrimaryColor,
 		Radius:                   DefaultRadius,

@@ -114,7 +114,7 @@ func New(opts Options) (*Service, error) {
 	s.ai = ai.New(opts.OpenRouterBase, s.openRouterKey, ai.CacheFile(opts.DataDir))
 	s.engine = syncer.New(syncer.Config{
 		Store:         st,
-		Emit:          opts.UI,
+		Emit:          notifyingEmitter{s},
 		Provider:      s.provider,
 		ResolveLabels: s.resolveProviderLabels,
 		Interval: func() time.Duration {
@@ -168,6 +168,28 @@ func (s *Service) goBG(f func()) {
 }
 
 func (s *Service) emit(event string, data any) { s.ui.Emit(event, data) }
+
+// notifyingEmitter forwards engine events to the UI and shows a desktop
+// notification for new mail when enabled.
+type notifyingEmitter struct{ s *Service }
+
+func (n notifyingEmitter) Emit(event string, data any) {
+	n.s.ui.Emit(event, data)
+	ev, ok := data.(models.NewMailEvent)
+	if event != models.EventNewMail || !ok || !n.s.Settings().Notifications {
+		return
+	}
+	from := ev.Latest.From.Name
+	if from == "" {
+		from = ev.Latest.From.Email
+	}
+	title, body := from, ev.Latest.Subject
+	if ev.Count > 1 {
+		title = fmt.Sprintf("%d new messages", ev.Count)
+		body = from + ": " + ev.Latest.Subject
+	}
+	n.s.ui.Notify(title, body)
+}
 
 // ---- providers ----
 

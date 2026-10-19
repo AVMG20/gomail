@@ -181,8 +181,9 @@ type Settings struct {
 	Density             string  `json:"density"` // "comfortable" | "compact"
 	SyncIntervalMinutes int     `json:"syncIntervalMinutes"`
 	ShowRemoteImages    bool    `json:"showRemoteImages"`
-	PrimaryColor        string  `json:"primaryColor"` // hex accent color, e.g. "#2563eb"
-	Radius              float64 `json:"radius"`       // UI corner radius in rem (default 0.5)
+	PrimaryColor        string  `json:"primaryColor"`  // hex accent color, e.g. "#2563eb"
+	Radius              float64 `json:"radius"`        // UI corner radius in rem (default 0.5)
+	Notifications       bool    `json:"notifications"` // desktop notifications for new mail (default true)
 
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`
