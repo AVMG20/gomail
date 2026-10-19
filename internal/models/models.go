@@ -119,6 +119,26 @@ type ListQuery struct {
 	Cursor     string   `json:"cursor"`
 }
 
+// SearchQuery drives the command palette search across all mail. Query
+// supports free text (prefix matching on the last word, typo tolerant),
+// "quoted phrases" and operators: from: to: subject: label: in:<folder kind>
+// is:unread|read|starred has:attachment before:YYYY-MM-DD after:YYYY-MM-DD.
+type SearchQuery struct {
+	Query     string   `json:"query"`
+	AccountID string   `json:"accountId"` // "" = all accounts
+	Labels    []string `json:"labels"`    // optional: restrict to messages with ANY of these labels
+	Limit     int      `json:"limit"`     // default 20, max 100
+}
+
+// SearchResult is one ranked search hit.
+type SearchResult struct {
+	Message   MessageSummary `json:"message"`
+	Highlight string         `json:"highlight"` // HTML-escaped excerpt; matches wrapped in <mark></mark>
+	MatchedIn string         `json:"matchedIn"` // "subject" | "from" | "to" | "snippet" | "body" | "" (filters only)
+	Score     float64        `json:"score"`     // higher is better
+	Fuzzy     bool           `json:"fuzzy"`     // true when found by typo-tolerant matching
+}
+
 type MessagePage struct {
 	Messages   []MessageSummary `json:"messages"`
 	NextCursor string           `json:"nextCursor"`

@@ -56,7 +56,15 @@ export interface MessageSummary {
   unread: boolean
   starred: boolean
   hasAttachments: boolean
-  category: string
+  /** Label ids (multi-label). */
+  labels: string[]
+  /** Labels assigned by the AI classifier, with confidence (subset of `labels`). Optional until the backend provides it. */
+  aiLabels?: AILabel[]
+}
+
+export interface AILabel {
+  labelId: string
+  confidence: number
 }
 
 export interface Attachment {
@@ -84,7 +92,10 @@ export interface ListQuery {
   accountId: string
   folderId: string
   folderKind: string
-  category: string
+  /** Match mail having ANY of these labels. */
+  labels: string[]
+  /** Also/only match mail without labels. */
+  unlabeled: boolean
   search: string
   unreadOnly: boolean
   limit: number
@@ -118,7 +129,7 @@ export interface ComposeRequest {
   attachments: OutgoingAttachment[]
 }
 
-export interface Category {
+export interface Label {
   id: string
   name: string
   description: string
@@ -146,7 +157,7 @@ export interface Settings {
   classifyThreshold: number
   classifyInstructions: string
   autoClassify: boolean
-  categories: Category[]
+  labels: Label[]
   primaryColor: string
   /** rem */
   radius: number
@@ -164,9 +175,33 @@ export interface AIModel {
 
 export interface ClassificationResult {
   messageId: string
-  category: string
+  /** Assigned label id ("" or "none" when nothing matched). Older backends call it `category`. */
+  label?: string
+  category?: string
+  labels?: string[]
   confidence: number
   reason: string
+}
+
+export interface LabelCount {
+  labelId: string
+  total: number
+  unread: number
+}
+
+export interface SearchRequest {
+  query: string
+  accountId: string
+  labels: string[]
+  limit: number
+}
+
+export interface SearchResult {
+  message: MessageSummary
+  /** Snippet with <mark> highlights; everything else is pre-escaped. */
+  highlight: string
+  matchedIn: string
+  score: number
 }
 
 export interface AppInfo {
