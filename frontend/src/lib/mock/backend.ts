@@ -2,13 +2,13 @@
 // (`npm run dev` without Wails). It mirrors the bound App methods closely
 // enough that every screen can be demoed and tested.
 import type {
-  Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ComposeRequest, DefaultPrompts,
+  Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
   SearchQuery, SearchResult, Settings,
 } from '../types'
 import {
   DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, PROVIDER_LABELS, SEED_ACCOUNTS, SEED_SETTINGS,
-  asTemplateAccount, buildMessage, buildSeedMessages, buildWelcome, foldersFor,
+  asTemplateAccount, buildMessage, buildSeedMessages, buildStressMessages, buildWelcome, foldersFor,
 } from './data'
 
 type Listener = (payload: unknown) => void
@@ -110,7 +110,9 @@ class MockBackend {
 
   constructor() {
     for (const a of this.accounts) this.folders.set(a.id, foldersFor(a.id, a.provider))
-    for (const m of buildSeedMessages()) this.messages.set(m.id, m)
+    const stress = typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get('stress') || 0) : 0
+    const seed = stress ? buildStressMessages(stress === 1 ? 20000 : stress) : buildSeedMessages()
+    for (const m of seed) this.messages.set(m.id, m)
   }
 
   // ---------------------------------------------------------------- events
@@ -270,12 +272,20 @@ class MockBackend {
     return out
   }
 
+  private inboxUnread(accountId: string): number {
+    const threads = new Set<string>()
+    for (const m of this.messages.values()) {
+      if (m.accountId === accountId && m.unread && m.folderIds.includes(`${accountId}:inbox`)) threads.add(m.threadId)
+    }
+    return threads.size
+  }
+
   // ---------------------------------------------------------------- accounts
   async GetAccounts(): Promise<Account[]> {
     await latency()
     return clone(this.accounts.map((a) => ({
       ...a,
-      unreadCount: this.filter({ accountId: a.id, folderKind: 'inbox' }).filter((m) => m.unread).length,
+      unreadCount: this.inboxUnread(a.id),
     })))
   }
 
@@ -330,10 +340,22 @@ class MockBackend {
   async GetFolders(accountId: string): Promise<Folder[]> {
     await latency(40, 120)
     const list = this.folders.get(accountId) ?? []
-    return clone(list.map((f) => {
-      const msgs = this.filter({ accountId, folderId: f.id })
-      return { ...f, total: msgs.length, unread: msgs.filter((m) => m.unread).length }
-    }))
+    // Single pass over the mailbox (fast even in ?stress mode). Counts are per conversation.
+    const total = new Map<string, number>()
+    const unread = new Map<string, number>()
+    const seen = new Set<string>()
+    const sorted = [...this.messages.values()].filter((m) => m.accountId === accountId).sort((a, b) => (a.date < b.date ? 1 : -1))
+    for (const m of sorted) {
+      if (seen.has(m.threadId)) continue
+      seen.add(m.threadId)
+      const ids = [...m.folderIds]
+      if (m.starred && !this.inExcluded(m)) ids.push(`${accountId}:starred`)
+      for (const f of ids) {
+        total.set(f, (total.get(f) ?? 0) + 1)
+        if (m.unread) unread.set(f, (unread.get(f) ?? 0) + 1)
+      }
+    }
+    return clone(list.map((f) => ({ ...f, total: total.get(f.id) ?? 0, unread: unread.get(f.id) ?? 0 })))
   }
 
   /** Conversation view: only the newest message of each thread. */
@@ -503,6 +525,7 @@ class MockBackend {
     const userLabels = incoming.labels.filter((l) => !l.source || l.source === 'user').map((l) => ({ ...l, source: 'user' }))
     this.settings = { ...incoming, labels: userLabels, openRouterKeySet: keySet }
     if (incoming.importProviderLabels !== undefined) this.settings.importProviderLabels = incoming.importProviderLabels
+    this.emit('labels:changed', { accountId: '' })
     const valid = new Set([...this.settings.labels, ...this.providerLabels].map((l) => l.id))
     for (const m of this.messages.values()) {
       if (m.labels.some((l) => !valid.has(l))) {
@@ -522,7 +545,11 @@ class MockBackend {
     if (!this.settings.openRouterKeySet) throw new Error('No OpenRouter API key set')
   }
 
-  async ListAIModels(): Promise<AIModel[]> {
+  async RefreshAIModels(): Promise<AIModel[]> {
+    return this.ListAIModels()
+  }
+
+  async ListAIModels(_force = false): Promise<AIModel[]> {
     await sleep(350)
     return clone(MOCK_MODELS)
   }
@@ -652,9 +679,9 @@ class MockBackend {
     return this.latestPerThread(this.filter({ ...q, cursor: '' })).slice(0, max > 0 ? max : 10000).map((m) => m.id)
   }
 
-  private classifyTargets(q: ListQuery, onlyUnlabeled: boolean): Message[] {
+  private classifyTargets(q: ListQuery, onlyUnlabeled: boolean, includeAllFolders: boolean): Message[] {
     // Spam/Junk is labeled like normal mail; Trash and Drafts only on request.
-    const includeAll = !!q.includeTrashDrafts
+    const includeAll = includeAllFolders
     const base = !q.folderId && !q.folderKind
       ? [...this.messages.values()].filter((m) => (!q.accountId || m.accountId === q.accountId) && (!q.unreadOnly || m.unread)
         && (!(q.labels?.length || q.unlabeled) || q.labels.some((l) => m.labels.includes(l)) || (q.unlabeled && m.labels.length === 0)))
@@ -662,16 +689,17 @@ class MockBackend {
     return base.filter((m) => (includeAll || !this.neverLabel(m)) && (!onlyUnlabeled || m.labels.length === 0))
   }
 
-  async EstimateClassify(q: ListQuery, onlyUnlabeled: boolean): Promise<ClassifyEstimate> {
+  async EstimateClassify(q: ListQuery, onlyUnlabeled: boolean, includeAllFolders = false): Promise<ClassifyEstimate> {
     await latency(80, 200)
-    const count = this.classifyTargets(q, onlyUnlabeled).length
-    return { count, estimatedCost: count * 0.00011, model: this.settings.classifierModel }
+    const count = this.classifyTargets(q, onlyUnlabeled, includeAllFolders).length
+    const requests = count * Math.ceil(this.allLabels().length / 20)
+    return { count, requests, estimatedTokens: count * 450, estimatedCostUsd: count * 0.00011, priceKnown: true }
   }
 
-  async ClassifyQuery(q: ListQuery, onlyUnlabeled: boolean): Promise<string> {
+  async ClassifyQuery(q: ListQuery, onlyUnlabeled: boolean, includeAllFolders = false): Promise<ClassifyJob> {
     this.requireAI()
     await latency()
-    const targets = this.classifyTargets(q, onlyUnlabeled)
+    const targets = this.classifyTargets(q, onlyUnlabeled, includeAllFolders)
     const jobId = `job_${++this.jobSeq}`
     const job = { cancelled: false }
     this.jobs.set(jobId, job)
@@ -702,7 +730,7 @@ class MockBackend {
       this.changed()
       this.emit('classify:finished', { jobId, done, total: targets.length, labeled, skipped, added, removed, cost, cancelled: job.cancelled, finished: true })
     })()
-    return jobId
+    return { jobId, total: targets.length }
   }
 
   async CancelClassify(jobId: string): Promise<void> {
@@ -740,8 +768,8 @@ class MockBackend {
 
   // Legacy names from the first contract draft.
   async ClassifyFolder(q: ListQuery): Promise<number> {
-    const est = await this.EstimateClassify(q, false)
-    await this.ClassifyQuery(q, false)
+    const est = await this.EstimateClassify(q, false, false)
+    await this.ClassifyQuery(q, false, false)
     return est.count
   }
 }

@@ -1,21 +1,25 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, h, ref } from 'vue'
 import {
-  ChevronDownIcon, ChevronRightIcon, LayersIcon, PaletteIcon, PencilIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon, SparklesIcon,
+  ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon,
 } from '@lucide/vue'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { relativeTime } from '@/lib/format'
-import type { Folder } from '@/lib/types'
+import type { Account, Folder } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore, UNIFIED_NAMES } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { FOLDER_ICONS } from './folderIcons'
+import AccountMenuTrigger from './AccountMenuTrigger.vue'
+
+// The dropdown chunk loads lazily; a static copy of the trigger shows meanwhile.
+const AccountMenu = defineAsyncComponent({
+  loader: () => import('./AccountMenu.vue'),
+  delay: 0,
+  loadingComponent: { props: ['account'], render(this: { account: Account }) { return h(AccountMenuTrigger, { account: this.account }) } },
+})
 
 const accounts = useAccountsStore()
 const mail = useMailStore()
@@ -85,27 +89,7 @@ function formatCount(n: number) {
     <!-- Header -->
     <div class="relative px-3 pt-3 pb-2">
       <div class="absolute inset-x-0 top-0 h-0.5" :style="{ background: account ? 'var(--account)' : 'transparent', opacity: 0.85 }" />
-      <DropdownMenu v-if="account">
-        <DropdownMenuTrigger as-child>
-          <button type="button" class="hover:bg-sidebar-accent flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <AccountAvatar :account="account" :size="28" :glyph="false" />
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-[13px] font-semibold">{{ account.displayName || account.email }}</span>
-              <span class="text-muted-foreground block truncate text-xs">{{ account.email }}</span>
-            </span>
-            <ChevronDownIcon class="text-muted-foreground size-4 shrink-0" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" class="w-56">
-          <DropdownMenuLabel class="text-muted-foreground text-xs font-normal">{{ account.email }}</DropdownMenuLabel>
-          <DropdownMenuItem @click="accounts.sync(account.id)"><RefreshCwIcon /> Sync now</DropdownMenuItem>
-          <DropdownMenuItem @click="ui.openSettings('accounts')"><PencilIcon /> Rename…</DropdownMenuItem>
-          <DropdownMenuItem @click="ui.openSettings('accounts')"><PaletteIcon /> Change color…</DropdownMenuItem>
-          <DropdownMenuItem v-if="settings.aiReady" @click="labelAllWithAi"><SparklesIcon /> Label all mail with AI…</DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" @click="ui.openSettings('accounts')"><Trash2Icon /> Remove account…</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <AccountMenu v-if="account" :account="account" @label-all="labelAllWithAi" />
       <div v-else class="flex items-center gap-2.5 px-2 py-1.5">
         <span class="bg-background text-foreground flex size-7 items-center justify-center rounded-full border"><LayersIcon class="size-3.5" /></span>
         <span class="min-w-0 flex-1">

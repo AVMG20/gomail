@@ -1,0 +1,79 @@
+<script setup lang="ts">
+// Lazily loaded row context menu, opened at the cursor via a 1x1 trigger.
+import { computed, nextTick, onMounted, ref } from 'vue'
+import {
+  ArchiveIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MailOpenIcon, ReplyAllIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon,
+} from '@lucide/vue'
+import {
+  ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut,
+  ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import { useAiStore } from '@/stores/ai'
+import { useComposeStore } from '@/stores/compose'
+import { useMailStore } from '@/stores/mail'
+import { useSettingsStore } from '@/stores/settings'
+
+const props = defineProps<{ x: number; y: number; messageId: string }>()
+const emit = defineEmits<{ close: [] }>()
+const mail = useMailStore()
+const settings = useSettingsStore()
+const compose = useComposeStore()
+const ai = useAiStore()
+const anchor = ref<HTMLElement | null>(null)
+
+const ctxMsg = computed(() => mail.byId.get(props.messageId) ?? null)
+const ctxIds = computed(() => (mail.selection.has(props.messageId) ? [...mail.selection] : [props.messageId]))
+
+onMounted(async () => {
+  await nextTick()
+  anchor.value?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: props.x, clientY: props.y }))
+})
+
+async function respond(mode: 'reply' | 'replyAll' | 'forward') {
+  const thread = await mail.loadThread(props.messageId)
+  const m = thread.find((x) => x.id === props.messageId) ?? thread[thread.length - 1]
+  if (m) void compose.respond(mode, m)
+}
+
+function toggleCtxLabel(labelId: string) {
+  const m = ctxMsg.value
+  if (!m) return
+  if (m.labels.includes(labelId)) void mail.removeLabel(ctxIds.value, labelId)
+  else void mail.addLabel(ctxIds.value, labelId)
+}
+</script>
+
+<template>
+  <ContextMenu @update:open="(o: boolean) => !o && emit('close')">
+    <ContextMenuTrigger as-child>
+      <div ref="anchor" class="pointer-events-none fixed size-px" :style="{ left: `${x}px`, top: `${y}px` }" />
+    </ContextMenuTrigger>
+    <ContextMenuContent v-if="ctxMsg" class="w-56" @close-auto-focus="(e: Event) => e.preventDefault()">
+      <ContextMenuItem @click="respond('reply')"><CornerUpLeftIcon /> Reply <ContextMenuShortcut>R</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="respond('replyAll')"><ReplyAllIcon /> Reply all <ContextMenuShortcut>A</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="respond('forward')"><ForwardIcon /> Forward <ContextMenuShortcut>F</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem @click="mail.archive(ctxIds)"><ArchiveIcon /> Archive <ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="mail.trash(ctxIds)"><Trash2Icon /> Delete <ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="mail.setRead(ctxIds, ctxMsg.unread)">
+        <component :is="ctxMsg.unread ? MailOpenIcon : MailIcon" /> {{ ctxMsg.unread ? 'Mark as read' : 'Mark as unread' }} <ContextMenuShortcut>U</ContextMenuShortcut>
+      </ContextMenuItem>
+      <ContextMenuItem @click="mail.setStarred(ctxIds, !ctxMsg.starred)"><StarIcon /> {{ ctxMsg.starred ? 'Unstar' : 'Star' }} <ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuSub>
+        <ContextMenuSubTrigger><TagIcon class="size-4" /> Labels</ContextMenuSubTrigger>
+        <ContextMenuSubContent class="w-52">
+          <ContextMenuCheckboxItem
+            v-for="l in settings.labels"
+            :key="l.id"
+            :model-value="ctxMsg.labels.includes(l.id)"
+            @select="(e: Event) => { e.preventDefault(); toggleCtxLabel(l.id) }"
+          >
+            <span class="size-2.5 rounded-full" :style="{ background: l.color }" /> {{ l.name }}
+          </ContextMenuCheckboxItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuItem :disabled="!settings.aiReady" @click="ai.labelMessages(ctxIds)"><SparklesIcon class="text-violet-500" /> Label with AI</ContextMenuItem>
+    </ContextMenuContent>
+  </ContextMenu>
+</template>

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
-import { TooltipProvider } from 'reka-ui'
 import { Toaster } from '@/components/ui/sonner'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -8,10 +7,10 @@ import AccountRail from '@/components/mail/AccountRail.vue'
 import FolderSidebar from '@/components/mail/FolderSidebar.vue'
 import MessageList from '@/components/mail/MessageList.vue'
 import Onboarding from '@/components/dialogs/Onboarding.vue'
-import ClassifyProgress from '@/components/dialogs/ClassifyProgress.vue'
+import TooltipLayer from '@/components/common/TooltipLayer.vue'
 import { useBackendEvents } from '@/composables/useBackendEvents'
 import { useShortcuts } from '@/composables/useShortcuts'
-import { errorMessage } from '@/lib/api'
+import { errorMessage, isWails, missingMethods } from '@/lib/api'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useComposeStore } from '@/stores/compose'
@@ -26,6 +25,7 @@ const SettingsDialog = defineAsyncComponent(() => import('@/components/settings/
 const CommandPalette = defineAsyncComponent(() => import('@/components/dialogs/CommandPalette.vue'))
 const AddAccountDialog = defineAsyncComponent(() => import('@/components/dialogs/AddAccountDialog.vue'))
 const ShortcutsDialog = defineAsyncComponent(() => import('@/components/dialogs/ShortcutsDialog.vue'))
+const ClassifyProgress = defineAsyncComponent(() => import('@/components/dialogs/ClassifyProgress.vue'))
 const ClassifyConfirmDialog = defineAsyncComponent(() => import('@/components/dialogs/ClassifyConfirmDialog.vue'))
 
 const settings = useSettingsStore()
@@ -50,6 +50,10 @@ watch(() => ui.shortcutsOpen, (v) => v && (used.value.shortcuts = true))
 watch(() => ai.bulkRequest, (v) => v && (used.value.classify = true))
 
 onMounted(async () => {
+  if (isWails()) {
+    const missing = missingMethods()
+    if (missing.length) console.warn(`[gomail] backend is missing bound methods: ${missing.join(', ')}`)
+  }
   try {
     await Promise.all([settings.load(), accounts.load()])
     mail.ensureValidMailbox()
@@ -60,8 +64,14 @@ onMounted(async () => {
   } finally {
     booted.value = true
   }
-  // Warm the reading pane chunk.
+  // Warm the lazily loaded chunks once the UI is idle (WebKit has no requestIdleCallback).
   void import('@/components/mail/ReadingPane.vue')
+  setTimeout(() => {
+    void import('@/components/mail/LabelFilter.vue')
+    void import('@/components/mail/AccountMenu.vue')
+    void import('@/components/mail/RowContextMenu.vue')
+    void import('@/components/mail/BulkBar.vue')
+  }, 1200)
 })
 
 watch(() => mail.mailbox.accountId, (id) => void accounts.loadLabelCounts(id))
@@ -78,7 +88,7 @@ watch(() => mail.mailboxName, (name) => {
 </script>
 
 <template>
-  <TooltipProvider :delay-duration="350" :skip-delay-duration="200">
+  <div class="contents">
     <div class="relative flex h-full w-full overflow-hidden" :style="{ '--account': accountColor }">
       <AccountRail />
 
@@ -118,12 +128,13 @@ watch(() => mail.mailboxName, (name) => {
     </div>
 
     <ComposeDock v-if="compose.drafts.length" />
-    <ClassifyProgress />
+    <ClassifyProgress v-if="ai.job" />
     <SettingsDialog v-if="used.settings" />
     <CommandPalette v-if="used.palette" />
     <AddAccountDialog v-if="used.addAccount" />
     <ShortcutsDialog v-if="used.shortcuts" />
     <ClassifyConfirmDialog v-if="used.classify" />
     <Toaster position="bottom-center" :theme="toasterTheme" close-button />
-  </TooltipProvider>
+    <TooltipLayer />
+  </div>
 </template>

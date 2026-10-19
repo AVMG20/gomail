@@ -12,7 +12,7 @@ priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
 description: "A clean desktop mail client for Gmail and Outlook"
 vendor: "gomail"
-homepage: "https://wails.io"
+homepage: "https://github.com/AVMG20/gomail"
 license: "MIT"
 release: "1"
 

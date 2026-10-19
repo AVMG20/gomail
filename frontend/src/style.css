@@ -257,3 +257,19 @@ mark {
   border-radius: 2px;
   padding: 0 1px;
 }
+
+.mail-text details.gm-quote > summary {
+  list-style: none;
+  display: inline-block;
+  cursor: pointer;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 1px;
+}
+.mail-text details.gm-quote > summary::-webkit-details-marker { display: none; }
+.mail-text details.gm-quote[open] > summary { margin-bottom: 6px; }
+.mail-text details.gm-quote { color: var(--muted-foreground); }

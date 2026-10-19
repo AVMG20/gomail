@@ -104,8 +104,9 @@ export const useAiStore = defineStore('ai', () => {
     bulkRequest.value = null
     try {
       if (req.query) {
-        const jobId = await api.classifyQuery({ ...req.query, includeTrashDrafts }, onlyUnlabeled)
-        job.value = { jobId, done: 0, total: 0, labeled: 0, skipped: 0, added: 0, removed: 0, cost: 0 }
+        const started = await api.classifyQuery(req.query, onlyUnlabeled, includeTrashDrafts)
+        // Progress events may already have arrived for this job; keep them.
+        if (job.value?.jobId !== started.jobId) job.value = { jobId: started.jobId, done: 0, total: started.total, labeled: 0, skipped: 0, added: 0, removed: 0, cost: 0 }
       } else {
         // Explicit selection: classify in place, in small batches, with local progress.
         const ids = req.ids
@@ -154,8 +155,9 @@ export const useAiStore = defineStore('ai', () => {
       total: p.total ?? cur?.total ?? 0,
       labeled: p.labeled ?? cur?.labeled ?? 0,
       skipped: p.skipped ?? cur?.skipped ?? 0,
-      added: p.added ?? cur?.added ?? 0,
-      removed: p.removed ?? cur?.removed ?? 0,
+      added: p.added ?? cur?.added,
+      removed: p.removed ?? cur?.removed,
+      failed: p.failed ?? cur?.failed ?? 0,
       cost: p.cost ?? cur?.cost ?? 0,
       finished: false,
       cancelled: cur?.cancelled,

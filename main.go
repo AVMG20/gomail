@@ -2,7 +2,8 @@ package main
 
 import (
 	"embed"
-	"log"
+	"fmt"
+	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
@@ -36,12 +37,11 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "gomail",
 		Description: "A fast desktop mail client for Gmail and Outlook with AI labels",
-		Services: []application.Service{
-			application.NewService(svc),
-			application.NewService(notifier),
-		},
-		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
-		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
+		// The notification service is started by MailService so a missing
+		// notification daemon (minimal Linux desktops) can't stop the app.
+		Services: []application.Service{application.NewService(svc)},
+		Assets:   application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
+		Mac:      application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 	})
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
@@ -76,6 +76,7 @@ func main() {
 	notifier.OnNotificationResponse(func(notifications.NotificationResult) { svc.showWindow() })
 
 	if err := app.Run(); err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, "gomail:", err)
+		os.Exit(1)
 	}
 }

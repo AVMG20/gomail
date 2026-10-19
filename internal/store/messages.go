@@ -430,7 +430,7 @@ func (s *Store) Message(id string) (msg models.Message, hasBody bool, err error)
 }
 
 func (s *Store) attachments(messageID string) ([]models.Attachment, error) {
-	rows, err := s.db.Query(`SELECT id, filename, mime_type, size, inline, content_id FROM attachments WHERE message_id = ? ORDER BY rowid`, messageID)
+	rows, err := s.db.Query(`SELECT id, filename, mime_type, size, inline, content_id FROM attachments WHERE message_id = ? ORDER BY pos`, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -499,9 +499,9 @@ func (s *Store) SaveBody(id string, b BodyUpdate) error {
 		if _, err := tx.Exec(`DELETE FROM attachments WHERE message_id = ?`, id); err != nil {
 			return err
 		}
-		for _, a := range b.Attachments {
-			if _, err := tx.Exec(`INSERT OR REPLACE INTO attachments(message_id, id, filename, mime_type, size, inline, content_id) VALUES(?,?,?,?,?,?,?)`,
-				id, a.ID, a.Filename, a.MimeType, a.Size, boolInt(a.Inline), a.ContentID); err != nil {
+		for i, a := range b.Attachments {
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO attachments(message_id, id, filename, mime_type, size, inline, content_id, pos) VALUES(?,?,?,?,?,?,?,?)`,
+				id, a.ID, a.Filename, a.MimeType, a.Size, boolInt(a.Inline), a.ContentID, i); err != nil {
 				return err
 			}
 		}

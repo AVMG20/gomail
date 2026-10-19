@@ -6,12 +6,18 @@ import { displayName } from '@/lib/format'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
+import { useSettingsStore } from '@/stores/settings'
 
 /** Subscribe to backend events and refresh the affected state (debounced). */
 export function useBackendEvents() {
   const accounts = useAccountsStore()
   const mail = useMailStore()
   const ai = useAiStore()
+  const settings = useSettingsStore()
+  const refreshLabels = useDebounceFn(() => {
+    void settings.refreshLabels()
+    void accounts.loadLabelCounts()
+  }, 300)
 
   const refreshList = useDebounceFn(() => {
     mail.invalidateThread()
@@ -40,6 +46,7 @@ export function useBackendEvents() {
       accounts.refreshCounts()
     }),
     api.on('accounts:changed', () => void reloadAccounts()),
+    api.on('labels:changed', () => refreshLabels()),
     api.on('classify:progress', (p) => p && ai.onProgress(p)),
     api.on('classify:finished', (p) => ai.onFinished(p ?? {})),
     api.on('mail:new', (p) => {

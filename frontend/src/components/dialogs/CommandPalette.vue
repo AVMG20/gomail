@@ -97,6 +97,15 @@ watch([query, scopeAccount, () => mail.labelFilter.labels.join(',')], () => {
   }, 120)
 })
 
+const MATCH_FIELDS: Record<string, string> = { subject: 'subject', from: 'sender', to: 'recipients', snippet: 'preview', body: 'message body' }
+/** Explain the hit when the highlighted excerpt doesn't show it (or it was typo-tolerant). */
+function matchHint(r: SearchResult): string {
+  const field = MATCH_FIELDS[r.matchedIn]
+  if (r.fuzzy) return field ? `Similar match in ${field}` : 'Similar match'
+  if (field && !r.highlight.includes('<mark>')) return `Matched in ${field}`
+  return ''
+}
+
 function safeHighlight(html: string) {
   return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['mark'], ALLOWED_ATTR: [] })
 }
@@ -311,6 +320,7 @@ const tipKeys = shortcutLabel('mod+enter')
                 <span class="block truncate text-[13px]">{{ r.message.subject || '(no subject)' }}</span>
                 <!-- eslint-disable-next-line vue/no-v-html -- sanitized to <mark> only -->
                 <span class="text-muted-foreground line-clamp-1 text-xs" v-html="safeHighlight(r.highlight)" />
+                <span v-if="matchHint(r)" class="text-muted-foreground/80 mt-0.5 block text-[10.5px]">{{ matchHint(r) }}</span>
               </span>
               <span v-if="r.message.labels.length" class="mt-0.5 flex shrink-0 gap-1">
                 <template v-for="id in r.message.labels.slice(0, 2)" :key="id">

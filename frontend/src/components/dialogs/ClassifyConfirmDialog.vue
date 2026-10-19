@@ -28,8 +28,8 @@ async function refreshEstimate() {
   if (!req) return
   estimating.value = true
   try {
-    if (req.query) estimate.value = await api.estimateClassify({ ...req.query, includeTrashDrafts: includeTrashDrafts.value }, onlyUnlabeled.value)
-    else estimate.value = { count: req.ids.length, estimatedCost: req.ids.length * 0.00011 }
+    if (req.query) estimate.value = await api.estimateClassify(req.query, onlyUnlabeled.value, includeTrashDrafts.value)
+    else estimate.value = { count: req.ids.length, estimatedCostUsd: req.ids.length * 0.00011, priceKnown: false }
   } catch {
     estimate.value = null
   } finally {
@@ -70,9 +70,10 @@ function start() {
         </div>
         <div>
           <div class="text-muted-foreground text-xs">Estimated cost</div>
-          <div class="mt-0.5 text-xl font-semibold tabular-nums">~{{ formatUSD(estimate?.estimatedCost) }}</div>
+          <div class="mt-0.5 text-xl font-semibold tabular-nums"><template v-if="estimate && !estimate.priceKnown">—</template><template v-else>~{{ formatUSD(estimate?.estimatedCostUsd) }}</template></div>
         </div>
-        <div class="text-muted-foreground col-span-2 text-xs">Model: <span class="text-foreground font-mono">{{ estimate?.model || settings.settings?.classifierModel }}</span></div>
+        <div v-if="estimate?.requests" class="text-muted-foreground col-span-2 -mt-1 text-xs">{{ estimate.requests.toLocaleString() }} classifier requests<template v-if="estimate.estimatedTokens"> · ~{{ Math.round(estimate.estimatedTokens / 1000).toLocaleString() }}K tokens</template><template v-if="!estimate.priceKnown"> · price unknown for this model</template></div>
+        <div class="text-muted-foreground col-span-2 text-xs">Model: <span class="text-foreground font-mono">{{ settings.settings?.classifierModel }}</span></div>
       </div>
 
       <div class="grid gap-3">

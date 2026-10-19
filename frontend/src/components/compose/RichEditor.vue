@@ -6,8 +6,11 @@ import { Placeholder } from '@tiptap/extensions'
 import { DOMSerializer } from '@tiptap/pm/model'
 import {
   BoldIcon, ItalicIcon, LinkIcon, ListIcon, ListOrderedIcon, QuoteIcon, UnderlineIcon, ScissorsIcon, CopyIcon,
-  ClipboardPasteIcon, SparklesIcon, TextSelectIcon,
+  ClipboardPasteIcon, SparklesIcon, TextSelectIcon, Link2OffIcon,
 } from '@lucide/vue'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { toast } from 'vue-sonner'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger,
@@ -39,6 +42,12 @@ const editor = useEditor({
         emit('submit')
         return true
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        e.stopPropagation()
+        linkOpen.value = true
+        return true
+      }
       return false
     },
   },
@@ -54,14 +63,32 @@ watch(() => props.version, () => {
 
 onBeforeUnmount(() => editor.value?.destroy())
 
-function setLink() {
+// ---------------------------------------------------------------- link popover
+const linkOpen = ref(false)
+const linkUrl = ref('')
+const linkForm = ref<HTMLFormElement | null>(null)
+watch(linkOpen, async (open) => {
+  if (!open || !editor.value) return
+  linkUrl.value = (editor.value.getAttributes('link').href as string | undefined) ?? ''
+  await new Promise((r) => setTimeout(r, 30))
+  const input = linkForm.value?.querySelector('input')
+  input?.focus()
+  input?.select()
+})
+function applyLink() {
   const ed = editor.value
   if (!ed) return
-  const prev = ed.getAttributes('link').href as string | undefined
-  const url = window.prompt('Link URL', prev ?? 'https://')
-  if (url === null) return
-  if (!url) ed.chain().focus().extendMarkRange('link').unsetLink().run()
+  let url = linkUrl.value.trim()
+  if (!url) return removeLink()
+  if (!/^(https?:|mailto:|tel:)/i.test(url)) url = url.includes('@') && !url.includes('/') ? `mailto:${url}` : `https://${url}`
+  const { empty } = ed.state.selection
+  if (empty && !ed.isActive('link')) ed.chain().focus().insertContent({ type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] }).run()
   else ed.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+  linkOpen.value = false
+}
+function removeLink() {
+  editor.value?.chain().focus().extendMarkRange('link').unsetLink().run()
+  linkOpen.value = false
 }
 
 // ---------------------------------------------------------------- context menu
@@ -197,25 +224,36 @@ defineExpose({ editor, improveGrammar })
       <slot name="start" />
       <div class="bg-border mx-1 h-4 w-px" />
       <Tip label="Bold" shortcut="mod+b">
-        <button type="button" :class="['tb', editor.isActive('bold') && 'tb-on']" aria-label="Bold" @click="editor.chain().focus().toggleBold().run()"><BoldIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('bold') && 'tb-on']" aria-label="Bold" @click="editor?.chain().focus().toggleBold().run()"><BoldIcon class="size-4" /></button>
       </Tip>
       <Tip label="Italic" shortcut="mod+i">
-        <button type="button" :class="['tb', editor.isActive('italic') && 'tb-on']" aria-label="Italic" @click="editor.chain().focus().toggleItalic().run()"><ItalicIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('italic') && 'tb-on']" aria-label="Italic" @click="editor?.chain().focus().toggleItalic().run()"><ItalicIcon class="size-4" /></button>
       </Tip>
       <Tip label="Underline" shortcut="mod+u">
-        <button type="button" :class="['tb', editor.isActive('underline') && 'tb-on']" aria-label="Underline" @click="editor.chain().focus().toggleUnderline().run()"><UnderlineIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('underline') && 'tb-on']" aria-label="Underline" @click="editor?.chain().focus().toggleUnderline().run()"><UnderlineIcon class="size-4" /></button>
       </Tip>
-      <Tip label="Link">
-        <button type="button" :class="['tb', editor.isActive('link') && 'tb-on']" aria-label="Link" @click="setLink"><LinkIcon class="size-4" /></button>
-      </Tip>
+      <Popover v-model:open="linkOpen">
+        <PopoverTrigger as-child>
+          <Tip label="Link" shortcut="mod+k">
+            <button type="button" :class="['tb', editor?.isActive('link') && 'tb-on']" aria-label="Insert link"><LinkIcon class="size-4" /></button>
+          </Tip>
+        </PopoverTrigger>
+        <PopoverContent side="top" align="start" class="w-80 gap-2 p-2">
+          <form ref="linkForm" class="flex items-center gap-1.5" @submit.prevent="applyLink">
+            <Input v-model="linkUrl" placeholder="https://example.com" class="h-8 text-[13px]" aria-label="Link URL" />
+            <Button type="submit" size="sm" class="h-8">Apply</Button>
+          </form>
+          <button v-if="editor?.isActive('link')" type="button" class="text-muted-foreground hover:text-destructive inline-flex items-center gap-1.5 self-start px-1 text-xs" @click="removeLink"><Link2OffIcon class="size-3.5" /> Remove link</button>
+        </PopoverContent>
+      </Popover>
       <Tip label="Bulleted list">
-        <button type="button" :class="['tb', editor.isActive('bulletList') && 'tb-on']" aria-label="Bulleted list" @click="editor.chain().focus().toggleBulletList().run()"><ListIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('bulletList') && 'tb-on']" aria-label="Bulleted list" @click="editor?.chain().focus().toggleBulletList().run()"><ListIcon class="size-4" /></button>
       </Tip>
       <Tip label="Numbered list">
-        <button type="button" :class="['tb', editor.isActive('orderedList') && 'tb-on']" aria-label="Numbered list" @click="editor.chain().focus().toggleOrderedList().run()"><ListOrderedIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('orderedList') && 'tb-on']" aria-label="Numbered list" @click="editor?.chain().focus().toggleOrderedList().run()"><ListOrderedIcon class="size-4" /></button>
       </Tip>
       <Tip label="Quote">
-        <button type="button" :class="['tb', editor.isActive('blockquote') && 'tb-on']" aria-label="Quote" @click="editor.chain().focus().toggleBlockquote().run()"><QuoteIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('blockquote') && 'tb-on']" aria-label="Quote" @click="editor?.chain().focus().toggleBlockquote().run()"><QuoteIcon class="size-4" /></button>
       </Tip>
       <div class="flex-1" />
       <slot name="end" />

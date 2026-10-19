@@ -33,6 +33,10 @@ function sanitize(html: string, allowRemote: boolean): { html: string; blocked: 
   })
   purify.addHook('afterSanitizeAttributes', (node) => {
     const el = node as Element
+    if (el.tagName === 'IMG' && /^cid:/i.test(el.getAttribute('src') ?? '')) {
+      // Inline part the backend could not embed: hide instead of showing a broken image.
+      el.setAttribute('style', 'display:none')
+    }
     if (el.tagName === 'A') {
       el.setAttribute('rel', 'noopener noreferrer')
       el.removeAttribute('target')
@@ -73,7 +77,7 @@ function sanitize(html: string, allowRemote: boolean): { html: string; blocked: 
     ALLOW_UNKNOWN_PROTOCOLS: false,
     ADD_ATTR: ['target'],
   }) as unknown as string
-  let out = clean
+  let out = collapseQuotes(clean)
   if (!allowRemote) {
     // <style> blocks may also reference remote resources.
     out = out.replace(/url\(\s*['"]?\s*(https?:)?\/\/[^)]*\)/gi, () => {
@@ -82,6 +86,34 @@ function sanitize(html: string, allowRemote: boolean): { html: string; blocked: 
     })
   }
   return { html: out, blocked }
+}
+
+const QUOTE_SELECTORS = ['.gmail_quote', 'blockquote[type="cite"]', '.yahoo_quoted', '#divRplyFwdMsg', '#appendonsend', '.moz-cite-prefix']
+
+/** Wrap trailing quoted history in a native <details> (works without scripts in the sandbox). */
+function collapseQuotes(html: string): string {
+  if (!/gmail_quote|type="cite"|yahoo_quoted|divRplyFwdMsg|appendonsend|moz-cite-prefix/i.test(html)) return html
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
+  const first = doc.body.querySelector(QUOTE_SELECTORS.join(','))
+  if (!first) return html
+  // The first marker and everything after it is history (Gmail, Apple Mail, Outlook, Thunderbird).
+  const start = first
+  const before = doc.createRange()
+  before.setStartBefore(doc.body.firstChild ?? doc.body)
+  before.setEndBefore(start)
+  if (!before.toString().trim()) return html // the quote is the whole message
+  const range = doc.createRange()
+  range.setStartBefore(start)
+  range.setEndAfter(doc.body.lastChild ?? start)
+  const details = doc.createElement('details')
+  details.className = 'gm-quote'
+  const summary = doc.createElement('summary')
+  summary.setAttribute('title', 'Show trimmed content')
+  summary.textContent = '•••'
+  details.appendChild(summary)
+  details.appendChild(range.extractContents())
+  doc.body.appendChild(details)
+  return doc.body.innerHTML
 }
 
 const isHtml = computed(() => !!props.message.bodyHtml.trim())
@@ -103,10 +135,29 @@ const srcdoc = computed(() => {
   pre{white-space:pre-wrap}
   blockquote{margin:0 0 0 .8ex;border-left:2px solid #d0d7de;padding-left:1ex;color:#57606a}
   a{color:#0b57d0}
+  details.gm-quote{margin-top:12px}
+  details.gm-quote>summary{list-style:none;display:inline-block;cursor:pointer;padding:0 8px;border-radius:6px;background:#eef0f3;color:#5f6368;font-size:12px;line-height:18px;letter-spacing:1px;user-select:none}
+  details.gm-quote>summary::-webkit-details-marker{display:none}
+  details.gm-quote[open]>summary{margin-bottom:8px}
 </style></head><body>${html}</body></html>`
 })
 
-const textHtml = computed(() => (isHtml.value ? '' : linkify(props.message.bodyText || props.message.snippet || '')))
+/** Plain text: linkify, and fold a trailing "> quoted" block behind a ••• toggle. */
+const textHtml = computed(() => {
+  if (isHtml.value) return ''
+  const text = props.message.bodyText || props.message.snippet || ''
+  const lines = text.split('\n')
+  let start = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim()
+    if (l === '' || l.startsWith('>')) {
+      if (l.startsWith('>')) start = i
+    } else break
+  }
+  if (start > 0 && /wrote:\s*$|^-{2,}\s*Original Message/i.test(lines[start - 1] ?? '')) start--
+  if (start <= 0 || !lines.slice(0, start).join('').trim()) return linkify(text)
+  return `${linkify(lines.slice(0, start).join('\n').replace(/\s+$/, ''))}<details class="gm-quote mt-2"><summary title="Show trimmed content">•••</summary>${linkify(lines.slice(start).join('\n'))}</details>`
+})
 
 let ro: ResizeObserver | null = null
 

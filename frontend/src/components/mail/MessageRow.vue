@@ -89,10 +89,12 @@ const date = computed(() => listDate(props.message.date))
       </div>
       <div :class="['truncate text-[13px]', message.unread ? 'text-foreground font-medium' : 'text-foreground/75']">{{ message.subject || '(no subject)' }}</div>
       <div class="flex min-w-0 items-center gap-2">
-        <span class="text-muted-foreground min-w-0 flex-1 truncate text-[12.5px]">{{ message.snippet }}</span>
-        <span v-if="pills.length" class="flex shrink-0 items-center gap-1">
-          <LabelPill v-for="p in shown" :key="p.label.id" :label="p.label" :detail="p.detail" />
-          <span v-if="extra > 0" class="text-muted-foreground text-[10.5px] font-medium">+{{ extra }}</span>
+        <span class="text-muted-foreground min-w-[40%] flex-1 truncate text-[12.5px]">{{ message.snippet }}</span>
+        <!-- Pills may shrink/hide but never push the snippet out -->
+        <span v-if="pills.length" class="flex max-w-[55%] min-w-0 shrink items-center justify-end gap-1 overflow-hidden">
+          <LabelPill v-for="(p, i) in shown" :key="p.label.id" :label="p.label" :detail="p.detail" :class="i > 0 ? 'hidden @[440px]:inline-flex' : 'min-w-0 shrink'" />
+          <span v-if="pills.length > 1" class="text-muted-foreground shrink-0 text-[10.5px] font-medium @[440px]:hidden">+{{ pills.length - 1 }}</span>
+          <span v-if="extra > 0" class="text-muted-foreground hidden shrink-0 text-[10.5px] font-medium @[440px]:inline">+{{ extra }}</span>
         </span>
       </div>
     </div>

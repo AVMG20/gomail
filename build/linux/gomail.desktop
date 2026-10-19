@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=gomail
+Exec=gomail
+Icon=gomail
+Categories=Development;
+Terminal=false
+Keywords=wails
+Version=1.0
+StartupNotify=false

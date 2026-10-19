@@ -21,9 +21,9 @@ export const SEED_LABELS: Label[] = [
 ]
 
 export const PROVIDER_LABELS: Label[] = [
-  { id: 'gmail-junk', name: 'Junk', description: 'Built-in Gmail spam label', color: '#a1a1aa', source: 'system', provider: 'gmail', accountId: 'acc_personal' },
-  { id: 'gmail-receipts', name: 'Receipts', description: 'Gmail label', color: '#10b981', source: 'provider', provider: 'gmail', accountId: 'acc_personal' },
-  { id: 'outlook-blue', name: 'Blue category', description: 'Outlook category', color: '#0ea5e9', source: 'provider', provider: 'outlook', accountId: 'acc_work' },
+  { id: 'gmail-junk', name: 'Junk', description: 'Built-in Gmail spam label', color: '#a1a1aa', source: 'system', provider: 'gmail' },
+  { id: 'gmail-receipts', name: 'Receipts', description: 'Gmail label', color: '#10b981', source: 'provider', provider: 'gmail' },
+  { id: 'outlook-blue', name: 'Blue category', description: 'Outlook category', color: '#0ea5e9', source: 'provider', provider: 'outlook' },
 ]
 
 export const SEED_SETTINGS: Settings = {
@@ -45,6 +45,9 @@ export const SEED_SETTINGS: Settings = {
   autoClassify: true,
   labels: SEED_LABELS.map((l) => ({ ...l, source: 'user' })),
   importProviderLabels: true,
+  notifications: true,
+  showInTray: true,
+  undoSendSeconds: 5,
   primaryColor: '#2563eb',
   radius: 0.625,
   grammarSystemPrompt: DEFAULT_GRAMMAR_PROMPT,
@@ -192,7 +195,7 @@ const T: Tpl[] = [
     cc: [P.jonas, P.mara],
     replies: [
       [P.jonas, `Looks great. One question on milestone 2 — do we have capacity on the mobile team for offline sync, or are we borrowing from Platform?\n\nJonas`],
-      [P.priya, `Good question. We're borrowing two engineers from Platform for six weeks; Mara already agreed. I'll add a note to the deck.`],
+      [P.priya, `Good question. We're borrowing two engineers from Platform for six weeks; Mara already agreed. I'll add a note to the deck.\n\nOn Tue, Jonas Weber wrote:\n> Looks great. One question on milestone 2 — do we have capacity on the\n> mobile team for offline sync, or are we borrowing from Platform?\n>\n> Jonas`],
     ],
   },
   {
@@ -318,6 +321,16 @@ const T: Tpl[] = [
     acc: 'acc_side', from: P.rachel, subject: 'Logo concepts — round two', cat: 'work', starred: true, folder: 'label:customers',
     text: `Hi!\n\nThanks for the first round, the team loved concept B. For round two could we try:\n\n• a slightly heavier wordmark\n• the teal from concept A instead of the navy\n• a version that works as a 16px favicon\n\nNo rush — end of next week is perfect.\n\nRachel\nLumen Labs`,
     replies: [[me.acc_side, `Hi Rachel, great feedback. I'll have round two to you by Thursday next week.`], [P.rachel, `Perfect, thank you!`]],
+  },
+  {
+    acc: 'acc_side', from: P.rachel, subject: 'Re: Final files for Lumen', cat: 'work', folder: 'label:customers',
+    html: `<div dir="ltr"><p>Hi!</p><p>Thanks for the final files, they look perfect. Here is the banner we put on the site — inline image below:</p><p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAAwCAIAAAAZy+Y5AAABtUlEQVR42u3R5zoQABiGYQfR3ntPSdLeKho0hNLQIu1xRpEVES8RWRERERFxJn3vWfTjua77DO6EOXob5lrJPJXMt9IFKl2od2GRlS1W2RIrX6ryZaoIy61yhSpXWtUqVa3W+7DGqteqep3VrFfNBn0IG612k2o3W90W1W3Vx7DN6rerfoc17FRDohR2WWOSGndbU7Ka9uhTSLHmvWpOtZZ9atmvz+GAtR5U6yFrO6y2I/oSjlr7MbUft44T6jipznDKutLUddq6z6j7rL6GdOvJUM856z2v3gv6Fi5aX6b6sqz/kvov63u4YgNXNZBtg9c0mKMfIdeG8jR03YZvaDhfP8NNG7mlkds2ekejBfoV7trYPY3dt/EHGn+o36HQJoo08cgmizX5WH/CE5t6qqlnNv1c0y/0N7y0mVeaeW2zbzSbQDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBP/vwf8AB4iVzZGG2gIAAAAASUVORK5CYII=" width="160" height="48" alt="Lumen banner"></p><p>Invoice whenever you are ready.</p><p>Rachel</p></div>
+<div class="gmail_quote"><div class="gmail_attr">On Tue, Jun 4 at 10:12, Pixelforge Studio &lt;hello@pixelforge.studio&gt; wrote:</div>
+<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">
+<p>Hi Rachel,</p><p>Attached are the final logo files: SVG, PNG (light and dark) and the favicon set. I also included a one-page usage guide with spacing, minimum sizes and colour values.</p>
+<p>Let me know if anything is missing.</p><p>Best,<br>Pixelforge</p>
+<div class="gmail_quote"><div class="gmail_attr">On Fri, May 31, Rachel Kim wrote:</div><blockquote class="gmail_quote"><p>Could you send the final files by Tuesday? We want to ship the new site on Wednesday.</p></blockquote></div>
+</blockquote></div>`,
   },
   {
     acc: 'acc_side', from: P.tomas, subject: 'Collaboration on the Rivera rebrand?', cat: 'work',
@@ -527,4 +540,30 @@ export const MOCK_MODELS: AIModel[] = [
   ['z-ai/glm-4.5', 'Z.AI: GLM 4.5', 131072, 0.2, 0.2],
   ['perplexity/sonar', 'Perplexity: Sonar', 127072, 1, 1],
   ['inception/mercury', 'Inception: Mercury', 128000, 0.25, 1],
-].map(([id, name, ctx, p, c]) => ({ id: id as string, name: name as string, description: '', contextLength: ctx as number, promptPrice: p as number, completionPrice: c as number }))
+].map(([id, name, ctx, p, c]) => ({ id: id as string, name: name as string, description: '', contextLength: ctx as number, promptPrice: p as number, completionPrice: c as number, kind: 'chat' }))
+
+MOCK_MODELS.unshift(
+  { id: 'typesafe/jev-1.13', name: 'TypeSafe: Jev 1.13', description: 'Decision model', contextLength: 32768, promptPrice: 0.05, completionPrice: 0, kind: 'decision' },
+  { id: '~typesafe/jev-latest', name: 'TypeSafe: Jev (latest)', description: 'Decision model', contextLength: 32768, promptPrice: 0.05, completionPrice: 0, kind: 'decision' },
+)
+
+/** `?stress=1`: tens of thousands of messages to profile scrolling, selection and search. */
+export function buildStressMessages(n: number): Message[] {
+  const base = buildSeedMessages().filter((m) => !m.folderIds.some((f) => f.endsWith(':trash') || f.endsWith(':spam') || f.endsWith(':drafts')))
+  const out: Message[] = []
+  const start = Date.now() - 6 * 60_000
+  for (let i = 0; i < n; i++) {
+    const b = base[i % base.length]
+    const id = `s${i.toString(36)}`
+    out.push({
+      ...b,
+      id, remoteId: id, threadId: `t_${id}`, messageId: `<${id}@stress>`,
+      subject: i < base.length ? b.subject : `${b.subject} #${Math.floor(i / base.length)}`,
+      date: new Date(start - i * 17 * 60_000).toISOString(),
+      unread: (i * 7919) % 10 === 0,
+      starred: (i * 104729) % 50 === 0,
+      folderIds: b.folderIds,
+    })
+  }
+  return out
+}

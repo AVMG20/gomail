@@ -69,7 +69,7 @@ async function create() {
               <span class="flex items-center gap-1.5">
                 <span class="truncate">{{ l.name }}</span>
                 <SparklesIcon v-if="details.get(l.id)?.source === 'ai'" class="size-3 text-violet-500" />
-                <span v-if="l.source && l.source !== 'user'" class="text-muted-foreground text-[10px]">{{ l.provider === 'outlook' ? 'Outlook' : 'Gmail' }}</span>
+                <span v-if="l.source && l.source !== 'user'" class="text-muted-foreground text-[10px]">{{ l.source === 'system' ? 'built-in' : l.provider === 'outlook' ? 'Outlook' : l.provider === 'gmail' ? 'Gmail' : 'imported' }}</span>
               </span>
               <span v-if="scoreOf(l.id) !== null" class="mt-1 flex items-center gap-1.5" :title="`AI score ${Math.round(scoreOf(l.id)! * 100)}%`">
                 <span class="bg-muted h-1 flex-1 overflow-hidden rounded-full">

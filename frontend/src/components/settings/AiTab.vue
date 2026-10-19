@@ -98,7 +98,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
 
     <SettingSection title="Labeling (Jev)" description="Jev is a decision model that picks labels from the ones you define in Settings → Labels.">
       <SettingRow title="Classifier model" stacked>
-        <ModelPicker v-model="classifierModel" :recommended="JEV_MODELS" recommended-heading="Recommended for labeling" class="max-w-md" />
+        <ModelPicker v-model="classifierModel" :recommended="JEV_MODELS" recommended-kind="decision" recommended-heading="Recommended for labeling" class="max-w-md" />
       </SettingRow>
       <SettingRow title="Add label at" stacked>
         <template #description>Labels scoring below this confidence are left unlabeled.</template>
@@ -139,7 +139,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
 
     <SettingSection title="Grammar" description="Right-click the subject or message body while composing and choose “Improve grammar”.">
       <SettingRow title="Text model" stacked>
-        <ModelPicker v-model="chatModel" class="max-w-md" />
+        <ModelPicker v-model="chatModel" kind="chat" class="max-w-md" />
       </SettingRow>
       <SettingRow title="Grammar system prompt" stacked>
         <template #description>

@@ -8,6 +8,10 @@ import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import Tip from '@/components/common/Tip.vue'
@@ -15,7 +19,7 @@ import { api, errorMessage } from '@/lib/api'
 import { formatBytes } from '@/lib/format'
 import { shortcutLabel, uid } from '@/lib/platform'
 import { useAccountsStore } from '@/stores/accounts'
-import { useComposeStore, type Draft } from '@/stores/compose'
+import { draftHasContent, useComposeStore, type Draft } from '@/stores/compose'
 import { useSettingsStore } from '@/stores/settings'
 import RecipientField from './RecipientField.vue'
 import RichEditor from './RichEditor.vue'
@@ -41,7 +45,7 @@ onMounted(async () => {
 function onKey(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
     e.preventDefault()
-    void compose.send(d.value.id)
+    sendNow()
   } else if (e.key === 'Escape') {
     e.stopPropagation()
     d.value.minimized = true
@@ -51,10 +55,7 @@ function onKey(e: KeyboardEvent) {
 async function onFiles(e: Event) {
   const files = Array.from((e.target as HTMLInputElement).files ?? [])
   for (const f of files) {
-    if (f.size > 25 * 1024 * 1024) {
-      toast.error(`${f.name} is larger than 25 MB`)
-      continue
-    }
+    if (totalSize.value + f.size > LIMIT) toast.warning(`Attachments now exceed 25 MB`, { description: 'Most providers reject messages larger than 25 MB.' })
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const r = new FileReader()
       r.onload = () => resolve(String(r.result))
@@ -66,13 +67,18 @@ async function onFiles(e: Event) {
   if (fileInput.value) fileInput.value.value = ''
 }
 
-function discard() {
-  const snapshot = { ...d.value }
-  compose.close(d.value.id)
-  toast('Draft discarded', {
-    action: { label: 'Undo', onClick: () => { compose.drafts.push({ ...snapshot, minimized: false }) } },
-  })
+function sendNow() {
+  void compose.send(d.value.id, settings.settings?.undoSendSeconds ?? 0)
 }
+
+const confirmDiscard = ref(false)
+function discard() {
+  if (draftHasContent(d.value)) confirmDiscard.value = true
+  else compose.close(d.value.id)
+}
+
+const totalSize = computed(() => d.value.attachments.reduce((n, a) => n + a.size, 0))
+const LIMIT = 25 * 1024 * 1024
 
 // ---------------------------------------------------------------- subject context menu + grammar
 const subjSel = ref<{ start: number; end: number }>({ start: 0, end: 0 })
@@ -222,13 +228,13 @@ const fromAccount = computed(() => accounts.accountMap.get(d.value.accountId))
     <div class="border-border/70 mx-4 border-t" />
 
     <!-- Body -->
-    <RichEditor ref="editorRef" v-model="d.html" :version="d.version" @submit="compose.send(d.id)">
+    <RichEditor ref="editorRef" v-model="d.html" :version="d.version" @submit="sendNow">
       <template #start>
-        <Button size="sm" class="gap-1.5 px-3" :disabled="d.sending" @click="compose.send(d.id)">
+        <Button size="sm" class="gap-1.5 px-3" :disabled="d.sending" @click="sendNow">
           <LoaderIcon v-if="d.sending" class="animate-spin" /><SendIcon v-else />
           Send
         </Button>
-        <span class="text-muted-foreground ml-1 hidden text-[11px] sm:inline">{{ shortcutLabel('mod+enter') }}</span>
+        <span class="text-muted-foreground ml-1 hidden text-[11px] sm:inline">{{ d.savedAt ? 'Draft saved' : shortcutLabel('mod+enter') }}</span>
       </template>
       <template #end>
         <Tip label="Attach files">
@@ -241,13 +247,29 @@ const fromAccount = computed(() => accounts.accountMap.get(d.value.accountId))
     </RichEditor>
     <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles" />
 
-    <div v-if="d.attachments.length" class="border-border flex shrink-0 flex-wrap gap-1.5 border-t px-4 py-2">
+    <div v-if="d.attachments.length" class="border-border flex shrink-0 flex-wrap items-center gap-1.5 border-t px-4 py-2">
       <span v-for="a in d.attachments" :key="a.id" class="bg-muted inline-flex h-7 max-w-56 items-center gap-1.5 rounded-md pr-1 pl-2 text-xs">
         <PaperclipIcon class="text-muted-foreground size-3.5" />
         <span class="truncate">{{ a.filename }}</span>
         <span class="text-muted-foreground">{{ formatBytes(a.size) }}</span>
         <button type="button" class="text-muted-foreground hover:text-foreground rounded p-0.5" :aria-label="`Remove ${a.filename}`" @click="d.attachments = d.attachments.filter((x) => x.id !== a.id)"><XIcon class="size-3" /></button>
       </span>
+      <span :class="['ml-auto text-[11px] tabular-nums', totalSize > LIMIT ? 'text-destructive font-medium' : 'text-muted-foreground']">
+        {{ d.attachments.length }} file{{ d.attachments.length === 1 ? '' : 's' }} · {{ formatBytes(totalSize) }}<template v-if="totalSize > LIMIT"> · over 25 MB</template>
+      </span>
     </div>
+
+    <AlertDialog v-model:open="confirmDiscard">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard this draft?</AlertDialogTitle>
+          <AlertDialogDescription>The message and its attachments will be deleted.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep editing</AlertDialogCancel>
+          <AlertDialogAction class="bg-destructive hover:bg-destructive/90 text-white" @click="compose.close(d.id)">Discard</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>

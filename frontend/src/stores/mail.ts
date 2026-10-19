@@ -5,6 +5,7 @@ import { api, errorMessage } from '@/lib/api'
 import type { Address, ListQuery, Message, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from './accounts'
 import { useSettingsStore } from './settings'
+import { announce } from '@/lib/announce'
 
 /** accountId "" = unified across accounts (by folder kind). */
 export interface Mailbox {
@@ -435,6 +436,7 @@ export const useMailStore = defineStore('mail', () => {
     if (removes) removeLocal(ids)
     try {
       await api.archive(ids)
+      announce(`${plural(ids.length, 'conversation')} archived`)
       toast(`${ids.length === 1 ? 'Conversation' : plural(ids.length, 'conversation')} archived`, {
         action: {
           label: 'Undo',
@@ -459,6 +461,7 @@ export const useMailStore = defineStore('mail', () => {
     if (removes) removeLocal(ids)
     try {
       await api.trash(ids)
+      announce(`${plural(ids.length, 'conversation')} moved to Trash`)
       toast(`${ids.length === 1 ? 'Moved' : plural(ids.length, 'message') + ' moved'} to Trash`, {
         action: {
           label: 'Undo',
@@ -482,6 +485,7 @@ export const useMailStore = defineStore('mail', () => {
     patchLocal(ids, { unread: !read })
     try {
       await api.markRead(ids, read)
+      if (ids.length > 1 || !openId.value || ids[0] !== openId.value) announce(`${plural(ids.length, 'message')} marked as ${read ? 'read' : 'unread'}`)
     } catch (e) {
       for (const [id, unread] of before) patchLocal([id], { unread })
       toast.error('Could not update', { description: errorMessage(e) })
@@ -494,6 +498,7 @@ export const useMailStore = defineStore('mail', () => {
     patchLocal(ids, { starred })
     try {
       await api.setStarred(ids, starred)
+      announce(`${plural(ids.length, 'message')} ${starred ? 'starred' : 'unstarred'}`)
     } catch (e) {
       patchLocal(ids, { starred: !starred })
       toast.error('Could not update', { description: errorMessage(e) })

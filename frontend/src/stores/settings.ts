@@ -29,6 +29,18 @@ export const useSettingsStore = defineStore('settings', () => {
     void loadDefaults()
   }
 
+  /** Re-read label definitions after a labels:changed event, without clobbering pending edits. */
+  async function refreshLabels() {
+    if (saveTimer || saving.value || !settings.value) return
+    try {
+      const fresh = await api.getSettings()
+      if (saveTimer || saving.value || !settings.value) return
+      settings.value = { ...settings.value, labels: fresh.labels, importProviderLabels: fresh.importProviderLabels }
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function loadDefaults() {
     try {
       defaults.value = await api.getDefaultPrompts()
@@ -84,7 +96,7 @@ export const useSettingsStore = defineStore('settings', () => {
     modelsLoading.value = true
     modelsError.value = ''
     try {
-      const list = await api.listAIModels()
+      const list = await api.listAIModels(force)
       list.sort((a, b) => a.name.localeCompare(b.name))
       models.value = list
     } catch (e) {
@@ -105,6 +117,6 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     settings, saving, models, modelsLoading, modelsError, defaults, appInfo,
     labels, labelMap, aiReady, grammarReady,
-    load, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
+    load, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
   }
 })

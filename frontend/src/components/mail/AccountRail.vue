@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { PlusIcon, SettingsIcon, LayersIcon } from '@lucide/vue'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import Tip from '@/components/common/Tip.vue'
+import { isWails } from '@/lib/api'
 import { useAccountsStore } from '@/stores/accounts'
 import { useMailStore } from '@/stores/mail'
 import { useUiStore } from '@/stores/ui'
@@ -10,6 +11,7 @@ import { useUiStore } from '@/stores/ui'
 const accounts = useAccountsStore()
 const mail = useMailStore()
 const ui = useUiStore()
+const mockMode = !isWails()
 
 const active = computed(() => mail.mailbox.accountId)
 const totalUnread = computed(() => accounts.unifiedUnread('inbox'))
@@ -43,13 +45,7 @@ function badge(n: number) {
     </Tip>
     <div v-if="accounts.accounts.length > 1" class="bg-border my-1 h-px w-6" />
 
-    <Tip v-for="(acc, i) in accounts.accounts" :key="acc.id" side="right" :shortcut="i < 9 ? `mod+${i + 1}` : ''">
-      <template #content>
-        <span class="flex flex-col">
-          <span class="font-medium">{{ acc.displayName || acc.email }}</span>
-          <span class="opacity-70">{{ acc.email }}</span>
-        </span>
-      </template>
+    <Tip v-for="(acc, i) in accounts.accounts" :key="acc.id" side="right" :label="`${acc.displayName || acc.email}\n${acc.email}`" :shortcut="i < 9 ? `mod+${i + 1}` : ''">
       <button
         type="button"
         class="group relative flex size-11 items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -82,6 +78,9 @@ function badge(n: number) {
     </Tip>
 
     <div class="flex-1" />
+    <Tip v-if="mockMode" label="Mock data: running in a browser without the Go backend" side="right">
+      <span class="mb-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-amber-700 uppercase select-none dark:text-amber-400" role="status">Mock</span>
+    </Tip>
     <Tip label="Settings" shortcut="mod+," side="right">
       <button
         type="button"

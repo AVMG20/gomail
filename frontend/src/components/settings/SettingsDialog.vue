@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, ref, type Component } from 'vue'
 import { InfoIcon, PaletteIcon, SlidersHorizontalIcon, SparklesIcon, TagIcon, UsersIcon, XIcon, CheckIcon, LoaderIcon } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { useSettingsStore } from '@/stores/settings'
@@ -22,12 +22,13 @@ const tabs: { id: SettingsTab; label: string; icon: Component; comp: Component }
   { id: 'ai', label: 'AI', icon: SparklesIcon, comp: AiTab },
   { id: 'about', label: 'About', icon: InfoIcon, comp: AboutTab },
 ]
+const scrolled = ref(false)
 const current = computed(() => tabs.find((t) => t.id === ui.settingsTab) ?? tabs[0])
 </script>
 
 <template>
   <Dialog v-model:open="ui.settingsOpen">
-    <DialogContent class="flex h-[min(680px,88vh)] gap-0 overflow-hidden p-0 sm:max-w-[880px]" :show-close-button="false">
+    <DialogContent class="flex h-[min(720px,calc(100vh-2.5rem))] max-h-[calc(100vh-2.5rem)] gap-0 overflow-hidden p-0 sm:max-w-[880px]" :show-close-button="false">
       <DialogTitle class="sr-only">Settings</DialogTitle>
       <DialogDescription class="sr-only">Configure gomail</DialogDescription>
       <nav class="bg-sidebar border-border flex w-48 shrink-0 flex-col gap-0.5 border-r p-3" aria-label="Settings sections">
@@ -48,11 +49,11 @@ const current = computed(() => tabs.find((t) => t.id === ui.settingsTab) ?? tabs
         </div>
       </nav>
       <div class="flex min-w-0 flex-1 flex-col">
-        <header class="flex h-14 shrink-0 items-center justify-between px-8 pt-2">
+        <header :class="['flex h-14 shrink-0 items-center justify-between border-b px-8 transition-colors', scrolled ? 'border-border' : 'border-transparent']">
           <h2 class="text-base font-semibold">{{ current.label }}</h2>
           <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted rounded-md p-1.5" aria-label="Close settings" @click="ui.settingsOpen = false"><XIcon class="size-4" /></button>
         </header>
-        <div class="thin-scroll min-h-0 flex-1 overflow-y-auto px-8 pb-8">
+        <div class="thin-scroll min-h-0 flex-1 overflow-y-auto px-8 pt-2 pb-10" @scroll.passive="(e: Event) => (scrolled = (e.target as HTMLElement).scrollTop > 4)">
           <KeepAlive><component :is="current.comp" :key="current.id" /></KeepAlive>
         </div>
       </div>

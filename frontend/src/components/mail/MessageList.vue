@@ -3,35 +3,34 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { refDebounced, useThrottleFn } from '@vueuse/core'
 import {
-  ArchiveIcon, CornerUpLeftIcon, ForwardIcon, InboxIcon, MailIcon, MailOpenIcon, PanelLeftIcon, RefreshCwIcon, SearchIcon,
-  SearchXIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, ReplyAllIcon,
+  InboxIcon, MailIcon, MailOpenIcon, PanelLeftIcon, RefreshCwIcon, SearchIcon, SearchXIcon, TagIcon, XIcon,
 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toggle } from '@/components/ui/toggle'
-import {
-  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuSub,
-  ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger, ContextMenuCheckboxItem,
-} from '@/components/ui/context-menu'
 import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
 import { useAccountsStore } from '@/stores/accounts'
-import { useAiStore } from '@/stores/ai'
-import { useComposeStore } from '@/stores/compose'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
-import BulkBar from './BulkBar.vue'
-import LabelFilter from './LabelFilter.vue'
+import { dateGroup } from '@/lib/dateGroups'
+import { defineAsyncComponent, h } from 'vue'
+const BulkBar = defineAsyncComponent(() => import('./BulkBar.vue'))
+const RowContextMenu = defineAsyncComponent(() => import('./RowContextMenu.vue'))
+// Static stand-in while the (popover-heavy) filter chunk loads.
+const LabelFilter = defineAsyncComponent({
+  loader: () => import('./LabelFilter.vue'),
+  delay: 0,
+  loadingComponent: { render: () => h('span', { class: 'text-muted-foreground inline-flex h-8 items-center px-2 text-xs font-medium' }, 'Labels') },
+})
 import MessageRow from './MessageRow.vue'
 
 const mail = useMailStore()
 const accounts = useAccountsStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
-const ai = useAiStore()
-const compose = useComposeStore()
 
 const compact = computed(() => settings.settings?.density === 'compact')
 const rowHeight = computed(() => (compact.value ? 40 : 84))
@@ -63,33 +62,76 @@ function onSearchKey(e: KeyboardEvent) {
   }
 }
 
+// ---- rows: messages interleaved with light date-group headers
+type Row = { kind: 'header'; key: string; label: string } | { kind: 'msg'; key: string; index: number; group: string } | { kind: 'loader'; key: string }
+const HEADER_H = computed(() => (compact.value ? 26 : 30))
+const rows = computed<Row[]>(() => {
+  const out: Row[] = []
+  let last = ''
+  const list = mail.messages
+  for (let i = 0; i < list.length; i++) {
+    const g = dateGroup(list[i].date)
+    if (g !== last) {
+      out.push({ kind: 'header', key: `h:${g}:${i}`, label: g })
+      last = g
+    }
+    out.push({ kind: 'msg', key: list[i].id, index: i, group: g })
+  }
+  if (mail.hasMore) out.push({ kind: 'loader', key: 'loader' })
+  return out
+})
+const rowIndexById = computed(() => {
+  const m = new Map<string, number>()
+  rows.value.forEach((r, i) => r.kind === 'msg' && m.set(r.key, i))
+  return m
+})
+
 // ---- virtual list
 const scroller = ref<HTMLElement | null>(null)
-const count = computed(() => mail.messages.length + (mail.hasMore ? 1 : 0))
 const virtualizer = useVirtualizer(computed(() => ({
-  count: count.value,
+  count: rows.value.length,
   getScrollElement: () => scroller.value,
-  estimateSize: () => rowHeight.value,
-  overscan: 8,
-  getItemKey: (i: number) => mail.messages[i]?.id ?? `loader-${i}`,
+  estimateSize: (i: number) => (rows.value[i]?.kind === 'header' ? HEADER_H.value : rowHeight.value),
+  overscan: 10,
+  getItemKey: (i: number) => rows.value[i]?.key ?? i,
 })))
 const items = computed(() => virtualizer.value.getVirtualItems())
 const totalSize = computed(() => virtualizer.value.getTotalSize())
 
-watch(rowHeight, () => virtualizer.value.measure())
+watch([rowHeight, HEADER_H], () => virtualizer.value.measure())
 
 watch(items, (list) => {
   const last = list[list.length - 1]
-  if (last && last.index >= mail.messages.length - 10 && mail.hasMore) void mail.loadMore()
+  if (last && last.index >= rows.value.length - 12 && mail.hasMore) void mail.loadMore()
+})
+
+// Sticky group label: the group of the first visible row, pushed up by the next header.
+const scrollTop = ref(0)
+const sticky = computed(() => {
+  const list = items.value
+  if (!list.length || scrollTop.value <= 0) return null
+  const top = scrollTop.value
+  const first = list.find((it) => it.end > top)
+  if (!first) return null
+  const row = rows.value[first.index]
+  const label = row?.kind === 'msg' ? row.group : row?.kind === 'header' ? (first.start >= top ? null : row.label) : null
+  if (!label) return null
+  const next = list.find((it) => it.start > top && rows.value[it.index]?.kind === 'header')
+  const push = next ? Math.min(0, next.start - top - HEADER_H.value) : 0
+  return { label, push }
 })
 
 const onScroll = useThrottleFn(() => {
-  if (scroller.value) mail.saveScroll(scroller.value.scrollTop)
-}, 150)
+  if (!scroller.value) return
+  scrollTop.value = scroller.value.scrollTop
+  mail.saveScroll(scroller.value.scrollTop)
+  if (scroller.value.scrollTop < 8) newCount.value = 0
+}, 16)
 
 // Restore per-mailbox scroll position after the first page loads.
-watch(() => mail.status, async (s, prev) => {
-  if (s === 'ready' && prev === 'loading') {
+watch(() => mail.status, async (st, prev) => {
+  if (st === 'ready' && prev === 'loading') {
+    newCount.value = 0
     await nextTick()
     if (scroller.value) scroller.value.scrollTop = mail.savedScroll()
   }
@@ -98,9 +140,50 @@ watch(() => mail.status, async (s, prev) => {
 // Keep the opened message visible when navigating with the keyboard.
 watch(() => mail.openId, (id) => {
   if (!id) return
-  const idx = mail.indexById.get(id)
+  const idx = rowIndexById.value.get(id)
   if (idx !== undefined) virtualizer.value.scrollToIndex(idx, { align: 'auto' })
 })
+
+// New mail arrives at the top without moving what you are reading: keep the
+// first visible message anchored and offer a "N new messages" pill instead.
+const newCount = ref(0)
+let anchor: { id: string; delta: number } | null = null
+watch(() => mail.messages, () => {
+  anchor = null
+  const el = scroller.value
+  if (!el || el.scrollTop <= 0 || mail.status !== 'ready') return
+  const first = items.value.find((it) => it.end > el.scrollTop && rows.value[it.index]?.kind === 'msg')
+  if (first) anchor = { id: rows.value[first.index].key, delta: first.start - el.scrollTop }
+}, { flush: 'pre' })
+watch(() => mail.messages, async (now, prev) => {
+  const a = anchor
+  anchor = null
+  if (!a || !scroller.value) return
+  await nextTick()
+  const idx = rowIndexById.value.get(a.id)
+  if (idx === undefined) return
+  const before = new Set(prev.map((m) => m.id))
+  const msgIndex = (rows.value[idx] as { index: number }).index
+  const added = now.slice(0, msgIndex).filter((m) => !before.has(m.id)).length
+  const offset = virtualizer.value.getOffsetForIndex(idx, 'start')?.[0]
+  if (offset === undefined) return
+  const target = offset - a.delta
+  if (Math.abs(target - scroller.value.scrollTop) > 1) scroller.value.scrollTop = target
+  if (added > 0) newCount.value += added
+})
+function jumpToTop() {
+  newCount.value = 0
+  scroller.value?.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+type MsgRow = Extract<Row, { kind: 'msg' }>
+type HeaderRow = Extract<Row, { kind: 'header' }>
+
+// Quick actions remove the row; keep keyboard focus in the list.
+function quick(fn: () => unknown) {
+  void fn()
+  scroller.value?.focus({ preventScroll: true })
+}
 
 // ---- row interactions
 const selectionMode = computed(() => mail.selection.size > 0 || mail.selectAllQuery)
@@ -127,28 +210,13 @@ function toggleHeaderCheck() {
   else mail.selectAllLoaded()
 }
 
-// ---- context menu (one for the whole list; the row is found from the event target)
-const ctxId = ref<string | null>(null)
-const ctxMsg = computed(() => (ctxId.value ? mail.byId.get(ctxId.value) ?? null : null))
+// ---- context menu: one lazily loaded menu for the whole list, opened at the cursor
+const ctx = ref<{ id: string; x: number; y: number; key: number } | null>(null)
 function onContext(e: MouseEvent) {
   const row = (e.target as HTMLElement).closest('[data-id]') as HTMLElement | null
-  ctxId.value = row?.dataset.id ?? null
-  if (!ctxId.value) e.preventDefault()
-}
-const ctxIds = computed(() => (ctxId.value && mail.selection.has(ctxId.value) ? [...mail.selection] : ctxId.value ? [ctxId.value] : []))
-
-async function respond(mode: 'reply' | 'replyAll' | 'forward') {
-  if (!ctxId.value) return
-  const thread = await mail.loadThread(ctxId.value)
-  const m = thread.find((x) => x.id === ctxId.value) ?? thread[thread.length - 1]
-  if (m) compose.respond(mode, m)
-}
-
-function toggleCtxLabel(labelId: string) {
-  const m = ctxMsg.value
-  if (!m) return
-  if (m.labels.includes(labelId)) void mail.removeLabel(ctxIds.value, labelId)
-  else void mail.addLabel(ctxIds.value, labelId)
+  e.preventDefault()
+  if (!row?.dataset.id) return
+  ctx.value = { id: row.dataset.id, x: e.clientX, y: e.clientY, key: Date.now() }
 }
 
 // ---- header bits
@@ -264,10 +332,30 @@ const emptyState = computed(() => {
       <div v-if="mail.refreshing" class="bg-primary/70 absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse" />
     </div>
 
+    <!-- New mail pill -->
+    <div class="relative h-0">
+      <Transition enter-from-class="opacity-0 -translate-y-1" enter-active-class="transition duration-200" leave-to-class="opacity-0" leave-active-class="transition duration-150">
+        <button
+          v-if="newCount > 0"
+          type="button"
+          class="bg-primary text-primary-foreground absolute top-2 left-1/2 z-20 -translate-x-1/2 rounded-full px-3 py-1 text-xs font-medium shadow-md"
+          @click="jumpToTop"
+        >↑ {{ newCount }} new message{{ newCount === 1 ? '' : 's' }}</button>
+      </Transition>
+    </div>
+
     <!-- List -->
-    <ContextMenu>
-      <ContextMenuTrigger as-child>
-        <div ref="scroller" class="thin-scroll @container relative min-h-0 flex-1 overflow-y-auto" role="listbox" aria-label="Message list" @scroll.passive="onScroll" @contextmenu="onContext">
+        <div
+          ref="scroller"
+          class="thin-scroll @container relative min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+          role="listbox"
+          tabindex="0"
+          :aria-label="`${mail.mailboxName}, ${mail.total} messages`"
+          :aria-activedescendant="mail.openId ? `row-${mail.openId}` : undefined"
+          aria-multiselectable="true"
+          @scroll.passive="onScroll"
+          @contextmenu="onContext"
+        >
           <div v-if="mail.status === 'loading'" aria-busy="true">
             <div v-for="i in 9" :key="i" class="border-border/60 flex gap-3 border-b px-4" :style="{ height: `${rowHeight}px` }">
               <div class="flex flex-1 flex-col justify-center gap-2 pl-5">
@@ -293,65 +381,51 @@ const emptyState = computed(() => {
             <Button v-if="mail.hasLabelFilter" variant="outline" size="sm" class="mt-2" @click="mail.clearLabelFilter()">Clear label filter</Button>
           </div>
 
-          <div v-else class="relative w-full" :style="{ height: `${totalSize}px` }">
+          <template v-else>
+          <!-- Sticky date label (zero-height so it never takes layout space) -->
+          <div v-if="sticky" class="pointer-events-none sticky top-0 z-10 h-0">
             <div
-              v-for="row in items"
-              :key="String(row.key)"
+              class="bg-background/90 text-muted-foreground/80 border-border/60 flex items-end border-b px-4 pb-1 pl-12 text-[11px] font-medium tracking-wide uppercase backdrop-blur"
+              :style="{ height: `${HEADER_H}px`, transform: `translateY(${sticky.push}px)` }"
+            >{{ sticky.label }}</div>
+          </div>
+          <div class="relative w-full" :style="{ height: `${totalSize}px` }">
+            <div
+              v-for="it in items"
+              :key="String(it.key)"
               class="absolute top-0 left-0 w-full"
-              :style="{ height: `${row.size}px`, transform: `translateY(${row.start}px)` }"
+              :style="{ height: `${it.size}px`, transform: `translateY(${it.start}px)` }"
             >
-              <MessageRow
-                v-if="mail.messages[row.index]"
-                :message="mail.messages[row.index]"
-                :open="mail.openId === mail.messages[row.index].id"
-                :selected="mail.selectAllQuery || mail.selection.has(mail.messages[row.index].id)"
-                :selection-mode="selectionMode"
-                :compact="compact"
-                :account="accounts.accountMap.get(mail.messages[row.index].accountId)"
-                :show-account="mail.isUnified"
-                :label-map="settings.labelMap"
-                :sent-view="sentView"
-                @open="(e) => onRowClick(mail.messages[row.index].id, e)"
-                @toggle="(e) => onToggle(mail.messages[row.index].id, e)"
-                @archive="mail.archive([mail.messages[row.index].id])"
-                @trash="mail.trash([mail.messages[row.index].id])"
-                @read="(r) => mail.setRead([mail.messages[row.index].id], r)"
-                @star="(s) => mail.setStarred([mail.messages[row.index].id], s)"
-              />
+              <template v-if="rows[it.index]?.kind === 'msg'">
+                <MessageRow
+                  :id="`row-${rows[it.index].key}`"
+                  :message="mail.messages[(rows[it.index] as MsgRow).index]"
+                  :open="mail.openId === rows[it.index].key"
+                  :selected="mail.selectAllQuery || mail.selection.has(rows[it.index].key)"
+                  :selection-mode="selectionMode"
+                  :compact="compact"
+                  :account="accounts.accountMap.get(mail.messages[(rows[it.index] as MsgRow).index].accountId)"
+                  :show-account="mail.isUnified"
+                  :label-map="settings.labelMap"
+                  :sent-view="sentView"
+                  @open="(e) => onRowClick(rows[it.index].key, e)"
+                  @toggle="(e) => onToggle(rows[it.index].key, e)"
+                  @archive="quick(() => mail.archive([rows[it.index].key]))"
+                  @trash="quick(() => mail.trash([rows[it.index].key]))"
+                  @read="(r) => mail.setRead([rows[it.index].key], r)"
+                  @star="(st) => mail.setStarred([rows[it.index].key], st)"
+                />
+              </template>
+              <div v-else-if="rows[it.index]?.kind === 'header'" class="text-muted-foreground/80 flex h-full items-end px-4 pb-1 pl-12 text-[11px] font-medium tracking-wide uppercase" role="presentation">
+                {{ (rows[it.index] as HeaderRow).label }}
+              </div>
               <div v-else class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
                 <RefreshCwIcon class="size-3.5 animate-spin" /> Loading more…
               </div>
             </div>
           </div>
+          </template>
         </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent v-if="ctxMsg" class="w-56">
-        <ContextMenuItem @click="respond('reply')"><CornerUpLeftIcon /> Reply <ContextMenuShortcut>R</ContextMenuShortcut></ContextMenuItem>
-        <ContextMenuItem @click="respond('replyAll')"><ReplyAllIcon /> Reply all <ContextMenuShortcut>A</ContextMenuShortcut></ContextMenuItem>
-        <ContextMenuItem @click="respond('forward')"><ForwardIcon /> Forward <ContextMenuShortcut>F</ContextMenuShortcut></ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem @click="mail.archive(ctxIds)"><ArchiveIcon /> Archive <ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
-        <ContextMenuItem @click="mail.trash(ctxIds)"><Trash2Icon /> Delete <ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
-        <ContextMenuItem @click="mail.setRead(ctxIds, ctxMsg.unread)">
-          <component :is="ctxMsg.unread ? MailOpenIcon : MailIcon" /> {{ ctxMsg.unread ? 'Mark as read' : 'Mark as unread' }} <ContextMenuShortcut>U</ContextMenuShortcut>
-        </ContextMenuItem>
-        <ContextMenuItem @click="mail.setStarred(ctxIds, !ctxMsg.starred)"><StarIcon /> {{ ctxMsg.starred ? 'Unstar' : 'Star' }} <ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuSub>
-          <ContextMenuSubTrigger><TagIcon class="size-4" /> Labels</ContextMenuSubTrigger>
-          <ContextMenuSubContent class="w-52">
-            <ContextMenuCheckboxItem
-              v-for="l in settings.labels"
-              :key="l.id"
-              :model-value="ctxMsg.labels.includes(l.id)"
-              @select="(e: Event) => { e.preventDefault(); toggleCtxLabel(l.id) }"
-            >
-              <span class="size-2.5 rounded-full" :style="{ background: l.color }" /> {{ l.name }}
-            </ContextMenuCheckboxItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-        <ContextMenuItem :disabled="!settings.aiReady" @click="ai.labelMessages(ctxIds)"><SparklesIcon class="text-violet-500" /> Label with AI</ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+    <RowContextMenu v-if="ctx" :key="ctx.key" :x="ctx.x" :y="ctx.y" :message-id="ctx.id" @close="ctx = null" />
   </section>
 </template>

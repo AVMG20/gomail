@@ -205,7 +205,11 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
           <div class="flex items-center gap-3"><Skeleton class="size-9 rounded-full" /><div class="space-y-2"><Skeleton class="h-3.5 w-40" /><Skeleton class="h-3 w-56" /></div></div>
           <Skeleton class="h-48 w-full" />
         </div>
-        <div v-else-if="error" class="text-muted-foreground p-8 text-center text-sm">{{ error }}</div>
+        <div v-else-if="error" class="flex flex-col items-center gap-3 p-10 text-center">
+          <p class="text-sm font-medium">Couldn’t open this message</p>
+          <p class="text-muted-foreground max-w-sm text-xs">{{ error }}</p>
+          <Button variant="outline" size="sm" @click="mail.openId && load(mail.openId)">Try again</Button>
+        </div>
         <template v-else-if="current">
           <!-- Subject & labels -->
           <div class="px-6 pt-5 pb-3">

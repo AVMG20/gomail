@@ -4,7 +4,8 @@ import { SparklesIcon, XIcon } from '@lucide/vue'
 import type { Label, MessageLabel } from '@/lib/types'
 import Tip from './Tip.vue'
 
-const props = withDefaults(defineProps<{ label: Label; detail?: MessageLabel; removable?: boolean; size?: 'xs' | 'sm' }>(), {
+defineOptions({ inheritAttrs: false })
+const props = withDefaults(defineProps<{ label: Label; detail?: MessageLabel; removable?: boolean; size?: 'xs' | 'sm'; class?: string }>(), {
   removable: false, size: 'xs',
 })
 defineEmits<{ remove: [] }>()
@@ -13,7 +14,9 @@ const isAi = computed(() => props.detail?.source === 'ai')
 const tooltip = computed(() => {
   const parts = [props.label.name]
   if (isAi.value) parts.push(`Labeled by AI · ${Math.round((props.detail?.confidence ?? 0) * 100)}% confidence`)
-  else if (props.label.source && props.label.source !== 'user') parts.push(`From ${props.label.provider === 'outlook' ? 'Outlook' : 'Gmail'}`)
+  else if (props.label.source === 'system') parts.push('Built-in label')
+  else if (props.label.source === 'provider') parts.push(props.label.provider ? `Imported from ${props.label.provider === 'outlook' ? 'Outlook' : 'Gmail'}` : 'Imported from your provider')
+  if (props.detail?.source === 'provider' && !isAi.value) parts.push('Set in Gmail/Outlook')
   else if (props.detail?.source === 'manual') parts.push('Added by you')
   return parts.join(' — ')
 })
@@ -25,6 +28,7 @@ const tooltip = computed(() => {
       :class="[
         'inline-flex max-w-36 shrink-0 items-center gap-1 rounded-full border font-medium whitespace-nowrap',
         size === 'xs' ? 'h-[18px] px-1.5 text-[10.5px]' : 'h-6 px-2 text-xs',
+        props.class,
       ]"
       :style="{
         color: `color-mix(in oklab, ${label.color} 78%, var(--foreground))`,

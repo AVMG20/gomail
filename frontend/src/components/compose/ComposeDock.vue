@@ -9,7 +9,7 @@ const compose = useComposeStore()
 <template>
   <!-- Gmail-style dock: open windows bottom-right, minimised ones as compact bars -->
   <div class="pointer-events-none fixed right-4 bottom-0 z-40 flex items-end gap-3">
-    <template v-for="d in compose.drafts" :key="d.id">
+    <template v-for="d in compose.drafts.filter((x) => !x.queued)" :key="d.id">
       <div v-if="d.minimized" class="bg-background border-border pointer-events-auto flex h-10 w-64 items-center gap-1 rounded-t-lg border border-b-0 pr-1 pl-3 shadow-xl">
         <button type="button" class="min-w-0 flex-1 truncate text-left text-[13px] font-medium" @click="compose.focus(d.id)">
           {{ d.subject.trim() || 'New message' }}

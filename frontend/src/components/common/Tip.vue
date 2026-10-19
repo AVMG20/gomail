@@ -1,25 +1,30 @@
-<script setup lang="ts">
-import { computed } from 'vue'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { shortcutKeys } from '@/lib/platform'
+<script lang="ts">
+// Lightweight tooltip: tags its child with data-tip attributes; a single global
+// <TooltipLayer> renders the bubble. Far cheaper than one tooltip instance per
+// button (matters in virtualised rows) and keeps reka's Tooltip out of the bundle.
+import { cloneVNode, Comment, defineComponent, type PropType, type VNode } from 'vue'
 
-const props = withDefaults(defineProps<{ label?: string; shortcut?: string; side?: 'top' | 'bottom' | 'left' | 'right'; disabled?: boolean }>(), {
-  label: '', shortcut: '', side: 'bottom', disabled: false,
+export default defineComponent({
+  name: 'Tip',
+  props: {
+    label: { type: String, default: '' },
+    shortcut: { type: String, default: '' },
+    side: { type: String as PropType<'top' | 'bottom' | 'left' | 'right'>, default: 'bottom' },
+    disabled: { type: Boolean, default: false },
+  },
+  setup(props, { slots }) {
+    return () => {
+      const children: VNode[] = slots.default?.() ?? []
+      if (props.disabled || !props.label) return children
+      const idx = children.findIndex((v) => v.type !== Comment)
+      if (idx < 0) return children
+      const tagged = cloneVNode(children[idx], {
+        'data-tip': props.label,
+        'data-tip-side': props.side,
+        ...(props.shortcut ? { 'data-tip-keys': props.shortcut } : {}),
+      })
+      return children.length === 1 ? tagged : children.map((c, i) => (i === idx ? tagged : c))
+    }
+  },
 })
-const keys = computed(() => (props.shortcut ? shortcutKeys(props.shortcut) : []))
 </script>
-
-<template>
-  <Tooltip v-if="!disabled && (label || $slots.content)" :delay-duration="350">
-    <TooltipTrigger as-child>
-      <slot />
-    </TooltipTrigger>
-    <TooltipContent :side="side" :side-offset="6" class="px-2 py-1">
-      <slot name="content">{{ label }}</slot>
-      <span v-if="keys.length" class="ml-1 flex items-center gap-0.5 opacity-60">
-        <kbd v-for="k in keys" :key="k" class="font-sans text-[10px] leading-none">{{ k }}</kbd>
-      </span>
-    </TooltipContent>
-  </Tooltip>
-  <slot v-else />
-</template>

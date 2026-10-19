@@ -107,6 +107,7 @@ CREATE TABLE attachments (
 	size       INTEGER NOT NULL DEFAULT 0,
 	inline     INTEGER NOT NULL DEFAULT 0,
 	content_id TEXT NOT NULL DEFAULT '',
+	pos        INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY(message_id, id)
 ) WITHOUT ROWID;
 

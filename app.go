@@ -3,72 +3,546 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"runtime"
+	"sync"
+	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	"github.com/AVMG20/gomail/internal/config"
+	"github.com/AVMG20/gomail/internal/core"
 	"github.com/AVMG20/gomail/internal/models"
 )
 
-var errNotImplemented = errors.New("not implemented")
+// MailService is the Wails service bound to the frontend. Every exported
+// method is callable from Vue via the generated bindings
+// (frontend/bindings/github.com/AVMG20/gomail). It stays thin and delegates
+// to internal/core.
+type MailService struct {
+	svc     *core.Service
+	initErr error
+	info    models.AppInfo
 
-// App is the Wails-bound facade. Every exported method is callable from the
-// Vue frontend via the generated bindings in frontend/wailsjs/go/main/App.
-// Keep this layer thin: it delegates to the services in internal/.
-type App struct {
-	ctx context.Context
+	app      *application.App
+	window   *application.WebviewWindow
+	tray     *application.SystemTray
+	notifier *notifications.NotificationService
+
+	trayMu    sync.Mutex
+	trayTimer *time.Timer
+	logCloser interface{ Close() error }
 }
 
-func NewApp() *App { return &App{} }
+// NewMailService creates the service; the backend starts in ServiceStartup.
+func NewMailService(notifier *notifications.NotificationService) *MailService {
+	return &MailService{notifier: notifier}
+}
 
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (m *MailService) attach(app *application.App, w *application.WebviewWindow) {
+	m.app, m.window = app, w
+}
 
-func (a *App) shutdown(ctx context.Context) {}
+// ServiceStartup initialises the backend (Wails lifecycle hook).
+func (m *MailService) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
+	dir, err := config.DataDir()
+	if err != nil {
+		m.initErr = err
+		return nil // let the UI show the error instead of failing to start
+	}
+	logFile, closer, err := config.SetupLogging(dir)
+	if err == nil {
+		m.logCloser = closer
+	}
+	m.info = models.AppInfo{Version: version, DataDir: dir, LogFile: logFile, Platform: runtime.GOOS + "/" + runtime.GOARCH, Demo: config.DemoMode()}
+	slog.Info("gomail starting", "version", version, "dataDir", dir, "demo", m.info.Demo)
+	svc, err := core.New(core.Options{DataDir: dir, LogFile: logFile, Version: version, Demo: m.info.Demo, UI: desktopUI{m}})
+	if err != nil {
+		slog.Error("backend init failed", "err", err)
+		m.initErr = err
+		return nil
+	}
+	m.svc = svc
+	if m.notifier != nil {
+		if err := m.notifier.ServiceStartup(ctx, application.ServiceOptions{}); err != nil {
+			slog.Warn("desktop notifications unavailable", "err", err)
+			m.notifier = nil
+		}
+	}
+	svc.Start()
+	m.scheduleTrayUpdate()
+	return nil
+}
+
+// ServiceShutdown stops background work (Wails lifecycle hook).
+func (m *MailService) ServiceShutdown() error {
+	if m.svc != nil {
+		m.svc.Close()
+	}
+	if m.notifier != nil {
+		_ = m.notifier.ServiceShutdown()
+	}
+	slog.Info("gomail stopped")
+	if m.logCloser != nil {
+		_ = m.logCloser.Close()
+	}
+	return nil
+}
+
+func (m *MailService) ready() (*core.Service, error) {
+	if m.svc == nil {
+		if m.initErr != nil {
+			return nil, fmt.Errorf("gomail could not start: %w", m.initErr)
+		}
+		return nil, errors.New("gomail is still starting, please try again in a moment")
+	}
+	return m.svc, nil
+}
+
+// ---- core.UI implementation ----
+//
+// desktopUI is a separate unexported type so these methods are not bound
+// to the frontend.
+type desktopUI struct{ m *MailService }
+
+// Emit sends an event to the frontend.
+func (u desktopUI) Emit(event string, data any) {
+	m := u.m
+	if m.app != nil {
+		m.app.Event.Emit(event, data)
+	}
+	if event == models.EventAccountsChanged || event == models.EventMessagesChanged {
+		m.scheduleTrayUpdate()
+	}
+}
+
+// OpenURL opens the system browser.
+func (u desktopUI) OpenURL(url string) error {
+	m := u.m
+	if m.app == nil {
+		return errors.New("the app is not ready")
+	}
+	return m.app.Browser.OpenURL(url)
+}
+
+// SaveFile shows a native save dialog.
+func (u desktopUI) SaveFile(defaultName string) (string, error) {
+	m := u.m
+	if m.app == nil {
+		return "", errors.New("the app is not ready")
+	}
+	d := m.app.Dialog.SaveFile().SetFilename(defaultName)
+	if m.window != nil {
+		d = d.AttachToWindow(m.window)
+	}
+	return d.PromptForSingleSelection()
+}
+
+// Notify shows a desktop notification (errors are only logged).
+func (u desktopUI) Notify(title, body string) {
+	m := u.m
+	if m.notifier == nil {
+		return
+	}
+	err := m.notifier.SendNotification(notifications.NotificationOptions{
+		ID: fmt.Sprintf("gomail-%d", time.Now().UnixNano()), Title: title, Body: body,
+	})
+	if err != nil {
+		slog.Debug("notification failed", "err", err)
+	}
+}
+
+func (m *MailService) showWindow() {
+	if m.window != nil {
+		m.window.Show()
+		m.window.Focus()
+	}
+}
+
+// scheduleTrayUpdate refreshes the tray unread count (debounced).
+func (m *MailService) scheduleTrayUpdate() {
+	m.trayMu.Lock()
+	defer m.trayMu.Unlock()
+	if m.trayTimer != nil {
+		return
+	}
+	m.trayTimer = time.AfterFunc(700*time.Millisecond, func() {
+		m.trayMu.Lock()
+		m.trayTimer = nil
+		m.trayMu.Unlock()
+		if m.svc == nil || m.tray == nil {
+			return
+		}
+		accts, err := m.svc.Accounts()
+		if err != nil {
+			return
+		}
+		unread := 0
+		for _, a := range accts {
+			unread += a.UnreadCount
+		}
+		tip := "gomail — no unread mail"
+		label := ""
+		if unread > 0 {
+			tip = fmt.Sprintf("gomail — %d unread", unread)
+			label = fmt.Sprint(unread)
+		}
+		m.tray.SetTooltip(tip)
+		if runtime.GOOS == "darwin" {
+			m.tray.SetLabel(label)
+		}
+	})
+}
 
 // ---- Accounts ----
 
-func (a *App) GetAccounts() ([]models.Account, error) { return []models.Account{}, nil }
+// GetAccounts lists the configured accounts.
+func (m *MailService) GetAccounts() ([]models.Account, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.Accounts()
+}
 
 // AddAccount runs the OAuth flow for provider ("gmail" | "outlook") in the
 // system browser and blocks until it completes, is cancelled, or times out.
-func (a *App) AddAccount(provider string) (models.Account, error) {
-	return models.Account{}, errNotImplemented
+func (m *MailService) AddAccount(provider string) (models.Account, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.Account{}, err
+	}
+	return s.AddAccount(provider)
 }
-func (a *App) CancelAddAccount()                                        {}
-func (a *App) RemoveAccount(accountID string) error                     { return errNotImplemented }
-func (a *App) UpdateAccount(accountID, displayName, color string) error { return errNotImplemented }
+
+// CancelAddAccount aborts a running AddAccount.
+func (m *MailService) CancelAddAccount() {
+	if m.svc != nil {
+		m.svc.CancelAddAccount()
+	}
+}
+
+// RemoveAccount deletes an account, its tokens and all local data.
+func (m *MailService) RemoveAccount(accountID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.RemoveAccount(accountID)
+}
+
+// UpdateAccount changes an account's display name and color.
+func (m *MailService) UpdateAccount(accountID, displayName, color string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.UpdateAccount(accountID, displayName, color)
+}
+
+// SyncNow syncs one account ("" = all) and resolves when done.
+func (m *MailService) SyncNow(accountID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.SyncNow(accountID)
+}
 
 // ---- Folders & messages ----
 
-func (a *App) GetFolders(accountID string) ([]models.Folder, error) { return []models.Folder{}, nil }
-func (a *App) ListMessages(q models.ListQuery) (models.MessagePage, error) {
-	return models.MessagePage{Messages: []models.MessageSummary{}}, nil
+// GetFolders lists folders of an account ("" = all accounts).
+func (m *MailService) GetFolders(accountID string) ([]models.Folder, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.Folders(accountID)
 }
-func (a *App) GetMessage(id string) (models.Message, error) {
-	return models.Message{}, errNotImplemented
+
+// ListMessages returns one page of messages for the list view.
+func (m *MailService) ListMessages(q models.ListQuery) (models.MessagePage, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.MessagePage{Messages: []models.MessageSummary{}}, err
+	}
+	return s.ListMessages(q)
 }
-func (a *App) GetThread(id string) ([]models.Message, error)       { return nil, errNotImplemented }
-func (a *App) MarkRead(ids []string, read bool) error              { return errNotImplemented }
-func (a *App) SetStarred(ids []string, starred bool) error         { return errNotImplemented }
-func (a *App) Archive(ids []string) error                          { return errNotImplemented }
-func (a *App) Trash(ids []string) error                            { return errNotImplemented }
-func (a *App) MoveToFolder(ids []string, folderID string) error    { return errNotImplemented }
-func (a *App) SendMessage(req models.ComposeRequest) error         { return errNotImplemented }
-func (a *App) SaveAttachment(messageID, attachmentID string) error { return errNotImplemented }
-func (a *App) SyncNow(accountID string) error                      { return errNotImplemented }
-func (a *App) OpenExternalURL(url string)                          {}
+
+// SearchMessages runs a ranked, typo-tolerant search (command palette).
+func (m *MailService) SearchMessages(q models.SearchQuery) ([]models.SearchResult, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.SearchMessages(q)
+}
+
+// ResolveQueryIDs returns the ids of all messages matching q (for "select
+// all"), newest first, capped at max (<= 5000).
+func (m *MailService) ResolveQueryIDs(q models.ListQuery, max int) ([]string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.ResolveQueryIDs(q, max)
+}
+
+// GetMessage returns a message with its (sanitized) body.
+func (m *MailService) GetMessage(id string) (models.Message, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.Message{}, err
+	}
+	return s.Message(id)
+}
+
+// GetThread returns the messages of a conversation, oldest first.
+func (m *MailService) GetThread(id string) ([]models.Message, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.Thread(id)
+}
+
+func (m *MailService) MarkRead(ids []string, read bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.MarkRead(ids, read)
+}
+
+func (m *MailService) SetStarred(ids []string, starred bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.SetStarred(ids, starred)
+}
+
+func (m *MailService) Archive(ids []string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.Archive(ids)
+}
+
+func (m *MailService) Trash(ids []string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.Trash(ids)
+}
+
+func (m *MailService) MoveToFolder(ids []string, folderID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.MoveToFolder(ids, folderID)
+}
+
+// SendMessage sends a new message, reply, reply-all or forward.
+func (m *MailService) SendMessage(req models.ComposeRequest) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.Send(req)
+}
+
+// SaveAttachment asks for a location and saves the attachment there.
+func (m *MailService) SaveAttachment(messageID, attachmentID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.SaveAttachment(messageID, attachmentID)
+}
+
+// OpenExternalURL opens an http(s)/mailto link in the system browser.
+func (m *MailService) OpenExternalURL(url string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.OpenExternalURL(url)
+}
+
+// ---- Labels ----
+
+// AddLabel assigns a label manually.
+func (m *MailService) AddLabel(ids []string, labelID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.AddLabel(ids, labelID)
+}
+
+// RemoveLabel removes a label from messages.
+func (m *MailService) RemoveLabel(ids []string, labelID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.RemoveLabel(ids, labelID)
+}
+
+// GetLabelCounts returns total/unread counts per label (Trash excluded).
+func (m *MailService) GetLabelCounts(accountID string) ([]models.LabelCount, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.LabelCounts(accountID)
+}
 
 // ---- Settings ----
 
-func (a *App) GetSettings() (models.Settings, error) { return models.Settings{}, nil }
-func (a *App) SaveSettings(s models.Settings) error  { return errNotImplemented }
-func (a *App) SetOpenRouterKey(key string) error     { return errNotImplemented }
+func (m *MailService) GetSettings() (models.Settings, error) {
+	s, err := m.ready()
+	if err != nil {
+		return config.DefaultSettings(), err
+	}
+	return s.GetSettings(), nil
+}
+
+func (m *MailService) SaveSettings(st models.Settings) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.SaveSettings(st)
+}
+
+// SetOpenRouterKey stores the key securely ("" removes it). The key is
+// never returned to the frontend.
+func (m *MailService) SetOpenRouterKey(key string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.SetOpenRouterKey(key)
+}
+
+// GetDefaultPrompts returns the built-in grammar prompt and classifier
+// instructions (for "Reset to default").
+func (m *MailService) GetDefaultPrompts() models.DefaultPrompts { return core.DefaultPrompts() }
+
+// GetDefaultGrammarPrompt returns the built-in grammar system prompt.
+func (m *MailService) GetDefaultGrammarPrompt() string { return core.DefaultPrompts().Grammar }
+
+// GetAppInfo returns version, data directory and log file location.
+func (m *MailService) GetAppInfo() models.AppInfo {
+	info := m.info
+	if info.Version == "" {
+		info.Version = version
+	}
+	if info.Platform == "" {
+		info.Platform = runtime.GOOS + "/" + runtime.GOARCH
+	}
+	return info
+}
 
 // ---- AI (OpenRouter) ----
 
-func (a *App) TestOpenRouter() error                   { return errNotImplemented }
-func (a *App) ListAIModels() ([]models.AIModel, error) { return []models.AIModel{}, nil }
-func (a *App) ClassifyMessages(ids []string) ([]models.ClassificationResult, error) {
-	return nil, errNotImplemented
+// TestOpenRouter validates the stored OpenRouter key.
+func (m *MailService) TestOpenRouter() error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.TestOpenRouter()
 }
-func (a *App) ClassifyFolder(q models.ListQuery) (int, error)     { return 0, errNotImplemented }
-func (a *App) SetCategory(ids []string, categoryID string) error  { return errNotImplemented }
-func (a *App) SummarizeMessage(id string) (string, error)         { return "", errNotImplemented }
-func (a *App) DraftReply(id, instructions string) (string, error) { return "", errNotImplemented }
+
+// ListAIModels returns all OpenRouter models (cached for an hour).
+func (m *MailService) ListAIModels() ([]models.AIModel, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.ListAIModels(false)
+}
+
+// RefreshAIModels refetches the OpenRouter model list.
+func (m *MailService) RefreshAIModels() ([]models.AIModel, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.ListAIModels(true)
+}
+
+// ClassifyMessages labels the given messages (max 200) and returns the
+// per-message results.
+func (m *MailService) ClassifyMessages(ids []string) ([]models.ClassificationResult, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.ClassifyMessages(ids)
+}
+
+// ClassifyQuery starts a background job labeling every message matching q.
+// Trash and Drafts are skipped unless includeAllFolders.
+func (m *MailService) ClassifyQuery(q models.ListQuery, onlyUnlabeled, includeAllFolders bool) (models.ClassifyJob, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.ClassifyJob{}, err
+	}
+	return s.ClassifyQuery(q, onlyUnlabeled, includeAllFolders)
+}
+
+// CancelClassify stops a labeling job ("auto" stops automatic labeling).
+func (m *MailService) CancelClassify(jobID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.CancelClassify(jobID)
+}
+
+// EstimateClassify estimates how many messages ClassifyQuery would label
+// and what it would cost.
+func (m *MailService) EstimateClassify(q models.ListQuery, onlyUnlabeled, includeAllFolders bool) (models.ClassifyEstimate, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.ClassifyEstimate{}, err
+	}
+	return s.EstimateClassify(q, onlyUnlabeled, includeAllFolders)
+}
+
+// SummarizeMessage returns short TL;DR bullets for a message.
+func (m *MailService) SummarizeMessage(id string) (string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return "", err
+	}
+	return s.SummarizeMessage(id)
+}
+
+// DraftReply drafts a plain-text reply following optional instructions.
+func (m *MailService) DraftReply(id, instructions string) (string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return "", err
+	}
+	return s.DraftReply(id, instructions)
+}
+
+// ImproveGrammar returns text with spelling and grammar corrected (meaning,
+// tone, language and formatting/HTML kept).
+func (m *MailService) ImproveGrammar(text string) (string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return "", err
+	}
+	return s.ImproveGrammar(text)
+}

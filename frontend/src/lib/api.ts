@@ -2,9 +2,8 @@
 // the UI imports `api` from here. When the page is not running inside a Wails
 // webview (plain browser via `npm run dev`) every call is routed to the
 // in-memory mock in ./mock.
-import { Browser, Clipboard, Events } from '@wailsio/runtime'
 import type {
-  Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ComposeRequest, DefaultPrompts, EventName,
+  Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
   EventPayloads, Folder, LabelCount, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings,
 } from './types'
 import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
@@ -13,20 +12,32 @@ type AnyFn = (...args: unknown[]) => Promise<unknown>
 
 // Generated v3 bindings (`wails3 generate bindings -ts`), discovered at build
 // time so the app does not depend on exact service/package paths and still
-// builds before the bindings exist. Wails' own internal modules are skipped.
-const bindingModules = import.meta.glob<Record<string, unknown>>(
+// builds before the bindings exist. They (and the Wails runtime) are loaded
+// lazily by initBackend(), only inside a Wails webview, keeping them out of
+// the main bundle and away from the browser mock.
+const bindingLoaders = import.meta.glob<Record<string, unknown>>(
   ['../../bindings/**/*.ts', '../../bindings/**/*.js', '!../../bindings/github.com/wailsapp/**', '!**/models.ts', '!**/models.js', '!**/index.ts', '!**/index.js', '!**/*.d.ts'],
-  { eager: true },
 )
 
+type WailsRuntime = typeof import('@wailsio/runtime')
+let runtime: WailsRuntime | null = null
 const registry = new Map<string, AnyFn>()
-for (const mod of Object.values(bindingModules)) {
+
+function register(mod: Record<string, unknown>) {
   for (const [name, value] of Object.entries(mod)) {
     // Service methods are exported as PascalCase functions; model classes have a createFrom.
     if (typeof value === 'function' && /^[A-Z]/.test(name) && !('createFrom' in value) && !registry.has(name)) {
       registry.set(name, value as AnyFn)
     }
   }
+}
+
+/** Load the Wails runtime + bindings (no-op in the browser mock). Call before mounting. */
+export async function initBackend(): Promise<void> {
+  if (!isWails()) return
+  const [rt, ...mods] = await Promise.all([import('@wailsio/runtime'), ...Object.values(bindingLoaders).map((load) => load())])
+  runtime = rt
+  mods.forEach(register)
 }
 
 let mode: 'wails' | 'mock' | null = null
@@ -61,12 +72,43 @@ export class NotSupportedError extends Error {
   }
 }
 
+// The core service names some methods without the Get prefix; accept both
+// so a facade rename never silently breaks a feature.
+const ALIASES: Record<string, string[]> = {
+  GetAccounts: ['Accounts'],
+  GetFolders: ['Folders'],
+  GetMessage: ['Message'],
+  GetThread: ['Thread'],
+  GetLabelCounts: ['LabelCounts'],
+  SendMessage: ['Send'],
+  GetAppInfo: ['Info', 'AppInfo'],
+}
+
 function boundFn(name: string): AnyFn | undefined {
-  return registry.get(name)
+  const direct = registry.get(name)
+  if (direct) return direct
+  for (const alt of ALIASES[name] ?? []) {
+    const fn = registry.get(alt)
+    if (fn) return fn
+  }
+  return undefined
 }
 
 export function hasMethod(name: string): boolean {
-  return isWails() ? registry.has(name) : true
+  return isWails() ? !!boundFn(name) : true
+}
+
+/** Every backend method the UI uses; logged when missing so gaps are obvious in dev. */
+export const USED_METHODS = [
+  'GetAccounts', 'AddAccount', 'CancelAddAccount', 'RemoveAccount', 'UpdateAccount', 'GetFolders', 'ListMessages', 'GetMessage',
+  'GetThread', 'MarkRead', 'SetStarred', 'Archive', 'Trash', 'MoveToFolder', 'SendMessage', 'SaveAttachment', 'SyncNow',
+  'OpenExternalURL', 'SearchMessages', 'ResolveQueryIDs', 'GetSettings', 'SaveSettings', 'SetOpenRouterKey', 'GetAppInfo',
+  'GetDefaultPrompts', 'TestOpenRouter', 'ListAIModels', 'ClassifyMessages', 'AddLabel', 'RemoveLabel', 'GetLabelCounts',
+  'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
+]
+
+export function missingMethods(): string[] {
+  return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
 }
 
 async function call<T>(name: string, ...args: unknown[]): Promise<T> {
@@ -96,9 +138,19 @@ export function toError(e: unknown): Error {
   }
 }
 
+/** Human-friendly message for toasts (strips Go error prefixes / JSON wrappers). */
 export function errorMessage(e: unknown): string {
-  const msg = toError(e).message
-  return msg.replace(/^Error:\s*/, '')
+  let msg = toError(e).message.replace(/^Error:\s*/, '')
+  try {
+    const parsed = JSON.parse(msg) as { message?: string }
+    if (parsed && typeof parsed.message === 'string') msg = parsed.message
+  } catch {
+    /* not JSON */
+  }
+  if (/not available in this version/.test(msg)) return 'This feature needs a newer version of the gomail backend.'
+  if (/context deadline exceeded|timeout/i.test(msg)) return 'The request timed out. Check your connection and try again.'
+  if (/no such host|network is unreachable|connection refused/i.test(msg)) return 'Can’t reach the server. Check your internet connection.'
+  return msg.charAt(0).toUpperCase() + msg.slice(1)
 }
 
 // ---- normalisation (Go nil slices arrive as null) ----
@@ -142,6 +194,29 @@ function normSettings(s: Settings): Settings {
     grammarSystemPrompt: s.grammarSystemPrompt ?? '',
     classifyInstructions: s.classifyInstructions ?? '',
     microsoftTenant: s.microsoftTenant || 'common',
+    notifications: s.notifications ?? true,
+    // Not (yet) in the Go Settings struct: fall back to the locally stored value.
+    showInTray: s.showInTray ?? readLocal('showInTray', true),
+    undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
+  }
+}
+
+const LOCAL_PREFS = 'gomail.localPrefs.v1'
+export function readLocal<T>(key: string, fallback: T): T {
+  try {
+    const all = JSON.parse(localStorage.getItem(LOCAL_PREFS) || '{}') as Record<string, unknown>
+    return key in all ? (all[key] as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+export function writeLocal(key: string, value: unknown) {
+  try {
+    const all = JSON.parse(localStorage.getItem(LOCAL_PREFS) || '{}') as Record<string, unknown>
+    all[key] = value
+    localStorage.setItem(LOCAL_PREFS, JSON.stringify(all))
+  } catch {
+    /* ignore */
   }
 }
 
@@ -156,7 +231,6 @@ function normQuery(q: Partial<ListQuery>): ListQuery {
     unreadOnly: q.unreadOnly ?? false,
     limit: q.limit ?? 50,
     cursor: q.cursor ?? '',
-    ...(q.includeTrashDrafts ? { includeTrashDrafts: true } : {}),
   }
 }
 
@@ -187,7 +261,7 @@ export const api = {
   openExternal: async (url: string) => {
     if (isWails()) {
       if (boundFn('OpenExternalURL')) return call<void>('OpenExternalURL', url)
-      return Browser.OpenURL(url)
+      return runtime?.Browser.OpenURL(url)
     }
     return call<void>('OpenExternalURL', url)
   },
@@ -199,7 +273,11 @@ export const api = {
 
   // ---- settings
   getSettings: async () => normSettings(await call<Settings>('GetSettings')),
-  saveSettings: (s: Settings) => call<void>('SaveSettings', s),
+  saveSettings: (s: Settings) => {
+    writeLocal('showInTray', s.showInTray)
+    writeLocal('undoSendSeconds', s.undoSendSeconds)
+    return call<void>('SaveSettings', s)
+  },
   setOpenRouterKey: (key: string) => call<void>('SetOpenRouterKey', key),
   getAppInfo: () => call<AppInfo>('GetAppInfo'),
   getDefaultPrompts: async (): Promise<DefaultPrompts> => {
@@ -210,27 +288,35 @@ export const api = {
 
   // ---- labels & AI
   testOpenRouter: () => call<void>('TestOpenRouter'),
-  listAIModels: async () => (await call<AIModel[] | null>('ListAIModels')) ?? [],
+  listAIModels: async (force = false) =>
+    ((await (force && hasMethod('RefreshAIModels') ? call<AIModel[] | null>('RefreshAIModels') : call<AIModel[] | null>('ListAIModels'))) ?? [])
+      .map((m) => ({ ...m, kind: m.kind || 'chat' })),
   classifyMessages: async (ids: string[]): Promise<ClassificationResult[]> =>
     ((await call<ClassificationResult[] | null>('ClassifyMessages', ids)) ?? []).map((r) => {
       // Tolerate the older {label, confidence} shape.
       const legacy = r as unknown as { label?: string; confidence?: number }
       const added = r.added ?? (legacy.label ? [legacy.label] : [])
       const scores = r.scores ?? (legacy.label ? { [legacy.label]: legacy.confidence ?? 0 } : {})
-      return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0 }
+      return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0, error: r.error ?? '' }
     }),
   addLabel: (ids: string[], labelId: string) => call<void>('AddLabel', ids, labelId),
   removeLabel: (ids: string[], labelId: string) => call<void>('RemoveLabel', ids, labelId),
   getLabelCounts: async (accountId: string) => (await call<LabelCount[] | null>('GetLabelCounts', accountId)) ?? [],
-  estimateClassify: (q: Partial<ListQuery>, onlyUnlabeled: boolean) => call<ClassifyEstimate>('EstimateClassify', normQuery(q), onlyUnlabeled),
-  classifyQuery: (q: Partial<ListQuery>, onlyUnlabeled: boolean) => call<string>('ClassifyQuery', normQuery(q), onlyUnlabeled),
+  estimateClassify: async (q: Partial<ListQuery>, onlyUnlabeled: boolean, includeAllFolders: boolean): Promise<ClassifyEstimate> => {
+    const e = await call<ClassifyEstimate & { estimatedCost?: number }>('EstimateClassify', normQuery(q), onlyUnlabeled, includeAllFolders)
+    return { ...e, estimatedCostUsd: e.estimatedCostUsd ?? e.estimatedCost ?? 0, priceKnown: e.priceKnown ?? true }
+  },
+  classifyQuery: async (q: Partial<ListQuery>, onlyUnlabeled: boolean, includeAllFolders: boolean): Promise<ClassifyJob> => {
+    const r = await call<ClassifyJob | string>('ClassifyQuery', normQuery(q), onlyUnlabeled, includeAllFolders)
+    return typeof r === 'string' ? { jobId: r, total: 0 } : r
+  },
   cancelClassify: (jobId: string) => call<void>('CancelClassify', jobId),
   summarizeMessage: (id: string) => call<string>('SummarizeMessage', id),
   improveGrammar: (text: string) => call<string>('ImproveGrammar', text),
 
   // ---- runtime
   on<E extends EventName>(event: E, cb: (payload: EventPayloads[E]) => void): () => void {
-    if (isWails()) return Events.On(event, (ev: { data: unknown }) => cb(ev.data as EventPayloads[E]))
+    if (isWails()) return runtime ? runtime.Events.On(event, (ev: { data: unknown }) => cb(ev.data as EventPayloads[E])) : () => {}
     let off: (() => void) | null = null
     let cancelled = false
     void loadMock().then(({ mock }) => {
@@ -243,7 +329,7 @@ export const api = {
   },
 
   async clipboardGet(): Promise<string> {
-    if (isWails()) return Clipboard.Text()
+    if (isWails() && runtime) return runtime.Clipboard.Text()
     try {
       return await navigator.clipboard.readText()
     } catch {
@@ -252,8 +338,8 @@ export const api = {
   },
 
   async clipboardSet(text: string): Promise<void> {
-    if (isWails()) {
-      await Clipboard.SetText(text)
+    if (isWails() && runtime) {
+      await runtime.Clipboard.SetText(text)
       return
     }
     try {

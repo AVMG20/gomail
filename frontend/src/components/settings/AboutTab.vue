@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { CopyIcon, MailIcon } from '@lucide/vue'
+import { CopyIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Badge } from '@/components/ui/badge'
 import { api } from '@/lib/api'
@@ -20,7 +20,7 @@ async function copy(text: string) {
 <template>
   <div>
     <div class="mb-6 flex items-center gap-4">
-      <div class="bg-primary text-primary-foreground flex size-12 items-center justify-center rounded-xl shadow-sm"><MailIcon class="size-6" /></div>
+      <img src="/appicon.svg" alt="" class="size-14 drop-shadow-sm" width="56" height="56" />
       <div>
         <div class="flex items-center gap-2 text-lg font-semibold">gomail <Badge v-if="settings.appInfo?.demo" variant="secondary">Demo data</Badge></div>
         <div class="text-muted-foreground text-xs">A calm desktop mail client · Version {{ settings.appInfo?.version ?? '—' }}</div>

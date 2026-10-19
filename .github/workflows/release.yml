@@ -83,9 +83,14 @@ jobs:
           # Stamp the version into the platform metadata (Info.plist, .exe info, nfpm).
           sed -i.bak "s/^  version: .*/  version: \"${version}\"/" build/config.yml && rm build/config.yml.bak
           (cd build && wails3 update build-assets -name gomail -binaryname gomail -config config.yml -dir .)
+          # update build-assets regenerates nfpm.yaml from the template; restore project metadata.
+          sed -i.bak 's#^homepage: .*#homepage: "https://github.com/${{ github.repository }}"#' build/linux/nfpm/nfpm.yaml && rm build/linux/nfpm/nfpm.yaml.bak
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
+        env:
+          GIT_COMMITTER_NAME: gomail
+          GIT_COMMITTER_EMAIL: noreply@github.com
         run: |
           wails3 task linux:build "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"
           wails3 task linux:create:appimage "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"

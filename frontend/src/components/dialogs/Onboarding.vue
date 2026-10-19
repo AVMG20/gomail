@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MailIcon, SparklesIcon, TagIcon, ZapIcon } from '@lucide/vue'
+import { SparklesIcon, TagIcon, ZapIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useUiStore } from '@/stores/ui'
@@ -10,9 +10,7 @@ const ui = useUiStore()
 <template>
   <div class="bg-background flex h-full flex-1 items-center justify-center p-8">
     <div class="w-full max-w-md text-center">
-      <div class="bg-primary/10 text-primary mx-auto mb-6 flex size-14 items-center justify-center rounded-2xl">
-        <MailIcon class="size-7" />
-      </div>
+      <img src="/appicon.svg" alt="" class="mx-auto mb-6 size-20" width="80" height="80" />
       <h1 class="text-2xl font-semibold tracking-tight">Welcome to gomail</h1>
       <p class="text-muted-foreground mt-2 text-sm leading-relaxed">A calm, fast home for all your mail. Connect an account to get started.</p>
       <div class="mt-8 grid gap-2.5">

@@ -103,8 +103,8 @@ function labelAll() {
         </Popover>
         <span class="flex-1 text-[13px] font-medium">{{ l.name }}</span>
         <span class="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
-          <ProviderIcon :provider="l.provider ?? 'gmail'" class="size-3.5" />
-          {{ l.source === 'system' ? 'Built-in' : 'From' }} {{ l.provider === 'outlook' ? 'Outlook' : 'Gmail' }}
+          <ProviderIcon v-if="l.provider" :provider="l.provider" class="size-3.5" />
+          {{ l.source === 'system' ? 'Built-in' : l.provider ? `From ${l.provider === 'outlook' ? 'Outlook' : 'Gmail'}` : 'Imported from Gmail/Outlook' }}
         </span>
       </div>
       <p v-if="s.importProviderLabels && !providerLabels.length" class="text-muted-foreground py-3 text-xs">No labels imported yet.</p>

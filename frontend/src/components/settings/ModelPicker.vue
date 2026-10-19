@@ -13,8 +13,8 @@ import { formatContext } from '@/lib/format'
 import type { AIModel } from '@/lib/types'
 import { useSettingsStore } from '@/stores/settings'
 
-const props = withDefaults(defineProps<{ recommended?: AIModel[]; recommendedHeading?: string; placeholder?: string }>(), {
-  recommended: () => [], recommendedHeading: 'Recommended', placeholder: 'Choose a model',
+const props = withDefaults(defineProps<{ recommended?: AIModel[]; recommendedHeading?: string; recommendedKind?: string; placeholder?: string; kind?: string }>(), {
+  recommended: () => [], recommendedHeading: 'Recommended', recommendedKind: '', placeholder: 'Choose a model', kind: '',
 })
 const model = defineModel<string>({ required: true })
 const settings = useSettingsStore()
@@ -29,11 +29,18 @@ watch(open, (o) => {
   }
 })
 
-const all = computed(() => settings.models)
+const all = computed(() => (props.kind ? settings.models.filter((m) => !m.kind || m.kind === props.kind) : settings.models))
 const filtered = computed(() => fuzzyFilter(q.value, all.value, (m) => `${m.name} ${m.id}`, 100000))
 const shown = computed(() => filtered.value.slice(0, CAP))
-const rec = computed(() => (q.value ? fuzzyFilter(q.value, props.recommended, (m) => `${m.name} ${m.id}`) : props.recommended))
-const selected = computed<AIModel | null>(() => props.recommended.find((m) => m.id === model.value) ?? all.value.find((m) => m.id === model.value) ?? null)
+// Recommended = pinned models plus any listed models of the same kind (e.g. "decision" for Jev).
+const recAll = computed(() => {
+  if (!props.recommended.length) return []
+  const ids = new Set(props.recommended.map((m) => m.id))
+  const extra = all.value.filter((m) => props.recommendedKind && m.kind === props.recommendedKind && !ids.has(m.id))
+  return [...props.recommended.map((r) => all.value.find((m) => m.id === r.id) ?? r), ...extra]
+})
+const rec = computed(() => (q.value ? fuzzyFilter(q.value, recAll.value, (m) => `${m.name} ${m.id}`) : recAll.value))
+const selected = computed<AIModel | null>(() => settings.models.find((m) => m.id === model.value) ?? props.recommended.find((m) => m.id === model.value) ?? null)
 const showCustom = computed(() => {
   const s = q.value.trim()
   return s.length > 2 && /^[~\w.\-/:]+$/.test(s) && !all.value.some((m) => m.id === s) && !props.recommended.some((m) => m.id === s)
@@ -43,6 +50,7 @@ function price(n: number) {
   return n < 0.01 && n > 0 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`
 }
 function priceLine(m: AIModel): string {
+  if (m.priceUnknown) return 'Price unknown'
   if (!m.promptPrice && !m.completionPrice) return props.recommended.some((r) => r.id === m.id) ? 'Priced per decision' : 'Free'
   return `${price(m.promptPrice)} / 1M in · ${price(m.completionPrice)} / 1M out`
 }
