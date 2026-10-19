@@ -102,8 +102,8 @@ export interface ListQuery {
   unreadOnly: boolean
   limit: number
   cursor: string
-  /** Bulk AI labeling only: also include Drafts, Spam/Junk and Trash. */
-  includeDraftsSpamTrash?: boolean
+  /** Bulk AI labeling only: also include Trash and Drafts (Spam/Junk is always included). */
+  includeTrashDrafts?: boolean
 }
 
 export interface MessagePage {

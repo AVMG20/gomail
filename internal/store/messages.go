@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,16 +15,17 @@ import (
 )
 
 const summaryCols = `m.id, m.account_id, m.remote_id, m.thread_id, m.from_name, m.from_email, m.to_json, m.subject, m.snippet,
-	m.date, m.unread, m.starred, m.has_attachments, m.category, m.category_source, m.category_conf,
-	coalesce((SELECT group_concat(mf.folder_id) FROM message_folders mf WHERE mf.message_id = m.id), '')`
+	m.date, m.unread, m.starred, m.has_attachments,
+	coalesce((SELECT group_concat(mf.folder_id) FROM message_folders mf WHERE mf.message_id = m.id), ''),
+	coalesce((SELECT group_concat(ml.label_id || '|' || ml.source || '|' || ml.confidence) FROM message_labels ml WHERE ml.message_id = m.id), '')`
 
 func scanSummary(sc interface{ Scan(...any) error }, extra ...any) (models.MessageSummary, error) {
 	var m models.MessageSummary
-	var toJSON, folders string
+	var toJSON, folders, labels string
 	var date int64
 	var unread, starred, att int
 	dest := []any{&m.ID, &m.AccountID, &m.RemoteID, &m.ThreadID, &m.From.Name, &m.From.Email, &toJSON, &m.Subject, &m.Snippet,
-		&date, &unread, &starred, &att, &m.Category, &m.CategorySource, &m.CategoryConfidence, &folders}
+		&date, &unread, &starred, &att, &folders, &labels}
 	if err := sc.Scan(append(dest, extra...)...); err != nil {
 		return m, err
 	}
@@ -33,7 +36,28 @@ func scanSummary(sc interface{ Scan(...any) error }, extra ...any) (models.Messa
 	if folders != "" {
 		m.FolderIDs = strings.Split(folders, ",")
 	}
+	m.Labels, m.LabelDetails = decodeLabels(labels)
 	return m, nil
+}
+
+func decodeLabels(s string) ([]string, []models.MessageLabel) {
+	ids := []string{}
+	details := []models.MessageLabel{}
+	if s == "" {
+		return ids, details
+	}
+	for _, part := range strings.Split(s, ",") {
+		f := strings.SplitN(part, "|", 3)
+		if len(f) != 3 {
+			continue
+		}
+		conf, _ := strconv.ParseFloat(f[2], 64)
+		ids = append(ids, f[0])
+		details = append(details, models.MessageLabel{LabelID: f[0], Source: f[1], Confidence: conf})
+	}
+	sort.Strings(ids)
+	sort.Slice(details, func(i, j int) bool { return details[i].LabelID < details[j].LabelID })
+	return ids, details
 }
 
 func decodeAddrs(s string) []models.Address {
@@ -478,48 +502,22 @@ func (s *Store) SetMessageFolders(sets map[string][]string) error {
 	})
 }
 
-// ---- categories ----
+// ---- labels ----
 
-// CategoryUpdate assigns a category to one message.
-type CategoryUpdate struct {
-	ID         string
-	Category   string
-	Confidence float64
-}
-
-// SetCategories stores classifier results with source "ai". Messages with a
-// manual label are left untouched unless overrideManual is set.
-func (s *Store) SetCategories(updates []CategoryUpdate, overrideManual bool) error {
+// AddLabels assigns a label manually (upgrading an existing AI assignment
+// to manual). It returns the ids that exist.
+func (s *Store) AddLabels(ids []string, labelID string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
-		q := `UPDATE messages SET category = ?, category_source = CASE WHEN ? = '' THEN '' ELSE 'ai' END, category_conf = ?, classified_at = ? WHERE id = ?`
-		if !overrideManual {
-			q += ` AND category_source != 'manual'`
-		}
-		st, err := tx.Prepare(q)
+		st, err := tx.Prepare(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
+			SELECT id, ?, 'manual', 1, ? FROM messages WHERE id = ?
+			ON CONFLICT(message_id, label_id) DO UPDATE SET source = 'manual', confidence = 1`)
 		if err != nil {
 			return err
 		}
 		defer st.Close()
 		now := time.Now().UnixMilli()
-		for _, u := range updates {
-			if _, err := st.Exec(u.Category, u.Category, u.Confidence, now, u.ID); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// SetManualCategory sets (or with "" clears) a user-chosen label.
-func (s *Store) SetManualCategory(ids []string, category string) error {
-	return s.tx(context.Background(), func(tx *sql.Tx) error {
-		source := "manual"
-		if category == "" {
-			source = ""
-		}
 		for _, id := range ids {
-			if _, err := tx.Exec(`UPDATE messages SET category = ?, category_source = ?, category_conf = ? WHERE id = ?`,
-				category, source, boolInt(category != ""), id); err != nil {
+			if _, err := st.Exec(labelID, now, id); err != nil {
 				return err
 			}
 		}
@@ -527,14 +525,105 @@ func (s *Store) SetManualCategory(ids []string, category string) error {
 	})
 }
 
-// ClearUnknownCategories removes labels whose category no longer exists.
-func (s *Store) ClearUnknownCategories(valid []string) error {
-	q := `UPDATE messages SET category = '', category_source = '', category_conf = 0 WHERE category != ''`
+// RemoveLabels removes a label (manual or AI) from messages.
+func (s *Store) RemoveLabels(ids []string, labelID string) error {
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		for _, chunk := range chunks(ids, 500) {
+			args := append([]any{labelID}, anySlice(chunk)...)
+			if _, err := tx.Exec(`DELETE FROM message_labels WHERE label_id = ? AND message_id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// AIResult is one classifier outcome. LabelID "" means "no label applies".
+type AIResult struct {
+	ID         string
+	LabelID    string
+	Confidence float64
+}
+
+// ApplyAIResults replaces the previous AI labels of each message with the
+// new result. Manual labels are never touched; if the AI picks a label the
+// user already assigned manually it stays manual. The message is marked as
+// classified either way.
+func (s *Store) ApplyAIResults(results []AIResult) error {
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		del, err := tx.Prepare(`DELETE FROM message_labels WHERE message_id = ? AND source = 'ai'`)
+		if err != nil {
+			return err
+		}
+		defer del.Close()
+		ins, err := tx.Prepare(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
+			SELECT id, ?, 'ai', ?, ? FROM messages WHERE id = ?
+			ON CONFLICT(message_id, label_id) DO NOTHING`)
+		if err != nil {
+			return err
+		}
+		defer ins.Close()
+		mark, err := tx.Prepare(`UPDATE messages SET classified_at = ? WHERE id = ?`)
+		if err != nil {
+			return err
+		}
+		defer mark.Close()
+		now := time.Now().UnixMilli()
+		for _, r := range results {
+			if _, err := del.Exec(r.ID); err != nil {
+				return err
+			}
+			if r.LabelID != "" {
+				if _, err := ins.Exec(r.LabelID, r.Confidence, now, r.ID); err != nil {
+					return err
+				}
+			}
+			if _, err := mark.Exec(now, r.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteUnknownLabels removes assignments of labels that no longer exist.
+func (s *Store) DeleteUnknownLabels(valid []string) error {
+	q := `DELETE FROM message_labels`
 	if len(valid) > 0 {
-		q += ` AND category NOT IN (` + placeholders(len(valid)) + `)`
+		q += ` WHERE label_id NOT IN (` + placeholders(len(valid)) + `)`
 	}
 	_, err := s.db.Exec(q, anySlice(valid)...)
 	return err
+}
+
+// LabelCounts counts labeled messages per label (total and unread),
+// optionally restricted to one account. Messages in Trash are not
+// counted.
+func (s *Store) LabelCounts(accountID string) ([]models.LabelCount, error) {
+	q := `SELECT ml.label_id, count(*), coalesce(sum(m.unread), 0)
+		FROM message_labels ml JOIN messages m ON m.id = ml.message_id
+		WHERE NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.id = mf.folder_id
+			WHERE mf.message_id = m.id AND f.kind = 'trash')`
+	var args []any
+	if accountID != "" {
+		q += ` AND m.account_id = ?`
+		args = append(args, accountID)
+	}
+	q += ` GROUP BY ml.label_id ORDER BY ml.label_id`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.LabelCount{}
+	for rows.Next() {
+		var c models.LabelCount
+		if err := rows.Scan(&c.LabelID, &c.Total, &c.Unread); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // ClassifyInput is the data the classifier needs for one message.
@@ -547,15 +636,18 @@ type ClassifyInput struct {
 	BodyText       string
 	Date           time.Time
 	HasAttachments bool
-	CategorySource string
+	FolderKinds    []string
+	ClassifiedAt   time.Time
 }
 
 // ClassifyInputs loads classifier inputs for the given ids.
 func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 	var out []ClassifyInput
 	for _, chunk := range chunks(ids, 500) {
-		rows, err := s.db.Query(`SELECT id, from_name, from_email, to_json, subject, snippet, coalesce(body_text, ''), date, has_attachments, category_source
-			FROM messages WHERE id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
+		rows, err := s.db.Query(`SELECT m.id, m.from_name, m.from_email, m.to_json, m.subject, m.snippet, coalesce(m.body_text, ''), m.date,
+			m.has_attachments, m.classified_at,
+			coalesce((SELECT group_concat(f.kind) FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = m.id), '')
+			FROM messages m WHERE m.id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
 		if err != nil {
 			return nil, err
 		}
@@ -564,11 +656,17 @@ func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 			var to string
 			var date int64
 			var att int
-			if err := rows.Scan(&c.ID, &c.From.Name, &c.From.Email, &to, &c.Subject, &c.Snippet, &c.BodyText, &date, &att, &c.CategorySource); err != nil {
+			var classified int64
+			var kinds string
+			if err := rows.Scan(&c.ID, &c.From.Name, &c.From.Email, &to, &c.Subject, &c.Snippet, &c.BodyText, &date, &att, &classified, &kinds); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			c.To, c.Date, c.HasAttachments = decodeAddrs(to), fromMillis(date), att == 1
+			c.ClassifiedAt = fromMillis(classified)
+			if kinds != "" {
+				c.FolderKinds = strings.Split(kinds, ",")
+			}
 			out = append(out, c)
 		}
 		rows.Close()

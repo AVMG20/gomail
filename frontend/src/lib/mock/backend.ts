@@ -17,7 +17,7 @@ const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const latency = (min = 60, max = 200) => sleep(min + Math.random() * (max - min))
 
-const NEVER_LABEL = new Set(['drafts', 'spam', 'trash'])
+const NEVER_LABEL = new Set(['drafts', 'trash'])
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
@@ -595,11 +595,11 @@ class MockBackend {
   }
 
   private classifyTargets(q: ListQuery, onlyUnlabeled: boolean): Message[] {
-    // A query without a folder never includes Spam/Trash (see filter); Drafts/Spam/Trash
-    // are only labeled in bulk when explicitly requested.
-    const includeAll = !!q.includeDraftsSpamTrash
-    const base = includeAll && !q.folderId && !q.folderKind
-      ? [...this.messages.values()].filter((m) => !q.accountId || m.accountId === q.accountId)
+    // Spam/Junk is labeled like normal mail; Trash and Drafts only on request.
+    const includeAll = !!q.includeTrashDrafts
+    const base = !q.folderId && !q.folderKind
+      ? [...this.messages.values()].filter((m) => (!q.accountId || m.accountId === q.accountId) && (!q.unreadOnly || m.unread)
+        && (!(q.labels?.length || q.unlabeled) || q.labels.some((l) => m.labels.includes(l)) || (q.unlabeled && m.labels.length === 0)))
       : this.filter({ ...q, cursor: '' })
     return base.filter((m) => (includeAll || !this.neverLabel(m)) && (!onlyUnlabeled || m.labels.length === 0))
   }
