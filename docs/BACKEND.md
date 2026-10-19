@@ -222,9 +222,24 @@ elsewhere). Its menu has Open gomail, Check mail and Quit.
 - *Single instance.* One gomail runs per data directory (id
   `com.avmg20.gomail`, plus a hash of the directory for custom profiles).
   A second launch focuses the running window, forwards its arguments and
-  exits. On Linux this goes over the D-Bus session bus. Without a session
-  bus, gomail starts anyway with single-instance mode off (a note goes to
-  stderr), because Wails would otherwise refuse to start.
+  exits. On Linux this goes over the D-Bus session bus. Before enabling it,
+  gomail checks that the bus is reachable and the name
+  `<id>.SingleInstance` can be owned, because Wails exits with a fatal
+  error otherwise. If not, gomail logs a warning and runs as a normal
+  instance.
+- *Data-directory lock.* Every instance also takes an exclusive lock on
+  `<data dir>/instance.lock`: `flock` on macOS and Linux, `LockFileEx` on
+  Windows. The OS releases it if the process dies. When the lock is held
+  (two launches without working single-instance support), the new process
+  opens no window, tray or database. It logs the reason, prints
+  "gomail is already running" on stderr, shows a native error dialog
+  (closed after a minute if no one answers) and exits with code 1. If the
+  lock file can't be created at all (a read-only or unusual file system),
+  gomail logs a warning and starts without the guard.
+- *Startup errors* (data directory, Wails fatal errors, `app.Run`) are
+  written to stderr and to `gomail.log` before exiting. Backend init errors
+  keep the window open and are returned by every call, so the UI can show
+  them.
 - *Launch at login.* `launchAtLogin` (default false) registers gomail with
   the OS: a HKCU `Run` value on Windows, a LaunchAgent on macOS, and an
   XDG autostart `.desktop` file on Linux. Custom profiles never register.
@@ -319,6 +334,11 @@ snippet and cached body text:
   CSS.
 - Links get `rel="noreferrer noopener"` and `target="_blank"`.
 - `cid:` images are inlined as `data:` URIs.
+
+`emailBackground` (`"auto"` or `"light"`, default `"auto"`) is a rendering
+preference for the UI. With `"light"`, bodies are always shown on white;
+with `"auto"`, they follow the theme. The backend only stores and validates
+it; any other value becomes `"auto"`.
 
 When `showRemoteImages` is off, `GetMessage` and `GetThread` also strip
 remote `src`, `background`, `srcset` and CSS `url()` references. In that
@@ -531,6 +551,24 @@ Benchmarks on the reference box, a 4-vCPU Xeon:
 | `GetLabelCounts` on 50k messages | 5 ms (denormalized and index-only) |
 | Search on 50k messages | 8–25 ms per query |
 | List plus counts on a 5k account | 13 ms |
+
+## Troubleshooting
+
+- **Linux containers or CI: WebKitGTK aborts with SIGTRAP** ("Failed to
+  fully launch dbus-proxy" or "bwrap: Can't find source path ...
+  bus-proxy-..."). This happens when a session bus exists but the
+  environment can't run WebKit's bubblewrap sandbox, for example without
+  user namespaces. It is an environment limitation, not a gomail bug, and
+  gomail doesn't change WebKit's sandbox. For local testing, start it with
+  `GTK_A11Y=none WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 gomail`. Never
+  set these variables for real use.
+- **"gomail is already running"** with no window: another process holds
+  `<data dir>/instance.lock`. Quit that process, or kill it if it hangs; the
+  lock is released when it exits.
+- **Single-instance warning in the log** ("single-instance mode is
+  unavailable"): there is no D-Bus session bus. gomail still works, but a
+  second launch shows the "already running" dialog instead of focusing the
+  open window.
 
 ## Known limitations
 

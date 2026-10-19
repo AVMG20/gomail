@@ -85,3 +85,17 @@ func TestLogRotation(t *testing.T) {
 		t.Fatalf("log too big: %d", fi.Size())
 	}
 }
+
+func TestEmailBackgroundSetting(t *testing.T) {
+	if DefaultSettings().EmailBackground != "auto" {
+		t.Fatal("default")
+	}
+	for in, want := range map[string]string{"": "auto", "auto": "auto", "light": "light", "dark": "auto"} {
+		s := DefaultSettings()
+		s.EmailBackground = in
+		Normalize(&s)
+		if s.EmailBackground != want {
+			t.Errorf("%q -> %q, want %q", in, s.EmailBackground, want)
+		}
+	}
+}

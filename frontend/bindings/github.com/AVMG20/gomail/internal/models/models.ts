@@ -682,6 +682,13 @@ export interface Settings {
     "readingPane": string;
 
     /**
+     * EmailBackground is "auto" (follow the theme, dark bodies in dark mode
+     * where the email allows it) or "light" (always render emails on white).
+     * default "auto"
+     */
+    "emailBackground": string;
+
+    /**
      * UI zoom factor (default 1.0, 0.5..2)
      */
     "zoom": number;

@@ -243,12 +243,15 @@ type Settings struct {
 	UndoSendSeconds     int     `json:"undoSendSeconds"`  // send delay handled by the UI (default 5, 0..30)
 	MarkReadMode        string  `json:"markReadMode"`     // "immediate" | "delay" | "manual" (default "immediate")
 	ReadingPane         string  `json:"readingPane"`      // "right" | "off" (default "right")
-	Zoom                float64 `json:"zoom"`             // UI zoom factor (default 1.0, 0.5..2)
-	SyncDepthDays       int     `json:"syncDepthDays"`    // background backfill depth: 30, 90 (default), 365 or 0 = all mail
-	BackfillPaused      bool    `json:"backfillPaused"`   // pause the background backfill
-	AIDailyBudgetUSD    float64 `json:"aiDailyBudgetUsd"` // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
-	LaunchAtLogin       bool    `json:"launchAtLogin"`    // start gomail at login, minimized to the tray when enabled (default false)
-	CheckUpdates        bool    `json:"checkUpdates"`     // check GitHub releases once a day (default true)
+	// EmailBackground is "auto" (follow the theme, dark bodies in dark mode
+	// where the email allows it) or "light" (always render emails on white).
+	EmailBackground  string  `json:"emailBackground"`  // default "auto"
+	Zoom             float64 `json:"zoom"`             // UI zoom factor (default 1.0, 0.5..2)
+	SyncDepthDays    int     `json:"syncDepthDays"`    // background backfill depth: 30, 90 (default), 365 or 0 = all mail
+	BackfillPaused   bool    `json:"backfillPaused"`   // pause the background backfill
+	AIDailyBudgetUSD float64 `json:"aiDailyBudgetUsd"` // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
+	LaunchAtLogin    bool    `json:"launchAtLogin"`    // start gomail at login, minimized to the tray when enabled (default false)
+	CheckUpdates     bool    `json:"checkUpdates"`     // check GitHub releases once a day (default true)
 
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`

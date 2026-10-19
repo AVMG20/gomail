@@ -73,6 +73,7 @@ func DefaultSettings() models.Settings {
 		UndoSendSeconds:          5,
 		MarkReadMode:             "immediate",
 		ReadingPane:              "right",
+		EmailBackground:          "auto",
 		Zoom:                     1,
 		SyncDepthDays:            90,
 		AIDailyBudgetUSD:         1,
@@ -110,6 +111,9 @@ func Normalize(s *models.Settings) {
 	case "immediate", "delay", "manual":
 	default:
 		s.MarkReadMode = "immediate"
+	}
+	if s.EmailBackground != "light" {
+		s.EmailBackground = "auto"
 	}
 	switch s.ReadingPane {
 	case "right", "off":

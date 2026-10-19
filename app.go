@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"runtime"
 	"sync"
@@ -42,7 +43,9 @@ type MailService struct {
 	autostartOn    *bool               // last applied launch-at-login state
 	trayVisible    bool                // Settings.showInTray
 	closeToTray    bool                // Settings.closeToTray
-	logCloser      interface{ Close() error }
+	logCloser      io.Closer
+	dataDir        string // set by main (preset); "" = resolve in ServiceStartup
+	logFile        string
 
 	hooks *testHooks // nil in the app
 }
@@ -63,16 +66,27 @@ func (m *MailService) attach(app *application.App, w *application.WebviewWindow)
 	m.app, m.window = app, w
 }
 
+// preset hands over the data directory and log file main already set up.
+func (m *MailService) preset(st startup) {
+	m.dataDir, m.logFile, m.logCloser = st.dir, st.logFile, st.logCloser
+}
+
 // ServiceStartup initialises the backend (Wails lifecycle hook).
 func (m *MailService) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	dir, err := config.DataDir()
-	if err != nil {
-		m.initErr = err
-		return nil // let the UI show the error instead of failing to start
+	if m.initErr != nil {
+		return nil // e.g. another instance holds the data directory
 	}
-	logFile, closer, err := config.SetupLogging(dir)
-	if err == nil {
-		m.logCloser = closer
+	dir, logFile := m.dataDir, m.logFile
+	if dir == "" { // not started through main (tests)
+		var err error
+		if dir, err = config.DataDir(); err != nil {
+			m.initErr = err
+			return nil // let the UI show the error instead of failing to start
+		}
+		var closer io.Closer
+		if logFile, closer, err = config.SetupLogging(dir); err == nil {
+			m.logCloser = closer
+		}
 	}
 	m.info = models.AppInfo{Version: version, DataDir: dir, LogFile: logFile, Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Demo: config.DemoMode()}

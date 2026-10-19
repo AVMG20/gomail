@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,26 +81,27 @@ func instanceID() string {
 }
 
 func main() {
+	st, err := prepareStartup()
+	if err != nil {
+		fatalStartup("cannot create the data directory", err)
+	}
 	webviewDir := webviewStorage()
 	notifier := notifications.New()
 	svc := NewMailService(notifier)
+	svc.preset(st)
 	args := os.Args[1:]
 	svc.startMinimized = slices.Contains(args, minimizedArg)
 	svc.handleArgs(args)
 
-	var single *application.SingleInstanceOptions
-	if sessionBusAvailable() {
-		single = &application.SingleInstanceOptions{
-			UniqueID: instanceID(),
-			OnSecondInstanceLaunch: func(d application.SecondInstanceData) {
-				svc.showWindow()
-				svc.handleArgs(d.Args)
-			},
-		}
-	} else {
-		fmt.Fprintln(os.Stderr, "gomail: no D-Bus session bus; single-instance mode is off")
-	}
+	id := instanceID()
+	single := singleInstanceOptions(singleInstanceUsable(id), id, func(d application.SecondInstanceData) {
+		svc.showWindow()
+		svc.handleArgs(d.Args)
+	})
 
+	// A second instance hands its arguments to the first and exits inside
+	// application.New; anything past it is the only instance (or runs
+	// without single-instance support).
 	app := application.New(application.Options{
 		Name:        "gomail",
 		Description: "A fast desktop mail client for Gmail and Outlook with AI labels",
@@ -111,7 +112,19 @@ func main() {
 		Mac:            application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 		Windows:        application.WindowsOptions{WebviewUserDataPath: webviewDir},
 		SingleInstance: single,
+		ErrorHandler:   logWailsError,
 	})
+
+	lock, running := claimInstance(st.dir)
+	if running {
+		svc.initErr = errAlreadyRunning // ServiceStartup leaves the database alone
+		showAlreadyRunning(app)
+		if err := app.Run(); err != nil {
+			slog.Error("gomail exited with an error", "err", err)
+		}
+		os.Exit(1)
+	}
+	defer lock.Release()
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "gomail",
@@ -160,7 +173,7 @@ func main() {
 	notifier.OnNotificationResponse(svc.onNotification)
 
 	if err := app.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "gomail:", err)
-		os.Exit(1)
+		lock.Release()
+		fatalStartup("gomail stopped with an error", err)
 	}
 }
