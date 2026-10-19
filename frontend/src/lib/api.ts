@@ -116,6 +116,9 @@ function normSettings(s: Settings): Settings {
     radius: typeof s.radius === 'number' && s.radius > 0 ? s.radius : s.radius === 0 ? 0 : DEFAULT_RADIUS,
     classifierModel: s.classifierModel || 'typesafe/jev-1.13',
     classifyThreshold: typeof s.classifyThreshold === 'number' && s.classifyThreshold > 0 ? s.classifyThreshold : 0.5,
+    classifyRemoveThreshold: typeof s.classifyRemoveThreshold === 'number' ? s.classifyRemoveThreshold : 0.15,
+    aiCorrectsProviderLabels: s.aiCorrectsProviderLabels ?? true,
+    importProviderLabels: s.importProviderLabels ?? true,
     grammarSystemPrompt: s.grammarSystemPrompt ?? '',
     classifyInstructions: s.classifyInstructions ?? '',
     microsoftTenant: s.microsoftTenant || 'common',
@@ -188,8 +191,14 @@ export const api = {
   // ---- labels & AI
   testOpenRouter: () => call<void>('TestOpenRouter'),
   listAIModels: async () => (await call<AIModel[] | null>('ListAIModels')) ?? [],
-  classifyMessages: async (ids: string[]) =>
-    ((await call<ClassificationResult[] | null>('ClassifyMessages', ids)) ?? []).map((r) => ({ ...r, label: r.label ?? r.category ?? '' })),
+  classifyMessages: async (ids: string[]): Promise<ClassificationResult[]> =>
+    ((await call<ClassificationResult[] | null>('ClassifyMessages', ids)) ?? []).map((r) => {
+      // Tolerate the older {label, confidence} shape.
+      const legacy = r as unknown as { label?: string; confidence?: number }
+      const added = r.added ?? (legacy.label ? [legacy.label] : [])
+      const scores = r.scores ?? (legacy.label ? { [legacy.label]: legacy.confidence ?? 0 } : {})
+      return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0 }
+    }),
   addLabel: (ids: string[], labelId: string) => call<void>('AddLabel', ids, labelId),
   removeLabel: (ids: string[], labelId: string) => call<void>('RemoveLabel', ids, labelId),
   getLabelCounts: async (accountId: string) => (await call<LabelCount[] | null>('GetLabelCounts', accountId)) ?? [],

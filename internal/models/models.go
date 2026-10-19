@@ -75,7 +75,7 @@ type MessageSummary struct {
 // MessageLabel is one label assignment on a message.
 type MessageLabel struct {
 	LabelID    string  `json:"labelId"`
-	Source     string  `json:"source"`     // "ai" | "manual"
+	Source     string  `json:"source"`     // "manual" | "ai" | "provider" (Gmail label / Outlook category) | "system" (Junk)
 	Confidence float64 `json:"confidence"` // classifier confidence (1 for manual)
 }
 
@@ -169,29 +169,39 @@ type ComposeRequest struct {
 type Label struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
-	Description string `json:"description"` // guidance passed to the model
+	Description string `json:"description"` // guidance passed to the classifier
 	Color       string `json:"color"`
+	// Source is "user" (created in gomail), "provider" (imported from Gmail
+	// labels / Outlook categories) or "system" (built-in, e.g. "junk").
+	Source string `json:"source"`
 }
 
 type Settings struct {
-	Theme                string  `json:"theme"`   // "system" | "light" | "dark"
-	Density              string  `json:"density"` // "comfortable" | "compact"
-	SyncIntervalMinutes  int     `json:"syncIntervalMinutes"`
-	ShowRemoteImages     bool    `json:"showRemoteImages"`
-	GoogleClientID       string  `json:"googleClientId"`
-	GoogleClientSecret   string  `json:"googleClientSecret"`
-	MicrosoftClientID    string  `json:"microsoftClientId"`
-	MicrosoftTenant      string  `json:"microsoftTenant"`   // default "common"
-	OpenRouterKeySet     bool    `json:"openRouterKeySet"`  // read-only; the key itself never leaves the backend
-	OpenRouterModel      string  `json:"openRouterModel"`   // chat model (grammar, summaries, drafts)
-	ClassifierModel      string  `json:"classifierModel"`   // OpenRouter Decisions model, default "typesafe/jev-1.13"
-	ClassifyThreshold    float64 `json:"classifyThreshold"` // 0..1; below this confidence a message stays unlabeled
-	AutoClassify         bool    `json:"autoClassify"`
-	Labels               []Label `json:"labels"`
-	GrammarSystemPrompt  string  `json:"grammarSystemPrompt"`  // "" = built-in default (see GetDefaultPrompts)
-	ClassifyInstructions string  `json:"classifyInstructions"` // Jev "label" question instructions; "" = default
-	PrimaryColor         string  `json:"primaryColor"`         // hex accent color, e.g. "#2563eb"
-	Radius               float64 `json:"radius"`               // UI corner radius in rem
+	Theme               string  `json:"theme"`   // "system" | "light" | "dark"
+	Density             string  `json:"density"` // "comfortable" | "compact"
+	SyncIntervalMinutes int     `json:"syncIntervalMinutes"`
+	ShowRemoteImages    bool    `json:"showRemoteImages"`
+	PrimaryColor        string  `json:"primaryColor"` // hex accent color, e.g. "#2563eb"
+	Radius              float64 `json:"radius"`       // UI corner radius in rem (default 0.5)
+
+	GoogleClientID     string `json:"googleClientId"`
+	GoogleClientSecret string `json:"googleClientSecret"`
+	MicrosoftClientID  string `json:"microsoftClientId"`
+	MicrosoftTenant    string `json:"microsoftTenant"` // default "common"
+
+	OpenRouterKeySet bool   `json:"openRouterKeySet"` // read-only; the key itself never leaves the backend
+	OpenRouterModel  string `json:"openRouterModel"`  // chat model (grammar, summaries, drafts)
+	ClassifierModel  string `json:"classifierModel"`  // OpenRouter Decisions model, default "typesafe/jev-1.13"
+
+	// Labels and AI labeling.
+	Labels                   []Label `json:"labels"`
+	ImportProviderLabels     bool    `json:"importProviderLabels"`     // show Gmail labels / Outlook categories as labels (default true)
+	AutoClassify             bool    `json:"autoClassify"`             // AI-label new incoming mail
+	ClassifyThreshold        float64 `json:"classifyThreshold"`        // AI adds a label when P(yes) >= this (default 0.5)
+	ClassifyRemoveThreshold  float64 `json:"classifyRemoveThreshold"`  // AI removes provider/Junk labels when P(yes) < this (default 0.15)
+	AICorrectsProviderLabels bool    `json:"aiCorrectsProviderLabels"` // allow those removals (default true)
+	ClassifyInstructions     string  `json:"classifyInstructions"`     // per-label question template; "" = default. "{label}" is replaced by the label name
+	GrammarSystemPrompt      string  `json:"grammarSystemPrompt"`      // "" = built-in default (see GetDefaultPrompts)
 }
 
 // ClassifyJob identifies a background AI labeling job.
@@ -240,11 +250,15 @@ type AIModel struct {
 	Kind            string  `json:"kind"`            // "chat" | "decision" (Jev, Decisions API)
 }
 
+// ClassificationResult is the outcome of labeling one message with the AI
+// classifier: which labels were added/removed and the P(yes) per label id.
 type ClassificationResult struct {
-	MessageID  string  `json:"messageId"`
-	Label      string  `json:"label"` // assigned label id, "" when none applied (or below threshold)
-	Confidence float64 `json:"confidence"`
-	Reason     string  `json:"reason"`
+	MessageID string             `json:"messageId"`
+	Added     []string           `json:"added"`
+	Removed   []string           `json:"removed"`
+	Scores    map[string]float64 `json:"scores"`
+	Cost      float64            `json:"cost"`  // USD
+	Error     string             `json:"error"` // per-message failure, "" on success
 }
 
 // Event names emitted to the frontend via the Wails runtime.

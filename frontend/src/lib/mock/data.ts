@@ -20,6 +20,12 @@ export const SEED_LABELS: Label[] = [
   { id: 'updates', name: 'Notifications', description: 'Automated notifications from apps and services (GitHub, calendars, security alerts).', color: '#64748b' },
 ]
 
+export const PROVIDER_LABELS: Label[] = [
+  { id: 'gmail-junk', name: 'Junk', description: 'Built-in Gmail spam label', color: '#a1a1aa', source: 'system', provider: 'gmail', accountId: 'acc_personal' },
+  { id: 'gmail-receipts', name: 'Receipts', description: 'Gmail label', color: '#10b981', source: 'provider', provider: 'gmail', accountId: 'acc_personal' },
+  { id: 'outlook-blue', name: 'Blue category', description: 'Outlook category', color: '#0ea5e9', source: 'provider', provider: 'outlook', accountId: 'acc_work' },
+]
+
 export const SEED_SETTINGS: Settings = {
   theme: 'system',
   density: 'comfortable',
@@ -33,9 +39,12 @@ export const SEED_SETTINGS: Settings = {
   openRouterModel: 'openai/gpt-4o-mini',
   classifierModel: 'typesafe/jev-1.13',
   classifyThreshold: 0.5,
+  classifyRemoveThreshold: 0.15,
+  aiCorrectsProviderLabels: true,
   classifyInstructions: DEFAULT_CLASSIFY_INSTRUCTIONS,
   autoClassify: true,
-  labels: SEED_LABELS,
+  labels: SEED_LABELS.map((l) => ({ ...l, source: 'user' })),
+  importProviderLabels: true,
   primaryColor: '#2563eb',
   radius: 0.625,
   grammarSystemPrompt: DEFAULT_GRAMMAR_PROMPT,
@@ -411,6 +420,14 @@ function stripHtml(html: string): string {
   return html.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/\s+/g, ' ').trim()
 }
 
+function providerLabelsFor(t: Tpl, folder: string): string[] {
+  const out: string[] = []
+  if (folder === 'spam' && t.acc === 'acc_personal') out.push('gmail-junk')
+  if (folder === 'label:receipts') out.push('gmail-receipts')
+  if (t.acc === 'acc_work' && (t.from.email.includes('daniel@') || t.from.email.includes('ines@'))) out.push('outlook-blue')
+  return out
+}
+
 let seq = 0
 export function buildMessage(t: Tpl, date: number, threadId?: string, overrides: Partial<Message> = {}): Message {
   seq += 1
@@ -424,8 +441,9 @@ export function buildMessage(t: Tpl, date: number, threadId?: string, overrides:
     id, accountId: t.acc, remoteId: id.toUpperCase(), threadId: threadId ?? `thr_${id}`, folderIds,
     from: t.from, to: t.to ?? [me[t.acc]], subject: t.subject, snippet: snippetOf(text), date: new Date(date).toISOString(),
     unread: !t.read, starred: !!t.starred, hasAttachments: atts.length > 0,
-    labels: [...(t.cat ? [t.cat] : []), ...(t.more ?? [])],
-    labelDetails: [...(t.cat ? [t.cat] : []), ...(t.more ?? [])].map((labelId, i) =>
+    labels: [...(t.cat ? [t.cat] : []), ...(t.more ?? []), ...providerLabelsFor(t, folder)],
+    labelDetails: [...(t.cat ? [t.cat] : []), ...(t.more ?? []), ...providerLabelsFor(t, folder)].map((labelId, i) =>
+      labelId.startsWith('gmail-') || labelId.startsWith('outlook-') ? { labelId, source: 'provider', confidence: 1 } :
       hash(id + labelId) % 3 !== 0
         ? { labelId, source: 'ai', confidence: Math.round((0.62 + (hash(id + 'c' + i) % 37) / 100) * 100) / 100 }
         : { labelId, source: 'manual', confidence: 1 }),

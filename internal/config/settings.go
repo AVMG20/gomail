@@ -18,21 +18,39 @@ const (
 	DefaultChatModel         = "openai/gpt-4o-mini"
 	DefaultClassifierModel   = "typesafe/jev-1.13"
 	DefaultClassifyThreshold = 0.5
+	DefaultRemoveThreshold   = 0.15
 	DefaultPrimaryColor      = "#2563eb"
 	DefaultRadius            = 0.5
 )
 
-// DefaultCategories are seeded on first run.
-func DefaultCategories() []models.Category {
-	return []models.Category{
-		{ID: "important", Name: "Important", Color: "#ef4444", Description: "Time-sensitive or high-priority mail that needs the user's attention or action soon: requests from real people, deadlines, security alerts, appointments."},
-		{ID: "personal", Name: "Personal", Color: "#ec4899", Description: "Personal conversations with friends and family; not work, not automated."},
-		{ID: "work", Name: "Work", Color: "#3b82f6", Description: "Work-related conversations with colleagues, clients or partners, meetings, projects, documents to review."},
-		{ID: "newsletters", Name: "Newsletters", Color: "#8b5cf6", Description: "Editorial newsletters, digests, blogs and publications the user subscribed to."},
-		{ID: "promotions", Name: "Promotions", Color: "#f59e0b", Description: "Marketing, sales, deals, discounts, product announcements and advertising."},
-		{ID: "social", Name: "Social", Color: "#06b6d4", Description: "Notifications from social networks and community sites (LinkedIn, Facebook, X, Discord, forums)."},
-		{ID: "notifications", Name: "Notifications", Color: "#64748b", Description: "Automated notifications from apps and services: shipping updates, account notices, CI/build results, calendar notices."},
-		{ID: "finance", Name: "Finance", Color: "#10b981", Description: "Receipts, invoices, bills, bank and payment notices, statements, taxes."},
+// JunkLabelID is the built-in label given to mail in Spam/Junk folders.
+const JunkLabelID = "junk"
+
+// Label sources.
+const (
+	LabelSourceUser     = "user"
+	LabelSourceProvider = "provider"
+	LabelSourceSystem   = "system"
+)
+
+// JunkLabel is the built-in system label for mail in Spam/Junk.
+func JunkLabel() models.Label {
+	return models.Label{ID: JunkLabelID, Name: "Junk", Color: "#a16207", Source: LabelSourceSystem,
+		Description: "Unsolicited bulk email, scams, phishing attempts or other spam."}
+}
+
+// DefaultLabels are seeded on first run.
+func DefaultLabels() []models.Label {
+	return []models.Label{
+		{Source: LabelSourceUser, ID: "important", Name: "Important", Color: "#ef4444", Description: "Time-sensitive or high-priority mail that needs the user's attention or action soon: requests from real people, deadlines, security alerts, appointments."},
+		{Source: LabelSourceUser, ID: "personal", Name: "Personal", Color: "#ec4899", Description: "Personal conversations with friends and family; not work, not automated."},
+		{Source: LabelSourceUser, ID: "work", Name: "Work", Color: "#3b82f6", Description: "Work-related conversations with colleagues, clients or partners, meetings, projects, documents to review."},
+		{Source: LabelSourceUser, ID: "newsletters", Name: "Newsletters", Color: "#8b5cf6", Description: "Editorial newsletters, digests, blogs and publications the user subscribed to."},
+		{Source: LabelSourceUser, ID: "promotions", Name: "Promotions", Color: "#f59e0b", Description: "Marketing, sales, deals, discounts, product announcements and advertising."},
+		{Source: LabelSourceUser, ID: "social", Name: "Social", Color: "#06b6d4", Description: "Notifications from social networks and community sites (LinkedIn, Facebook, X, Discord, forums)."},
+		{Source: LabelSourceUser, ID: "notifications", Name: "Notifications", Color: "#64748b", Description: "Automated notifications from apps and services: shipping updates, account notices, CI/build results, calendar notices."},
+		{Source: LabelSourceUser, ID: "finance", Name: "Finance", Color: "#10b981", Description: "Receipts, invoices, bills, bank and payment notices, statements, taxes."},
+		JunkLabel(),
 	}
 }
 
@@ -46,9 +64,13 @@ func DefaultSettings() models.Settings {
 		OpenRouterModel:     DefaultChatModel,
 		ClassifierModel:     DefaultClassifierModel,
 		ClassifyThreshold:   DefaultClassifyThreshold,
-		Categories:          DefaultCategories(),
-		PrimaryColor:        DefaultPrimaryColor,
-		Radius:              DefaultRadius,
+
+		ClassifyRemoveThreshold:  DefaultRemoveThreshold,
+		AICorrectsProviderLabels: true,
+		ImportProviderLabels:     true,
+		Labels:                   DefaultLabels(),
+		PrimaryColor:             DefaultPrimaryColor,
+		Radius:                   DefaultRadius,
 	}
 }
 
@@ -92,8 +114,11 @@ func Normalize(s *models.Settings) {
 	if s.ClassifierModel == "" {
 		s.ClassifierModel = DefaultClassifierModel
 	}
-	if s.ClassifyThreshold < 0 || s.ClassifyThreshold > 1 {
+	if s.ClassifyThreshold <= 0 || s.ClassifyThreshold > 1 {
 		s.ClassifyThreshold = DefaultClassifyThreshold
+	}
+	if s.ClassifyRemoveThreshold < 0 || s.ClassifyRemoveThreshold >= s.ClassifyThreshold {
+		s.ClassifyRemoveThreshold = min(DefaultRemoveThreshold, s.ClassifyThreshold/2)
 	}
 	s.GrammarSystemPrompt = strings.TrimSpace(s.GrammarSystemPrompt)
 	s.ClassifyInstructions = strings.TrimSpace(s.ClassifyInstructions)
@@ -104,17 +129,42 @@ func Normalize(s *models.Settings) {
 	if s.Radius < 0 || s.Radius > 2 {
 		s.Radius = DefaultRadius
 	}
-	s.Categories = normalizeCategories(s.Categories)
+	s.Labels = NormalizeLabels(s.Labels)
 }
 
-func normalizeCategories(in []models.Category) []models.Category {
-	out := make([]models.Category, 0, len(in))
-	seen := map[string]bool{"none": true} // "none" is reserved by the classifier
+// NormalizeLabels validates label definitions: unique slug ids, unique
+// names (case-insensitive), valid colors and sources, and makes sure the
+// built-in Junk label exists.
+func NormalizeLabels(in []models.Label) []models.Label {
+	out := make([]models.Label, 0, len(in)+1)
+	seen := map[string]bool{}
+	names := map[string]bool{}
+	hasJunk := false
 	for i, c := range in {
 		c.Name = strings.TrimSpace(c.Name)
 		c.Description = strings.TrimSpace(c.Description)
-		if c.Name == "" {
+		if c.Name == "" || names[strings.ToLower(c.Name)] {
 			continue
+		}
+		if c.ID == JunkLabelID {
+			j := JunkLabel()
+			if c.Description != "" {
+				j.Description = c.Description
+			}
+			if IsHexColor(c.Color) {
+				j.Color = c.Color
+			}
+			j.Name = c.Name
+			c = j
+			hasJunk = true
+		}
+		switch c.Source {
+		case LabelSourceProvider, LabelSourceSystem:
+		default:
+			c.Source = LabelSourceUser
+		}
+		if c.Source == LabelSourceSystem && c.ID != JunkLabelID {
+			c.Source = LabelSourceUser
 		}
 		id := Slug(c.ID)
 		if id == "" {
@@ -129,11 +179,15 @@ func normalizeCategories(in []models.Category) []models.Category {
 			n++
 		}
 		seen[id] = true
+		names[strings.ToLower(c.Name)] = true
 		c.ID = id
 		if !IsHexColor(c.Color) {
 			c.Color = categoryPalette[i%len(categoryPalette)]
 		}
 		out = append(out, c)
+	}
+	if !hasJunk && !seen[JunkLabelID] {
+		out = append(out, JunkLabel())
 	}
 	return out
 }

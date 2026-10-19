@@ -133,11 +133,18 @@ export interface ComposeRequest {
   attachments: OutgoingAttachment[]
 }
 
+export type LabelSource = 'user' | 'provider' | 'system'
+
 export interface Label {
   id: string
   name: string
   description: string
   color: string
+  /** "user" labels are fully editable; provider/system ones come from Gmail/Outlook. */
+  source?: LabelSource | string
+  /** Provider the label was imported from ("gmail" | "outlook"), when source != user. */
+  provider?: string
+  accountId?: string
 }
 
 export type ThemeMode = 'system' | 'light' | 'dark'
@@ -159,9 +166,14 @@ export interface Settings {
   classifierModel: string
   /** 0..1; labels below this confidence are left unassigned. */
   classifyThreshold: number
+  /** 0..1; imported labels scoring below this are removed (when aiCorrectsProviderLabels). */
+  classifyRemoveThreshold: number
+  aiCorrectsProviderLabels: boolean
   classifyInstructions: string
   autoClassify: boolean
   labels: Label[]
+  /** Import Gmail labels / Outlook categories as labels. */
+  importProviderLabels: boolean
   primaryColor: string
   /** rem */
   radius: number
@@ -179,12 +191,11 @@ export interface AIModel {
 
 export interface ClassificationResult {
   messageId: string
-  /** Assigned label id ("" or "none" when nothing matched). Older backends call it `category`. */
-  label?: string
-  category?: string
-  labels?: string[]
-  confidence: number
-  reason: string
+  added: string[]
+  removed: string[]
+  /** AI score per label id (0..1). */
+  scores: Record<string, number>
+  cost: number
 }
 
 export interface LabelCount {
@@ -221,6 +232,8 @@ export interface ClassifyJobProgress {
   total: number
   labeled: number
   skipped: number
+  added?: number
+  removed?: number
   cost: number
   finished?: boolean
   error?: string

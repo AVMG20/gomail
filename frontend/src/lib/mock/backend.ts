@@ -7,7 +7,7 @@ import type {
   SearchQuery, SearchResult, Settings,
 } from '../types'
 import {
-  DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, SEED_ACCOUNTS, SEED_SETTINGS,
+  DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, PROVIDER_LABELS, SEED_ACCOUNTS, SEED_SETTINGS,
   asTemplateAccount, buildMessage, buildSeedMessages, buildWelcome, foldersFor,
 } from './data'
 
@@ -85,6 +85,12 @@ function parseSearch(q: string): ParsedSearch {
   return out
 }
 
+function hash(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0
+  return h
+}
+
 function words(s: string): string[] {
   return s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
 }
@@ -94,6 +100,7 @@ class MockBackend {
   private folders = new Map<string, Folder[]>()
   private messages = new Map<string, Message>()
   private settings: Settings = clone(SEED_SETTINGS)
+  private providerLabels = clone(PROVIDER_LABELS)
   private listeners = new Map<string, Set<Listener>>()
   private addAccountCancel: (() => void) | null = null
   private jobs = new Map<string, { cancelled: boolean }>()
@@ -145,12 +152,25 @@ class MockBackend {
 
   private summary(m: Message): MessageSummary {
     const { cc: _cc, bcc: _bcc, replyTo: _r, bodyHtml: _h, bodyText: _t, attachments: _a, messageId: _mid, inReplyTo: _irt, references: _ref, hasRemoteContent: _hrc, ...s } = m
-    return clone(s)
+    return this.visibleLabels(clone(s))
+  }
+
+  /** Hide imported provider labels when the import setting is off. */
+  private visibleLabels<T extends MessageSummary>(m: T): T {
+    if (this.settings.importProviderLabels) return m
+    const hidden = new Set(this.providerLabels.map((l) => l.id))
+    m.labels = m.labels.filter((l) => !hidden.has(l))
+    m.labelDetails = (m.labelDetails ?? []).filter((d) => !hidden.has(d.labelId))
+    return m
+  }
+
+  private allLabels() {
+    return [...this.settings.labels, ...(this.settings.importProviderLabels ? this.providerLabels : [])]
   }
 
   private labelNameToId(name: string): string | undefined {
     const n = name.toLowerCase()
-    return this.settings.labels.find((l) => l.id === n || l.name.toLowerCase() === n || l.name.toLowerCase().replace(/\s+/g, '-') === n)?.id
+    return this.allLabels().find((l) => l.id === n || l.name.toLowerCase() === n || l.name.toLowerCase().replace(/\s+/g, '-') === n)?.id
   }
 
   private matchSearch(m: Message, p: ParsedSearch): { ok: boolean; score: number; matchedIn: string; fuzzy: boolean } {
@@ -339,7 +359,7 @@ class MockBackend {
     await latency(50, 150)
     const m = this.messages.get(id)
     if (!m) throw new Error('message not found')
-    return clone(m)
+    return this.visibleLabels(clone(m))
   }
 
   async GetThread(id: string): Promise<Message[]> {
@@ -348,7 +368,7 @@ class MockBackend {
     if (!m) throw new Error('message not found')
     const thread = [...this.messages.values()].filter((x) => x.threadId === m.threadId && x.accountId === m.accountId)
     thread.sort((a, b) => (a.date < b.date ? -1 : 1))
-    return clone(thread)
+    return clone(thread).map((x) => this.visibleLabels(x))
   }
 
   private mutate(ids: string[], fn: (m: Message) => void) {
@@ -450,14 +470,22 @@ class MockBackend {
   // ---------------------------------------------------------------- settings
   async GetSettings(): Promise<Settings> {
     await latency(20, 60)
-    return clone(this.settings)
+    return clone({ ...this.settings, labels: this.allLabels() })
   }
 
   async SaveSettings(s: Settings): Promise<void> {
     await latency(30, 90)
     const keySet = this.settings.openRouterKeySet
-    this.settings = { ...clone(s), openRouterKeySet: keySet }
-    const valid = new Set(this.settings.labels.map((l) => l.id))
+    const incoming = clone(s)
+    // Provider/system labels can only change color.
+    for (const pl of this.providerLabels) {
+      const upd = incoming.labels.find((l) => l.id === pl.id)
+      if (upd) pl.color = upd.color
+    }
+    const userLabels = incoming.labels.filter((l) => !l.source || l.source === 'user').map((l) => ({ ...l, source: 'user' }))
+    this.settings = { ...incoming, labels: userLabels, openRouterKeySet: keySet }
+    if (incoming.importProviderLabels !== undefined) this.settings.importProviderLabels = incoming.importProviderLabels
+    const valid = new Set([...this.settings.labels, ...this.providerLabels].map((l) => l.id))
     for (const m of this.messages.values()) {
       if (m.labels.some((l) => !valid.has(l))) {
         m.labels = m.labels.filter((l) => valid.has(l))
@@ -505,25 +533,37 @@ class MockBackend {
       newsletters: ['newsletter', 'digest', 'weekly', 'unsubscribe', "what's new", 'issue'],
       social: ['saturday', 'dinner', 'love', 'photos', 'pizza', 'book', 'climbing'],
       updates: ['github', 'notification', 'alert', 'deployment', 'commented', 'reminder', 'assigned', 'linear'],
+      'gmail-junk': ['won', 'prize', 'claim', 'urgent', 'verify', 'password expires', 'lucky'],
+      'gmail-receipts': ['receipt', 'invoice', 'statement', 'paid', 'total'],
     }
-    const scores = this.settings.labels.map((l) => {
+    const s = this.settings
+    const candidates = [...s.labels, ...(s.importProviderLabels && s.aiCorrectsProviderLabels ? this.providerLabels : [])]
+    const scores: Record<string, number> = {}
+    for (const l of candidates) {
       const kw = [...(hints[l.id] ?? []), ...words(`${l.name} ${l.description}`).filter((w) => w.length > 4)]
-      return { id: l.id, s: kw.reduce((acc, k) => acc + (text.includes(k) ? 1 : 0), 0) + (m.labels.includes(l.id) ? 1.5 : 0) }
-    })
-    const total = scores.reduce((a, b) => a + Math.exp(b.s), Math.exp(0.6))
-    const ranked = scores.map((x) => ({ id: x.id, p: Math.exp(x.s) / total })).sort((a, b) => b.p - a.p)
-    const best = ranked[0]
-    const reason = ranked.slice(0, 3).map((r) => `${this.settings.labels.find((l) => l.id === r.id)?.name ?? r.id} ${Math.round(r.p * 100)}%`).join(' · ')
-    const confidence = best ? Math.min(0.99, Math.round(best.p * 100) / 100) : 0
-    const ok = best && confidence >= this.settings.classifyThreshold
-    return { messageId: m.id, label: ok ? best.id : '', confidence, reason }
+      const hitsN = kw.reduce((acc, k) => acc + (text.includes(k) ? 1 : 0), 0)
+      const x = hitsN * 1.4 - 2.2 + (hash(m.id + l.id) % 10) / 20
+      scores[l.id] = Math.round((1 / (1 + Math.exp(-x))) * 100) / 100
+    }
+    const details = m.labelDetails ?? []
+    const isManual = (id: string) => details.some((d) => d.labelId === id && d.source === 'manual')
+    const added = Object.entries(scores)
+      .filter(([id, p]) => p >= s.classifyThreshold && !m.labels.includes(id) && !this.providerLabels.some((pl) => pl.id === id))
+      .sort((x, y) => y[1] - x[1]).slice(0, 2).map(([id]) => id)
+    const removed = m.labels.filter((id) => scores[id] !== undefined && scores[id] < s.classifyRemoveThreshold && !isManual(id))
+    return { messageId: m.id, added, removed, scores, cost: 0.00009 + (hash(m.id) % 40) / 1_000_000 }
   }
 
   private applyResult(m: Message, r: ClassificationResult) {
-    if (!r.label) return
-    if (!m.labels.includes(r.label)) m.labels = [...m.labels, r.label]
-    const details: MessageLabel[] = (m.labelDetails ?? []).filter((d) => d.labelId !== r.label)
-    details.push({ labelId: r.label, source: 'ai', confidence: r.confidence })
+    let details: MessageLabel[] = m.labelDetails ?? []
+    for (const id of r.removed) {
+      m.labels = m.labels.filter((l) => l !== id)
+      details = details.filter((d) => d.labelId !== id)
+    }
+    for (const id of r.added) {
+      if (!m.labels.includes(id)) m.labels = [...m.labels, id]
+      details = [...details.filter((d) => d.labelId !== id), { labelId: id, source: 'ai', confidence: r.scores[id] ?? 0 }]
+    }
     m.labelDetails = details
   }
 
@@ -563,7 +603,7 @@ class MockBackend {
     const counts = new Map<string, LabelCount>()
     for (const m of this.messages.values()) {
       if (accountId && m.accountId !== accountId) continue
-      for (const l of m.labels) {
+      for (const l of this.visibleLabels({ ...m }).labels) {
         const c = counts.get(l) ?? { labelId: l, total: 0, unread: 0 }
         c.total++
         if (m.unread) c.unread++
@@ -621,22 +661,28 @@ class MockBackend {
       let done = 0
       let labeled = 0
       let skipped = 0
+      let added = 0
+      let removed = 0
       let cost = 0
       const step = Math.max(25, Math.min(180, 6000 / Math.max(1, targets.length)))
-      this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, cost })
+      this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, added, removed, cost })
       for (const m of targets) {
         if (job.cancelled) break
         await sleep(step)
         const r = this.classifyOne(m)
-        if (r.label) { this.applyResult(m, r); labeled++ } else skipped++
+        this.applyResult(m, r)
+        if (r.added.length || r.removed.length) labeled++
+        else skipped++
+        added += r.added.length
+        removed += r.removed.length
         done++
-        cost += 0.00009 + Math.random() * 0.00004
-        this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, cost })
+        cost += r.cost
+        this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, added, removed, cost })
         if (done % 5 === 0) this.changed()
       }
       this.jobs.delete(jobId)
       this.changed()
-      this.emit('classify:finished', { jobId, done, total: targets.length, labeled, skipped, cost, cancelled: job.cancelled, finished: true })
+      this.emit('classify:finished', { jobId, done, total: targets.length, labeled, skipped, added, removed, cost, cancelled: job.cancelled, finished: true })
     })()
     return jobId
   }
