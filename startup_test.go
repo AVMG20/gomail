@@ -36,6 +36,7 @@ func TestSingleInstanceFallback(t *testing.T) {
 	if running || first == nil {
 		t.Fatal("first instance could not claim the data directory")
 	}
+	t.Cleanup(first.Release) // Windows can't remove the dir while the file is open
 	if l, running := claimInstance(dir); !running || l != nil {
 		t.Fatal("second instance was not detected")
 	}

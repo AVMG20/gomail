@@ -59,7 +59,7 @@ func (c *Client) Chat(ctx context.Context, model, system, user string, temperatu
 			Cost             float64 `json:"cost"`
 		} `json:"usage"`
 	}
-	if err := api.JSON(ctx, http.MethodPost, "v1/chat/completions", req, &resp); err != nil {
+	if err := api.JSONRetry(ctx, http.MethodPost, "v1/chat/completions", req, &resp); err != nil {
 		return "", friendly(err)
 	}
 	c.report(Usage{Kind: "chat", Model: model, Cost: resp.Usage.Cost, InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens})

@@ -106,7 +106,7 @@ func (c *Client) batch(ctx context.Context, reqs []batchReq) (map[string]batchRe
 			var resp struct {
 				Responses []batchResp `json:"responses"`
 			}
-			if err := c.api.JSON(ctx, http.MethodPost, "$batch", map[string]any{"requests": chunk}, &resp); err != nil {
+			if err := c.api.JSONRetry(ctx, http.MethodPost, "$batch", map[string]any{"requests": chunk}, &resp); err != nil {
 				return nil, err
 			}
 			byID := map[string]batchReq{}

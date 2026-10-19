@@ -16,6 +16,7 @@ func TestAcquireIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(l.Release) // before TempDir removal: Windows can't delete open files
 	if _, err := Acquire(dir); !errors.Is(err, ErrLocked) {
 		t.Fatalf("second acquire: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestAcquireIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("after release: %v", err)
 	}
-	l2.Release()
+	t.Cleanup(l2.Release)
 	if _, err := Acquire(filepath.Join(dir, "missing", "dir")); err == nil || errors.Is(err, ErrLocked) {
 		t.Fatalf("unwritable dir: %v", err)
 	}
@@ -49,6 +50,7 @@ func TestLockAcrossProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(l.Release)
 	run := func() int {
 		cmd := exec.Command(os.Args[0], "-test.run=TestLockAcrossProcesses")
 		cmd.Env = append(os.Environ(), "GOMAIL_LOCK_CHILD="+dir)

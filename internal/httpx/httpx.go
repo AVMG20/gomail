@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -129,6 +130,25 @@ type Request struct {
 	Body        []byte
 	ContentType string
 	Headers     map[string]string
+	// Idempotent allows retrying a POST after failures where the server may
+	// already have acted on it (timeouts, 500/502/504). Other methods are
+	// treated as idempotent. A non-idempotent POST (sending mail, creating a
+	// draft) is only retried when it certainly wasn't processed: connection
+	// failures before the request was sent, 429 and 503.
+	Idempotent bool
+}
+
+func (r Request) idempotent() bool { return r.Idempotent || r.Method != http.MethodPost }
+
+// notSent reports transport errors that happened before the request could
+// reach the server (dialing, DNS, TLS handshake).
+func notSent(err error) bool {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "dial" {
+		return true
+	}
+	var dns *net.DNSError
+	return errors.As(err, &dns)
 }
 
 // Do performs the request with retries; the caller must close the body of
@@ -185,7 +205,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			if attempt < maxRetries {
+			if attempt < maxRetries && (r.idempotent() || notSent(err)) {
 				if serr := sleep(ctx, backoff(attempt, 0)); serr != nil {
 					return nil, serr
 				}
@@ -202,7 +222,8 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, error) {
 			c.Tokens.Invalidate()
 			continue
 		}
-		if (retryable(resp.StatusCode) || apiErr.Retryable()) && attempt < maxRetries {
+		safeToRetry := r.idempotent() || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || apiErr.Retryable()
+		if (retryable(resp.StatusCode) || apiErr.Retryable()) && safeToRetry && attempt < maxRetries {
 			d := backoff(attempt, apiErr.RetryAfter)
 			slog.Debug("retrying request", "service", c.service(), "status", resp.StatusCode, "wait", d)
 			if serr := sleep(ctx, d); serr != nil {
@@ -291,6 +312,16 @@ func readError(resp *http.Response, service string) *Error {
 // JSON performs a request with an optional JSON body and decodes a JSON
 // response into out (if non-nil).
 func (c *Client) JSON(ctx context.Context, method, path string, in, out any) error {
+	return c.doJSON(ctx, Request{Method: method, Path: path}, in, out)
+}
+
+// JSONRetry is JSON for a POST that is safe to repeat (batch modify,
+// read-only queries sent as POST).
+func (c *Client) JSONRetry(ctx context.Context, method, path string, in, out any) error {
+	return c.doJSON(ctx, Request{Method: method, Path: path, Idempotent: true}, in, out)
+}
+
+func (c *Client) doJSON(ctx context.Context, r Request, in, out any) error {
 	var body []byte
 	ct := ""
 	if in != nil {
@@ -300,7 +331,8 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) err
 		}
 		body, ct = b, "application/json"
 	}
-	resp, err := c.Do(ctx, Request{Method: method, Path: path, Body: body, ContentType: ct})
+	r.Body, r.ContentType = body, ct
+	resp, err := c.Do(ctx, r)
 	if err != nil {
 		return err
 	}

@@ -609,7 +609,7 @@ func (c *Client) batchModify(ctx context.Context, ids []string, add, remove []st
 		if len(remove) > 0 {
 			body["removeLabelIds"] = remove
 		}
-		if err := c.api.JSON(ctx, http.MethodPost, "messages/batchModify", body, nil); err != nil {
+		if err := c.api.JSONRetry(ctx, http.MethodPost, "messages/batchModify", body, nil); err != nil {
 			return err
 		}
 	}
@@ -634,7 +634,7 @@ func (c *Client) Move(ctx context.Context, ids []string, target mail.Folder) err
 	switch target.Kind {
 	case models.FolderTrash:
 		return provider.Parallel(ctx, workers, ids, func(ctx context.Context, id string) error {
-			return c.api.JSON(ctx, http.MethodPost, "messages/"+url.PathEscape(id)+"/trash", nil, nil)
+			return c.api.JSONRetry(ctx, http.MethodPost, "messages/"+url.PathEscape(id)+"/trash", nil, nil)
 		})
 	case models.FolderSpam:
 		return c.batchModify(ctx, ids, []string{"SPAM"}, []string{"INBOX", "TRASH"})

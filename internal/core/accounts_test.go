@@ -11,8 +11,10 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/AVMG20/gomail/internal/auth"
+	"github.com/AVMG20/gomail/internal/demo"
 	"github.com/AVMG20/gomail/internal/fakes"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/secrets"
 	"github.com/AVMG20/gomail/internal/update"
 )
@@ -279,4 +281,38 @@ func TestDamagedSettingsDoNotBlockStartup(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCloseFlushesCoalescedDraft: an autosave still waiting in the
+// coalescing window is written at shutdown instead of being lost.
+func TestCloseFlushesCoalescedDraft(t *testing.T) {
+	old := draftCoalesce
+	draftCoalesce = time.Hour
+	defer func() { draftCoalesce = old }()
+	e := newEnv(t, "")
+	s := e.s
+	req := models.ComposeRequest{AccountID: demo.GmailAccountID, Subject: "Draft v1", BodyHTML: "<p>one</p>"}
+	h, err := s.SaveDraft(req, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Subject = "Draft final"
+	if _, err := s.SaveDraft(req, h); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	dh, _ := parseDraftHandle(h)
+	res, err := e.demos[demo.GmailAccountID].Sync(context.Background(), provider.SyncRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range res.Upserts {
+		if m.RemoteID == dh.remoteID {
+			if m.Subject != "Draft final" {
+				t.Fatalf("draft subject %q", m.Subject)
+			}
+			return
+		}
+	}
+	t.Fatal("draft not found")
 }

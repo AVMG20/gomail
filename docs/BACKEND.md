@@ -351,6 +351,23 @@ so their `<style>` rules cannot affect the app.
 - Tokens and keys are never logged. Logs carry account ids, not
   addresses.
 - `OpenExternalURL` only opens http(s) and mailto.
+- `data:` URIs are only allowed for base64 images; links to `data:` and
+  other schemes are removed. CSS escapes are decoded before `<style>`
+  blocks are checked, inline styles containing escapes are dropped, and
+  `image-set()` counts as remote content.
+- One-click unsubscribe posts only to https URLs that resolve to public
+  addresses. Loopback, private, link-local and CGNAT ranges are refused at
+  dial time, so DNS rebinding doesn't get around the check. Redirects must
+  stay on https.
+- Outgoing header values can't contain CR or LF, so a crafted address or
+  Message-ID can't inject headers. mailto: links are capped at 256 KB and
+  100 recipients each.
+- Update links must point into `github.com/AVMG20/gomail/releases/`;
+  anything else is replaced by the releases page.
+- A POST that might already have been processed (timeout, 500/502/504) is
+  never repeated automatically, so mail can't be sent twice. Only
+  repeat-safe POSTs (Gmail batchModify/trash, Graph `$batch`, AI calls) are
+  retried.
 - The OAuth loopback server listens only on loopback: 127.0.0.1, plus ::1
   for Microsoft's `localhost` redirect. It shuts down as soon as the flow
   ends or times out.
@@ -565,6 +582,11 @@ Benchmarks on the reference box, a 4-vCPU Xeon:
 - **"gomail is already running"** with no window: another process holds
   `<data dir>/instance.lock`. Quit that process, or kill it if it hangs; the
   lock is released when it exits.
+- **Damaged settings**: fields that still decode are kept and the rest go
+  back to defaults; the original JSON is saved under the `settings.damaged`
+  key in the database. A damaged `secrets.key` is never replaced while
+  `secrets.enc` exists. gomail asks you to sign in again instead of
+  silently losing the stored tokens.
 - **Single-instance warning in the log** ("single-instance mode is
   unavailable"): there is no D-Bus session bus. gomail still works, but a
   second launch shows the "already running" dialog instead of focusing the

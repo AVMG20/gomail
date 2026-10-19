@@ -448,6 +448,8 @@ export const useMailStore = defineStore('mail', () => {
       // Advance to the next remaining message, like most mail apps.
       const idx = indexById.value.get(openId.value) ?? -1
       const after = list.slice(idx + 1).find((m) => !set.has(m.id)) ?? list.slice(0, idx).reverse().find((m) => !set.has(m.id))
+      // Through open() so the next message is marked read per Settings, like opening it by hand.
+      queueMicrotask(() => open(after?.id ?? null))
       openId.value = after?.id ?? null
     }
     messages.value = list.filter((m) => !set.has(m.id))

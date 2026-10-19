@@ -71,7 +71,7 @@ func (c *Client) Decide(ctx context.Context, req DecisionRequest) (*DecisionResp
 		return nil, err
 	}
 	var resp DecisionResponse
-	if err := api.JSON(ctx, http.MethodPost, "alpha/decisions", req, &resp); err != nil {
+	if err := api.JSONRetry(ctx, http.MethodPost, "alpha/decisions", req, &resp); err != nil {
 		return nil, friendly(err)
 	}
 	c.report(Usage{Kind: "decision", Model: req.Model, Cost: resp.Usage.Cost, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens})

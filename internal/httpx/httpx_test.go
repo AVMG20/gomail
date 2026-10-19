@@ -138,3 +138,31 @@ func TestErrorBodiesAreReadable(t *testing.T) {
 		}
 	}
 }
+
+// TestPostIsNotRepeatedAfterAmbiguousFailure: a POST that may have been
+// processed (500/502/504) is not sent again, so mail is never sent twice;
+// 429/503 and idempotent requests are retried.
+func TestPostIsNotRepeatedAfterAmbiguousFailure(t *testing.T) {
+	for _, c := range []struct {
+		method     string
+		status     int
+		idempotent bool
+		wantCalls  int
+	}{
+		{"POST", 500, false, 1}, {"POST", 502, false, 1}, {"POST", 504, false, 1},
+		{"POST", 503, false, 3}, {"POST", 429, false, 3},
+		{"POST", 500, true, 3}, {"GET", 500, false, 3}, {"PUT", 502, false, 3},
+	} {
+		var calls int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(c.status)
+		}))
+		cl := &Client{BaseURL: srv.URL, MaxRetries: 2, Sleep: func(context.Context, time.Duration) error { return nil }}
+		_, err := cl.Do(context.Background(), Request{Method: c.method, Path: "x", Idempotent: c.idempotent})
+		srv.Close()
+		if err == nil || calls != c.wantCalls {
+			t.Errorf("%s %d idempotent=%v: %d calls, want %d (%v)", c.method, c.status, c.idempotent, calls, c.wantCalls, err)
+		}
+	}
+}
