@@ -1,0 +1,204 @@
+// Frontend mirror of internal/models/models.go. These are plain interfaces
+// (not the generated wailsjs classes) so the UI is decoupled from binding
+// regeneration; src/lib/api.ts is the only bridge to the generated code.
+
+export type Provider = 'gmail' | 'outlook'
+
+export type FolderKind =
+  | 'inbox'
+  | 'starred'
+  | 'sent'
+  | 'drafts'
+  | 'archive'
+  | 'spam'
+  | 'trash'
+  | 'custom'
+
+export interface Address {
+  name: string
+  email: string
+}
+
+export interface Account {
+  id: string
+  provider: Provider | string
+  email: string
+  displayName: string
+  color: string
+  createdAt: string
+  lastSyncAt: string | null
+  syncError: string
+  syncing: boolean
+  unreadCount: number
+}
+
+export interface Folder {
+  id: string
+  accountId: string
+  remoteId: string
+  name: string
+  kind: FolderKind | string
+  unread: number
+  total: number
+}
+
+export interface MessageSummary {
+  id: string
+  accountId: string
+  remoteId: string
+  threadId: string
+  folderIds: string[]
+  from: Address
+  to: Address[]
+  subject: string
+  snippet: string
+  date: string
+  unread: boolean
+  starred: boolean
+  hasAttachments: boolean
+  category: string
+}
+
+export interface Attachment {
+  id: string
+  filename: string
+  mimeType: string
+  size: number
+  inline: boolean
+  contentId: string
+}
+
+export interface Message extends MessageSummary {
+  cc: Address[]
+  bcc: Address[]
+  replyTo: Address[]
+  bodyHtml: string
+  bodyText: string
+  attachments: Attachment[]
+  messageId: string
+  inReplyTo: string
+  references: string
+}
+
+export interface ListQuery {
+  accountId: string
+  folderId: string
+  folderKind: string
+  category: string
+  search: string
+  unreadOnly: boolean
+  limit: number
+  cursor: string
+}
+
+export interface MessagePage {
+  messages: MessageSummary[]
+  nextCursor: string
+  total: number
+}
+
+export interface OutgoingAttachment {
+  filename: string
+  mimeType: string
+  dataBase64: string
+}
+
+export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward'
+
+export interface ComposeRequest {
+  accountId: string
+  to: Address[]
+  cc: Address[]
+  bcc: Address[]
+  subject: string
+  bodyHtml: string
+  bodyText: string
+  replyToId: string
+  mode: ComposeMode
+  attachments: OutgoingAttachment[]
+}
+
+export interface Category {
+  id: string
+  name: string
+  description: string
+  color: string
+}
+
+export type ThemeMode = 'system' | 'light' | 'dark'
+export type Density = 'comfortable' | 'compact'
+
+export interface Settings {
+  theme: ThemeMode | string
+  density: Density | string
+  syncIntervalMinutes: number
+  showRemoteImages: boolean
+  googleClientId: string
+  googleClientSecret: string
+  microsoftClientId: string
+  microsoftTenant: string
+  openRouterKeySet: boolean
+  /** Chat model: used only for grammar improvement and summaries. */
+  openRouterModel: string
+  /** Jev decision model used for AI labeling. */
+  classifierModel: string
+  /** 0..1; labels below this confidence are left unassigned. */
+  classifyThreshold: number
+  classifyInstructions: string
+  autoClassify: boolean
+  categories: Category[]
+  primaryColor: string
+  /** rem */
+  radius: number
+  grammarSystemPrompt: string
+}
+
+export interface AIModel {
+  id: string
+  name: string
+  description: string
+  contextLength: number
+  promptPrice: number
+  completionPrice: number
+}
+
+export interface ClassificationResult {
+  messageId: string
+  category: string
+  confidence: number
+  reason: string
+}
+
+export interface AppInfo {
+  version: string
+  dataDir: string
+  logPath: string
+  [key: string]: unknown
+}
+
+export interface DefaultPrompts {
+  grammar: string
+  classify: string
+}
+
+// ---- events ----
+
+export const Events = {
+  SyncStarted: 'sync:started',
+  SyncFinished: 'sync:finished',
+  MessagesChanged: 'messages:changed',
+  AccountsChanged: 'accounts:changed',
+  ClassifyProgress: 'classify:progress',
+  NewMail: 'mail:new',
+} as const
+
+export interface EventPayloads {
+  'sync:started': { accountId: string }
+  'sync:finished': { accountId: string; newMessages: number; error: string }
+  'messages:changed': { accountId: string }
+  'accounts:changed': undefined
+  'classify:progress': { done: number; total: number; cost?: number }
+  'mail:new': { accountId: string; count: number; latest: MessageSummary }
+}
+
+export type EventName = keyof EventPayloads

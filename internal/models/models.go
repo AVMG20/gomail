@@ -67,6 +67,12 @@ type MessageSummary struct {
 	Starred        bool      `json:"starred"`
 	HasAttachments bool      `json:"hasAttachments"`
 	Category       string    `json:"category"` // AI category id, "" when unclassified
+	// CategorySource is "ai" when the label was assigned by the classifier,
+	// "manual" when the user picked it (auto-classification never overrides
+	// a manual label) and "" when unlabeled.
+	CategorySource string `json:"categorySource"`
+	// CategoryConfidence is the classifier confidence (0..1) for AI labels.
+	CategoryConfidence float64 `json:"categoryConfidence"`
 }
 
 type Attachment struct {
@@ -89,6 +95,9 @@ type Message struct {
 	MessageID   string       `json:"messageId"` // RFC 5322 Message-ID header
 	InReplyTo   string       `json:"inReplyTo"`
 	References  string       `json:"references"`
+	// HasRemoteContent reports whether BodyHTML references remote resources
+	// (http/https images, stylesheets). The UI can offer "Show images".
+	HasRemoteContent bool `json:"hasRemoteContent"`
 }
 
 // ListQuery selects messages for the message list. An empty AccountID means
@@ -125,8 +134,8 @@ type ComposeRequest struct {
 	Subject     string               `json:"subject"`
 	BodyHTML    string               `json:"bodyHtml"`
 	BodyText    string               `json:"bodyText"`
-	ReplyToID   string               `json:"replyToId"`   // local message id being replied to / forwarded
-	Mode        string               `json:"mode"`        // "new" | "reply" | "replyAll" | "forward"
+	ReplyToID   string               `json:"replyToId"` // local message id being replied to / forwarded
+	Mode        string               `json:"mode"`      // "new" | "reply" | "replyAll" | "forward"
 	Attachments []OutgoingAttachment `json:"attachments"`
 }
 
@@ -139,18 +148,40 @@ type Category struct {
 }
 
 type Settings struct {
-	Theme               string     `json:"theme"`   // "system" | "light" | "dark"
-	Density             string     `json:"density"` // "comfortable" | "compact"
-	SyncIntervalMinutes int        `json:"syncIntervalMinutes"`
-	ShowRemoteImages    bool       `json:"showRemoteImages"`
-	GoogleClientID      string     `json:"googleClientId"`
-	GoogleClientSecret  string     `json:"googleClientSecret"`
-	MicrosoftClientID   string     `json:"microsoftClientId"`
-	MicrosoftTenant     string     `json:"microsoftTenant"` // default "common"
-	OpenRouterKeySet    bool       `json:"openRouterKeySet"` // read-only; the key itself never leaves the backend
-	OpenRouterModel     string     `json:"openRouterModel"`
-	AutoClassify        bool       `json:"autoClassify"`
-	Categories          []Category `json:"categories"`
+	Theme                string     `json:"theme"`   // "system" | "light" | "dark"
+	Density              string     `json:"density"` // "comfortable" | "compact"
+	SyncIntervalMinutes  int        `json:"syncIntervalMinutes"`
+	ShowRemoteImages     bool       `json:"showRemoteImages"`
+	GoogleClientID       string     `json:"googleClientId"`
+	GoogleClientSecret   string     `json:"googleClientSecret"`
+	MicrosoftClientID    string     `json:"microsoftClientId"`
+	MicrosoftTenant      string     `json:"microsoftTenant"`   // default "common"
+	OpenRouterKeySet     bool       `json:"openRouterKeySet"`  // read-only; the key itself never leaves the backend
+	OpenRouterModel      string     `json:"openRouterModel"`   // chat model (grammar, summaries, drafts)
+	ClassifierModel      string     `json:"classifierModel"`   // OpenRouter Decisions model, default "typesafe/jev-1.13"
+	ClassifyThreshold    float64    `json:"classifyThreshold"` // 0..1; below this confidence a message stays unlabeled
+	AutoClassify         bool       `json:"autoClassify"`
+	Categories           []Category `json:"categories"`
+	GrammarSystemPrompt  string     `json:"grammarSystemPrompt"`  // "" = built-in default (see GetDefaultPrompts)
+	ClassifyInstructions string     `json:"classifyInstructions"` // Jev "label" question instructions; "" = default
+	PrimaryColor         string     `json:"primaryColor"`         // hex accent color, e.g. "#2563eb"
+	Radius               float64    `json:"radius"`               // UI corner radius in rem
+}
+
+// DefaultPrompts holds the built-in prompts used when the corresponding
+// Settings fields are empty ("Reset to default" in the UI).
+type DefaultPrompts struct {
+	Grammar  string `json:"grammar"`
+	Classify string `json:"classify"`
+}
+
+// AppInfo describes the running build for the About screen.
+type AppInfo struct {
+	Version  string `json:"version"`
+	DataDir  string `json:"dataDir"`
+	LogFile  string `json:"logFile"`
+	Platform string `json:"platform"` // GOOS/GOARCH
+	Demo     bool   `json:"demo"`
 }
 
 type AIModel struct {
@@ -175,6 +206,6 @@ const (
 	EventSyncFinished     = "sync:finished"     // payload: {accountId, newMessages, error}
 	EventMessagesChanged  = "messages:changed"  // payload: {accountId}
 	EventAccountsChanged  = "accounts:changed"  // payload: none
-	EventClassifyProgress = "classify:progress" // payload: {done, total}
+	EventClassifyProgress = "classify:progress" // payload: {done, total, cost}
 	EventNewMail          = "mail:new"          // payload: {accountId, count, latest: MessageSummary}
 )
