@@ -66,13 +66,17 @@ type MessageSummary struct {
 	Unread         bool      `json:"unread"`
 	Starred        bool      `json:"starred"`
 	HasAttachments bool      `json:"hasAttachments"`
-	Category       string    `json:"category"` // AI category id, "" when unclassified
-	// CategorySource is "ai" when the label was assigned by the classifier,
-	// "manual" when the user picked it (auto-classification never overrides
-	// a manual label) and "" when unlabeled.
-	CategorySource string `json:"categorySource"`
-	// CategoryConfidence is the classifier confidence (0..1) for AI labels.
-	CategoryConfidence float64 `json:"categoryConfidence"`
+	// Labels are the ids of the user-defined labels on this message
+	// (manual and AI-assigned). LabelDetails says who assigned each one.
+	Labels       []string       `json:"labels"`
+	LabelDetails []MessageLabel `json:"labelDetails"`
+}
+
+// MessageLabel is one label assignment on a message.
+type MessageLabel struct {
+	LabelID    string  `json:"labelId"`
+	Source     string  `json:"source"`     // "ai" | "manual"
+	Confidence float64 `json:"confidence"` // classifier confidence (1 for manual)
 }
 
 type Attachment struct {
@@ -104,14 +108,15 @@ type Message struct {
 // "all accounts" (unified view); FolderKind selects the same system folder
 // across accounts, FolderID selects one specific folder.
 type ListQuery struct {
-	AccountID  string `json:"accountId"`
-	FolderID   string `json:"folderId"`
-	FolderKind string `json:"folderKind"`
-	Category   string `json:"category"`
-	Search     string `json:"search"`
-	UnreadOnly bool   `json:"unreadOnly"`
-	Limit      int    `json:"limit"`
-	Cursor     string `json:"cursor"`
+	AccountID  string   `json:"accountId"`
+	FolderID   string   `json:"folderId"`
+	FolderKind string   `json:"folderKind"`
+	Labels     []string `json:"labels"`    // messages having ANY of these label ids; empty = no label filter
+	Unlabeled  bool     `json:"unlabeled"` // only messages without any label
+	Search     string   `json:"search"`
+	UnreadOnly bool     `json:"unreadOnly"`
+	Limit      int      `json:"limit"`
+	Cursor     string   `json:"cursor"`
 }
 
 type MessagePage struct {
@@ -139,8 +144,9 @@ type ComposeRequest struct {
 	Attachments []OutgoingAttachment `json:"attachments"`
 }
 
-// Category is a user-defined AI classification bucket.
-type Category struct {
+// Label is a user-defined label. Labels are applied manually or by the AI
+// classifier (OpenRouter Jev), which uses Description as guidance.
+type Label struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"` // guidance passed to the model
@@ -148,24 +154,31 @@ type Category struct {
 }
 
 type Settings struct {
-	Theme                string     `json:"theme"`   // "system" | "light" | "dark"
-	Density              string     `json:"density"` // "comfortable" | "compact"
-	SyncIntervalMinutes  int        `json:"syncIntervalMinutes"`
-	ShowRemoteImages     bool       `json:"showRemoteImages"`
-	GoogleClientID       string     `json:"googleClientId"`
-	GoogleClientSecret   string     `json:"googleClientSecret"`
-	MicrosoftClientID    string     `json:"microsoftClientId"`
-	MicrosoftTenant      string     `json:"microsoftTenant"`   // default "common"
-	OpenRouterKeySet     bool       `json:"openRouterKeySet"`  // read-only; the key itself never leaves the backend
-	OpenRouterModel      string     `json:"openRouterModel"`   // chat model (grammar, summaries, drafts)
-	ClassifierModel      string     `json:"classifierModel"`   // OpenRouter Decisions model, default "typesafe/jev-1.13"
-	ClassifyThreshold    float64    `json:"classifyThreshold"` // 0..1; below this confidence a message stays unlabeled
-	AutoClassify         bool       `json:"autoClassify"`
-	Categories           []Category `json:"categories"`
-	GrammarSystemPrompt  string     `json:"grammarSystemPrompt"`  // "" = built-in default (see GetDefaultPrompts)
-	ClassifyInstructions string     `json:"classifyInstructions"` // Jev "label" question instructions; "" = default
-	PrimaryColor         string     `json:"primaryColor"`         // hex accent color, e.g. "#2563eb"
-	Radius               float64    `json:"radius"`               // UI corner radius in rem
+	Theme                string  `json:"theme"`   // "system" | "light" | "dark"
+	Density              string  `json:"density"` // "comfortable" | "compact"
+	SyncIntervalMinutes  int     `json:"syncIntervalMinutes"`
+	ShowRemoteImages     bool    `json:"showRemoteImages"`
+	GoogleClientID       string  `json:"googleClientId"`
+	GoogleClientSecret   string  `json:"googleClientSecret"`
+	MicrosoftClientID    string  `json:"microsoftClientId"`
+	MicrosoftTenant      string  `json:"microsoftTenant"`   // default "common"
+	OpenRouterKeySet     bool    `json:"openRouterKeySet"`  // read-only; the key itself never leaves the backend
+	OpenRouterModel      string  `json:"openRouterModel"`   // chat model (grammar, summaries, drafts)
+	ClassifierModel      string  `json:"classifierModel"`   // OpenRouter Decisions model, default "typesafe/jev-1.13"
+	ClassifyThreshold    float64 `json:"classifyThreshold"` // 0..1; below this confidence a message stays unlabeled
+	AutoClassify         bool    `json:"autoClassify"`
+	Labels               []Label `json:"labels"`
+	GrammarSystemPrompt  string  `json:"grammarSystemPrompt"`  // "" = built-in default (see GetDefaultPrompts)
+	ClassifyInstructions string  `json:"classifyInstructions"` // Jev "label" question instructions; "" = default
+	PrimaryColor         string  `json:"primaryColor"`         // hex accent color, e.g. "#2563eb"
+	Radius               float64 `json:"radius"`               // UI corner radius in rem
+}
+
+// LabelCount is the number of messages carrying a label.
+type LabelCount struct {
+	LabelID string `json:"labelId"`
+	Total   int    `json:"total"`
+	Unread  int    `json:"unread"`
 }
 
 // DefaultPrompts holds the built-in prompts used when the corresponding
@@ -195,7 +208,7 @@ type AIModel struct {
 
 type ClassificationResult struct {
 	MessageID  string  `json:"messageId"`
-	Category   string  `json:"category"`
+	Label      string  `json:"label"` // assigned label id, "" when none applied (or below threshold)
 	Confidence float64 `json:"confidence"`
 	Reason     string  `json:"reason"`
 }
