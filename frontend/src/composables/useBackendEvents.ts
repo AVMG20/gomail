@@ -65,7 +65,13 @@ export function useBackendEvents() {
       setTimeout(() => mail.open(p.messageId), 250)
     }),
     api.on('ai:budget', (p) => {
-      if (p?.paused) toast('AI labeling paused for today', { description: 'The daily AI budget was reached. Change it in Settings → AI.' })
+      if (!p) return
+      const spent = typeof p.todayUsd === 'number' && p.budgetUsd ? ` ($${p.todayUsd.toFixed(2)} of $${p.budgetUsd.toFixed(2)})` : ''
+      if (p.paused) toast('AI labeling paused for today', { description: `The daily AI budget was reached${spent}. Change it in Settings → AI.` })
+      else toast('AI labeling resumed')
+    }),
+    api.on('database:status', (p) => {
+      if (p && !p.ok) toast.error('Mail database problem', { description: p.message || 'gomail is repairing its local database.', duration: 10000 })
     }),
     api.on('sync:progress', (p) => {
       if (!p?.accountId) return

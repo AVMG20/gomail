@@ -436,7 +436,8 @@ class MockBackend {
   private usage = { todayUsd: 0.0123, monthUsd: 0.4187, requestsToday: 42, requestsMonth: 1310 }
   async GetAIUsage() {
     await latency(30, 80)
-    return { ...this.usage }
+    const daily = this.settings.aiDailyBudgetUsd ?? 1
+    return { ...this.usage, dailyBudgetUsd: daily, budgetReached: daily > 0 && this.usage.todayUsd >= daily }
   }
 
   async UpdateAccountSignature(id: string, html: string): Promise<void> {

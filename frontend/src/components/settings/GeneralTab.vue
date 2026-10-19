@@ -64,6 +64,9 @@ async function setConversation(v: boolean) {
           </SelectContent>
         </Select>
       </SettingRow>
+      <SettingRow title="Pause background download" description="Stop fetching older mail in the background (new mail still arrives).">
+        <Switch :model-value="!!settings.settings.backfillPaused" aria-label="Pause background download" @update:model-value="(v: boolean) => settings.update({ backfillPaused: v })" />
+      </SettingRow>
     </SettingSection>
     <SettingSection title="Notifications">
       <SettingRow title="Desktop notifications for new mail" description="Show a system notification when new mail arrives.">

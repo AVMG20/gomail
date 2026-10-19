@@ -106,6 +106,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
           <div class="mt-0.5 text-base font-semibold tabular-nums">{{ c.v }}</div>
         </div>
       </div>
+      <p v-if="usage?.budgetReached" class="mb-1 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">Today’s budget is used up, so automatic labeling is paused until tomorrow. Manual labeling still works.</p>
       <SettingRow title="Daily budget" description="Auto-labeling pauses for the day when AI spend reaches this. 0 = no limit.">
         <div class="flex items-center gap-1.5">
           <span class="text-muted-foreground text-sm">$</span>

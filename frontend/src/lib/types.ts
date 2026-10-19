@@ -48,6 +48,10 @@ export interface AIUsage {
   monthUsd: number
   requestsToday: number
   requestsMonth: number
+  /** 0 = unlimited */
+  dailyBudgetUsd?: number
+  /** Automatic labeling is paused until tomorrow. */
+  budgetReached?: boolean
 }
 
 export interface Folder {
@@ -243,6 +247,8 @@ export interface Settings {
   aiDailyBudgetUsd?: number
   /** How far back to sync (days; 0 = everything). Next backend pass. */
   syncDepthDays?: number
+  /** Pause the background download of older mail. */
+  backfillPaused?: boolean
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
   primaryColor: string
@@ -353,6 +359,7 @@ export const Events = {
   SearchUpdated: 'search:updated',
   NotificationOpen: 'notification:open',
   AiBudget: 'ai:budget',
+  DatabaseStatus: 'database:status',
 } as const
 
 export interface EventPayloads {
@@ -365,8 +372,10 @@ export interface EventPayloads {
   'network:status': { online: boolean }
   'search:updated': { query: string; accountId: string; added: number }
   'notification:open': { messageId: string; accountId: string }
-  /** Auto-labeling paused because the daily AI budget was reached (next backend pass). */
-  'ai:budget': { paused: boolean; spentUsd?: number; budgetUsd?: number }
+  /** Auto-labeling paused (daily AI budget reached) or resumed. */
+  'ai:budget': { paused: boolean; todayUsd?: number; budgetUsd?: number }
+  /** Database health: integrity problems / repair. */
+  'database:status': { ok: boolean; message: string }
   'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }
   'classify:finished': Partial<ClassifyJobProgress>
   'mail:new': { accountId: string; count: number; latest: MessageSummary }
