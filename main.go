@@ -2,36 +2,80 @@ package main
 
 import (
 	"embed"
+	"log"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	"github.com/AVMG20/gomail/internal/appicon"
+	"github.com/AVMG20/gomail/internal/models"
 )
+
+// version is set at build time: -ldflags "-X main.version=1.2.3".
+var version = "dev"
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
-func main() {
-	// Create an instance of the app structure
-	app := NewApp()
+func init() {
+	// Typed events: the binding generator emits TypeScript types for these.
+	application.RegisterEvent[models.SyncEvent](models.EventSyncStarted)
+	application.RegisterEvent[models.SyncEvent](models.EventSyncFinished)
+	application.RegisterEvent[models.AccountEvent](models.EventMessagesChanged)
+	application.RegisterEvent[models.AccountEvent](models.EventAccountsChanged)
+	application.RegisterEvent[models.AccountEvent](models.EventLabelsChanged)
+	application.RegisterEvent[models.ClassifyProgress](models.EventClassifyProgress)
+	application.RegisterEvent[models.ClassifyProgress](models.EventClassifyFinished)
+	application.RegisterEvent[models.NewMailEvent](models.EventNewMail)
+}
 
-	// Create application with options
-	err := wails.Run(&options.App{
-		Title:  "gomail",
-		Width:  1024,
-		Height: 768,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
+func main() {
+	notifier := notifications.New()
+	svc := NewMailService(notifier)
+
+	app := application.New(application.Options{
+		Name:        "gomail",
+		Description: "A fast desktop mail client for Gmail and Outlook with AI labels",
+		Services: []application.Service{
+			application.NewService(svc),
+			application.NewService(notifier),
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		Bind: []interface{}{
-			app,
-		},
+		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
+		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 	})
 
-	if err != nil {
-		println("Error:", err.Error())
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "gomail",
+		Width:            1280,
+		Height:           820,
+		MinWidth:         900,
+		MinHeight:        600,
+		URL:              "/",
+		BackgroundColour: application.NewRGB(27, 38, 54),
+		Mac: application.MacWindow{
+			InvisibleTitleBarHeight: 50,
+			Backdrop:                application.MacBackdropTranslucent,
+			TitleBar:                application.MacTitleBarHiddenInset,
+		},
+	})
+	svc.attach(app, window)
+
+	// System tray: unread count + quick actions.
+	tray := app.SystemTray.New()
+	tray.SetIcon(appicon.PNG)
+	tray.SetTooltip("gomail")
+	menu := application.NewMenu()
+	menu.Add("Open gomail").OnClick(func(*application.Context) { svc.showWindow() })
+	menu.Add("Check mail").OnClick(func(*application.Context) { go svc.SyncNow("") })
+	menu.AddSeparator()
+	menu.Add("Quit").OnClick(func(*application.Context) { app.Quit() })
+	tray.SetMenu(menu)
+	tray.OnClick(func() { svc.showWindow() })
+	svc.tray = tray
+
+	notifier.OnNotificationResponse(func(notifications.NotificationResult) { svc.showWindow() })
+
+	if err := app.Run(); err != nil {
+		log.Fatal(err)
 	}
 }

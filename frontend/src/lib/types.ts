@@ -102,8 +102,6 @@ export interface ListQuery {
   unreadOnly: boolean
   limit: number
   cursor: string
-  /** Bulk AI labeling only: also include Trash and Drafts (Spam/Junk is always included). */
-  includeTrashDrafts?: boolean
 }
 
 export interface MessagePage {
@@ -140,11 +138,10 @@ export interface Label {
   name: string
   description: string
   color: string
-  /** "user" labels are fully editable; provider/system ones come from Gmail/Outlook. */
+  /** "user" labels are fully editable; "provider" ones are imported from Gmail/Outlook, "system" is built-in (Junk). */
   source?: LabelSource | string
-  /** Provider the label was imported from ("gmail" | "outlook"), when source != user. */
+  /** Optional hint (mock only today): provider the label was imported from. */
   provider?: string
-  accountId?: string
 }
 
 export type ThemeMode = 'system' | 'light' | 'dark'
@@ -174,6 +171,12 @@ export interface Settings {
   labels: Label[]
   /** Import Gmail labels / Outlook categories as labels. */
   importProviderLabels: boolean
+  /** Native desktop notifications for new mail (backend shows them). */
+  notifications: boolean
+  /** Keep a system tray icon (requested from backend; stored locally until supported). */
+  showInTray?: boolean
+  /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
+  undoSendSeconds?: number
   primaryColor: string
   /** rem */
   radius: number
@@ -187,6 +190,9 @@ export interface AIModel {
   contextLength: number
   promptPrice: number
   completionPrice: number
+  priceUnknown?: boolean
+  /** "chat" | "decision" (Jev / Decisions API) */
+  kind?: string
 }
 
 export interface ClassificationResult {
@@ -196,6 +202,7 @@ export interface ClassificationResult {
   /** AI score per label id (0..1). */
   scores: Record<string, number>
   cost: number
+  error?: string
 }
 
 export interface LabelCount {
@@ -222,8 +229,16 @@ export interface SearchResult {
 
 export interface ClassifyEstimate {
   count: number
-  estimatedCost: number
-  model?: string
+  requests?: number
+  estimatedTokens?: number
+  estimatedCostUsd: number
+  /** false when OpenRouter lists no price for the classifier model */
+  priceKnown: boolean
+}
+
+export interface ClassifyJob {
+  jobId: string
+  total: number
 }
 
 export interface ClassifyJobProgress {
@@ -234,6 +249,7 @@ export interface ClassifyJobProgress {
   skipped: number
   added?: number
   removed?: number
+  failed?: number
   cost: number
   finished?: boolean
   error?: string
@@ -263,13 +279,15 @@ export const Events = {
   ClassifyProgress: 'classify:progress',
   NewMail: 'mail:new',
   ClassifyFinished: 'classify:finished',
+  LabelsChanged: 'labels:changed',
 } as const
 
 export interface EventPayloads {
   'sync:started': { accountId: string }
   'sync:finished': { accountId: string; newMessages: number; error: string }
   'messages:changed': { accountId: string }
-  'accounts:changed': undefined
+  'accounts:changed': { accountId?: string } | undefined
+  'labels:changed': { accountId?: string } | undefined
   'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }
   'classify:finished': Partial<ClassifyJobProgress>
   'mail:new': { accountId: string; count: number; latest: MessageSummary }
