@@ -223,7 +223,7 @@ const T: Tpl[] = [
     text: `Hi Alex,\n\nYou're on the interview loop for the Senior Frontend Engineer candidate on Thursday, 11:00–11:45 (system design). Scorecard and CV are in Greenhouse.\n\nThanks for helping!\nPeople Team`,
   },
   {
-    acc: 'acc_work', from: P.calendarWork(), subject: 'Invitation: Atlas leadership sync @ Thu 10:00 – 11:00', cat: 'updates',
+    acc: 'acc_work', from: { name: 'Priya Raman (via Outlook Calendar)', email: 'priya.raman@northwind.io' }, subject: 'Invitation: Atlas leadership sync @ Thu 10:00 – 11:00', cat: 'updates',
     html: `<div style="font-family:-apple-system,Segoe UI,sans-serif"><p><strong>Atlas leadership sync</strong></p><p>Thursday · 10:00 – 11:00 (CEST)<br>Microsoft Teams meeting</p><p><a href="https://teams.microsoft.com/l/meetup-join/abc">Join the meeting</a></p><p style="color:#666">Organizer: Priya Raman</p></div>`,
     att: [{ filename: 'invite.ics', mimeType: 'text/calendar', size: 2_100 }],
   },
@@ -331,11 +331,6 @@ const T: Tpl[] = [
   },
 ]
 
-// Hack to keep the template literal readable: a calendar sender for the work account.
-function calendarWork(): Address {
-  return { name: 'Priya Raman (via Outlook Calendar)', email: 'priya.raman@northwind.io' }
-}
-;(P as unknown as Record<string, unknown>).calendarWork = calendarWork
 
 // Generated notification-style mail so the list is long enough for infinite scroll.
 const GH_REPOS = ['northwind/atlas-mobile', 'northwind/atlas-api', 'alexm/dotfiles', 'pixelforge/site']
@@ -430,9 +425,12 @@ export function buildMessage(t: Tpl, date: number, threadId?: string, overrides:
     from: t.from, to: t.to ?? [me[t.acc]], subject: t.subject, snippet: snippetOf(text), date: new Date(date).toISOString(),
     unread: !t.read, starred: !!t.starred, hasAttachments: atts.length > 0,
     labels: [...(t.cat ? [t.cat] : []), ...(t.more ?? [])],
-    aiLabels: t.cat && hash(id) % 3 !== 0 ? [{ labelId: t.cat, confidence: 0.62 + (hash(id + 'c') % 37) / 100 }] : [],
+    labelDetails: [...(t.cat ? [t.cat] : []), ...(t.more ?? [])].map((labelId, i) =>
+      hash(id + labelId) % 3 !== 0
+        ? { labelId, source: 'ai', confidence: Math.round((0.62 + (hash(id + 'c' + i) % 37) / 100) * 100) / 100 }
+        : { labelId, source: 'manual', confidence: 1 }),
     cc: t.cc ?? [], bcc: [], replyTo: [], bodyHtml: t.html ?? '', bodyText: t.text ?? '', attachments: atts,
-    messageId: `<${id}@mock.gomail>`, inReplyTo: '', references: '',
+    messageId: `<${id}@mock.gomail>`, inReplyTo: '', references: '', hasRemoteContent: /src=["']https?:/i.test(t.html ?? ''),
     ...overrides,
   }
 }

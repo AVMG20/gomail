@@ -194,6 +194,18 @@ type Settings struct {
 	Radius               float64 `json:"radius"`               // UI corner radius in rem
 }
 
+// ClassifyJob identifies a background AI labeling job.
+type ClassifyJob struct {
+	JobID string `json:"jobId"`
+	Total int    `json:"total"`
+}
+
+// ClassifyEstimate is the expected size and cost of a labeling job.
+type ClassifyEstimate struct {
+	Count            int     `json:"count"`
+	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
+}
+
 // LabelCount is the number of messages carrying a label.
 type LabelCount struct {
 	LabelID string `json:"labelId"`
@@ -224,6 +236,8 @@ type AIModel struct {
 	ContextLength   int     `json:"contextLength"`
 	PromptPrice     float64 `json:"promptPrice"`     // USD per 1M tokens
 	CompletionPrice float64 `json:"completionPrice"` // USD per 1M tokens
+	PriceUnknown    bool    `json:"priceUnknown"`    // OpenRouter reported no (or variable) pricing
+	Kind            string  `json:"kind"`            // "chat" | "decision" (Jev, Decisions API)
 }
 
 type ClassificationResult struct {
@@ -239,6 +253,7 @@ const (
 	EventSyncFinished     = "sync:finished"     // payload: {accountId, newMessages, error}
 	EventMessagesChanged  = "messages:changed"  // payload: {accountId}
 	EventAccountsChanged  = "accounts:changed"  // payload: none
-	EventClassifyProgress = "classify:progress" // payload: {done, total, cost}
+	EventClassifyProgress = "classify:progress" // payload: {jobId, done, total, labeled, skipped, failed, cost}
+	EventClassifyFinished = "classify:finished" // payload: {jobId, done, total, labeled, skipped, failed, cost, cancelled, error}
 	EventNewMail          = "mail:new"          // payload: {accountId, count, latest: MessageSummary}
 )

@@ -52,9 +52,6 @@ CREATE TABLE messages (
 	unread          INTEGER NOT NULL DEFAULT 0,
 	starred         INTEGER NOT NULL DEFAULT 0,
 	has_attachments INTEGER NOT NULL DEFAULT 0,
-	category        TEXT NOT NULL DEFAULT '',
-	category_source TEXT NOT NULL DEFAULT '',
-	category_conf   REAL NOT NULL DEFAULT 0,
 	classified_at   INTEGER NOT NULL DEFAULT 0,
 	message_id_hdr  TEXT NOT NULL DEFAULT '',
 	in_reply_to     TEXT NOT NULL DEFAULT '',
@@ -69,7 +66,6 @@ CREATE TABLE messages (
 CREATE INDEX messages_date ON messages(date DESC, id DESC);
 CREATE INDEX messages_account_date ON messages(account_id, date DESC, id DESC);
 CREATE INDEX messages_thread ON messages(account_id, thread_id, date);
-CREATE INDEX messages_category_date ON messages(category, date DESC, id DESC);
 CREATE INDEX messages_unread_date ON messages(unread, date DESC, id DESC) WHERE unread = 1;
 
 CREATE TABLE message_folders (
@@ -78,6 +74,17 @@ CREATE TABLE message_folders (
 	PRIMARY KEY(folder_id, message_id)
 ) WITHOUT ROWID;
 CREATE INDEX message_folders_message ON message_folders(message_id, folder_id);
+
+-- Label assignments: source is 'ai' or 'manual'.
+CREATE TABLE message_labels (
+	message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	label_id   TEXT NOT NULL,
+	source     TEXT NOT NULL,
+	confidence REAL NOT NULL DEFAULT 1,
+	created_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(message_id, label_id)
+) WITHOUT ROWID;
+CREATE INDEX message_labels_label ON message_labels(label_id, message_id);
 
 CREATE TABLE attachments (
 	message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -107,6 +114,26 @@ CREATE VIRTUAL TABLE messages_fts USING fts5(
 	content='', contentless_delete=1,
 	tokenize='unicode61 remove_diacritics 2'
 );
+
+INSERT INTO messages_fts(messages_fts, rank) VALUES('rank', 'bm25(10.0, 5.0, 3.0, 2.0, 1.0)');
+
+-- Trigram index over subject + sender for typo-tolerant / substring search.
+CREATE VIRTUAL TABLE messages_trgm USING fts5(
+	subject, sender,
+	content='', contentless_delete=1,
+	tokenize='trigram remove_diacritics 1'
+);
+
+CREATE TRIGGER messages_trgm_ai AFTER INSERT ON messages BEGIN
+	INSERT INTO messages_trgm(rowid, subject, sender) VALUES (new.rid, new.subject, new.from_name || ' ' || new.from_email);
+END;
+CREATE TRIGGER messages_trgm_ad AFTER DELETE ON messages BEGIN
+	DELETE FROM messages_trgm WHERE rowid = old.rid;
+END;
+CREATE TRIGGER messages_trgm_au AFTER UPDATE OF subject, from_name, from_email ON messages BEGIN
+	DELETE FROM messages_trgm WHERE rowid = old.rid;
+	INSERT INTO messages_trgm(rowid, subject, sender) VALUES (new.rid, new.subject, new.from_name || ' ' || new.from_email);
+END;
 
 CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
 	INSERT INTO messages_fts(rowid, subject, sender, recipients, snippet, body)

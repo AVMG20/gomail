@@ -58,12 +58,13 @@ export interface MessageSummary {
   hasAttachments: boolean
   /** Label ids (multi-label). */
   labels: string[]
-  /** Labels assigned by the AI classifier, with confidence (subset of `labels`). Optional until the backend provides it. */
-  aiLabels?: AILabel[]
+  /** Who assigned each label (manual vs AI) and with what confidence. */
+  labelDetails?: MessageLabel[]
 }
 
-export interface AILabel {
+export interface MessageLabel {
   labelId: string
+  source: 'ai' | 'manual' | string
   confidence: number
 }
 
@@ -86,6 +87,7 @@ export interface Message extends MessageSummary {
   messageId: string
   inReplyTo: string
   references: string
+  hasRemoteContent?: boolean
 }
 
 export interface ListQuery {
@@ -94,7 +96,7 @@ export interface ListQuery {
   folderKind: string
   /** Match mail having ANY of these labels. */
   labels: string[]
-  /** Also/only match mail without labels. */
+  /** Match mail without any label (combined with `labels` as OR). */
   unlabeled: boolean
   search: string
   unreadOnly: boolean
@@ -189,7 +191,7 @@ export interface LabelCount {
   unread: number
 }
 
-export interface SearchRequest {
+export interface SearchQuery {
   query: string
   accountId: string
   labels: string[]
@@ -202,13 +204,33 @@ export interface SearchResult {
   highlight: string
   matchedIn: string
   score: number
+  fuzzy?: boolean
+}
+
+export interface ClassifyEstimate {
+  count: number
+  estimatedCost: number
+  model?: string
+}
+
+export interface ClassifyJobProgress {
+  jobId: string
+  done: number
+  total: number
+  labeled: number
+  skipped: number
+  cost: number
+  finished?: boolean
+  error?: string
+  cancelled?: boolean
 }
 
 export interface AppInfo {
   version: string
   dataDir: string
-  logPath: string
-  [key: string]: unknown
+  logFile: string
+  platform: string
+  demo: boolean
 }
 
 export interface DefaultPrompts {
@@ -225,6 +247,7 @@ export const Events = {
   AccountsChanged: 'accounts:changed',
   ClassifyProgress: 'classify:progress',
   NewMail: 'mail:new',
+  ClassifyFinished: 'classify:finished',
 } as const
 
 export interface EventPayloads {
@@ -232,7 +255,8 @@ export interface EventPayloads {
   'sync:finished': { accountId: string; newMessages: number; error: string }
   'messages:changed': { accountId: string }
   'accounts:changed': undefined
-  'classify:progress': { done: number; total: number; cost?: number }
+  'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }
+  'classify:finished': Partial<ClassifyJobProgress>
   'mail:new': { accountId: string; count: number; latest: MessageSummary }
 }
 
