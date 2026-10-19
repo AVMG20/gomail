@@ -16,6 +16,8 @@ export const useUiStore = defineStore('ui', () => {
   const narrow = useMediaQuery('(max-width: 1080px)')
   /** Focus the list search input (shortcut "/"). Incremented to trigger. */
   const focusSearchTick = ref(0)
+  /** Show the first-run welcome guide again (Settings → About, command palette). */
+  const welcomeTick = ref(0)
 
   function openSettings(tab: SettingsTab = 'general') {
     settingsTab.value = tab
@@ -28,6 +30,6 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     settingsOpen, settingsTab, paletteOpen, shortcutsOpen, addAccountOpen, labelPopoverOpen, folderSidebarOpen, narrow, focusSearchTick,
-    openSettings, anyDialogOpen,
+    welcomeTick, openSettings, anyDialogOpen,
   }
 })

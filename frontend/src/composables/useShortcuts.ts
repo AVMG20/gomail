@@ -153,12 +153,15 @@ export function useShortcuts() {
         }
         break
       case 'r':
+        e.preventDefault() // the composer focuses its To field; don't type the key into it
         void respond('reply')
         break
       case 'a':
+        e.preventDefault() // the composer focuses its To field; don't type the key into it
         void respond('replyAll')
         break
       case 'f':
+        e.preventDefault() // the composer focuses its To field; don't type the key into it
         void respond('forward')
         break
       case 'c':
@@ -167,6 +170,8 @@ export function useShortcuts() {
         break
       case '/':
         e.preventDefault()
+        // Reading pane off + a message open: the list (and its search box) is hidden; go back to it.
+        if (settings.settings?.readingPane === 'off' && mail.openId) mail.open(null)
         ui.focusSearchTick++
         break
       case '?':

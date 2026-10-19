@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import {
   ArchiveIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MoreHorizontalIcon, ReplyAllIcon, SparklesIcon, StarIcon,
   Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon, PencilIcon,
@@ -36,7 +36,8 @@ const thread = shallowRef<Message[]>([])
 const loading = ref(false)
 const error = ref('')
 const expanded = ref<Set<string>>(new Set())
-const remoteAllowed = ref<Set<string>>(new Set())
+// Lives in the store so "Load images" survives the pane remounting (reading pane off, back/forward).
+const remoteAllowed = computed(() => mail.remoteAllowed)
 const summary = ref<{ id: string; text: string; loading: boolean } | null>(null)
 const scroller = ref<HTMLElement | null>(null)
 
@@ -45,6 +46,9 @@ let timer: ReturnType<typeof setTimeout> | null = null
 
 function applyThread(id: string, list: Message[]) {
   thread.value = list
+  // Images were allowed for this conversation earlier: fetch the unstripped bodies again.
+  const tid = list[0]?.threadId
+  if (tid && mail.remoteAllowed.has(tid) && list.some((m) => m.remoteContentBlocked)) void nextTick(() => loadImages(tid))
   const last = list[list.length - 1]
   // Expand the newest message plus any unread ones, like most mail apps.
   expanded.value = new Set([id, last?.id, ...list.filter((m) => m.unread).map((m) => m.id)].filter(Boolean) as string[])
@@ -108,7 +112,7 @@ const labelPills = computed(() => {
 
 /** "Load images": the backend strips remote content, so refetch with it kept. */
 async function loadImages(threadId: string) {
-  remoteAllowed.value = new Set([...remoteAllowed.value, threadId])
+  mail.remoteAllowed = new Set([...mail.remoteAllowed, threadId])
   if (!hasMethod('GetMessageWithRemoteContent')) return
   const t = token
   const source = thread.value

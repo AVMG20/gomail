@@ -6,10 +6,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { api, hasMethod } from '@/lib/api'
 import { useSettingsStore } from '@/stores/settings'
+import { useUiStore } from '@/stores/ui'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 
 const settings = useSettingsStore()
+const ui = useUiStore()
 onMounted(() => settings.loadAppInfo())
 
 async function checkNow() {
@@ -43,6 +45,11 @@ async function copy(text: string) {
       >
         <Button v-if="settings.updateInfo?.available" size="sm" @click="api.openExternal(settings.updateInfo.url)">Download <ExternalLinkIcon /></Button>
         <Button v-else size="sm" variant="outline" :disabled="settings.checkingUpdate" @click="checkNow"><LoaderIcon v-if="settings.checkingUpdate" class="animate-spin" /> Check now</Button>
+      </SettingRow>
+    </SettingSection>
+    <SettingSection title="Help">
+      <SettingRow title="Welcome guide" description="Walk through connecting mail, AI labeling and starter labels again.">
+        <Button size="sm" variant="outline" @click="ui.welcomeTick++">Show again</Button>
       </SettingRow>
     </SettingSection>
     <SettingSection title="Diagnostics">

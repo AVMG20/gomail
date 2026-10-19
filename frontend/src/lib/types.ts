@@ -327,19 +327,25 @@ export interface ClassifyJob {
   total: number
 }
 
+/** Payload of classify:progress / classify:finished (models.ClassifyProgress). */
 export interface ClassifyJobProgress {
   jobId: string
   done: number
   total: number
+  /** messages whose labels changed */
   labeled: number
+  /** unchanged since the last AI run (no cost) */
   skipped: number
-  added?: number
-  removed?: number
   failed?: number
+  /** USD so far */
   cost: number
-  finished?: boolean
   error?: string
   cancelled?: boolean
+}
+
+/** UI state of the running/last job: the payload plus "finished" (set on classify:finished). */
+export interface ClassifyJobState extends ClassifyJobProgress {
+  finished?: boolean
 }
 
 export interface AppInfo {

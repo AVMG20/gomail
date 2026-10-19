@@ -48,7 +48,8 @@ watch(debouncedSearch, (v) => (mail.search = v))
 watch(() => mail.search, (v) => {
   if (v !== searchText.value) searchText.value = v
 })
-watch(() => ui.focusSearchTick, () => {
+watch(() => ui.focusSearchTick, async () => {
+  await nextTick() // the list may have just become visible (reading pane off)
   searchInput.value?.focus()
   searchInput.value?.select()
 })
@@ -243,7 +244,8 @@ const subtitle = computed(() => {
   if (mail.status === 'loading') return ''
   const n = mail.total
   const unread = mail.mailbox.accountId
-    ? (mail.mailbox.folderId ? accounts.folderMap.get(mail.mailbox.folderId)?.unread : 0) ?? 0
+    // folderId can be empty when the mailbox was chosen before the account's folders synced.
+    ? (mail.mailbox.folderId ? accounts.folderMap.get(mail.mailbox.folderId) : accounts.folderOf(mail.mailbox.accountId, mail.mailbox.kind))?.unread ?? 0
     : accounts.unifiedUnread(mail.mailbox.kind)
   const parts = [`${n.toLocaleString()} ${n === 1 ? 'message' : 'messages'}`]
   if (unread && !mail.unreadOnly) parts.push(`${unread.toLocaleString()} unread`)

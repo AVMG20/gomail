@@ -889,29 +889,25 @@ class MockBackend {
     void (async () => {
       let done = 0
       let labeled = 0
-      let skipped = 0
-      let added = 0
-      let removed = 0
+      const skipped = 0
       let cost = 0
       const step = Math.max(25, Math.min(180, 6000 / Math.max(1, targets.length)))
-      this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, added, removed, cost })
+      this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, failed: 0, cost })
       for (const m of targets) {
         if (job.cancelled) break
         await sleep(step)
         const r = this.classifyOne(m)
         this.applyResult(m, r)
+        // Like the backend: "labeled" = labels changed; unchanged mail isn't "skipped" (that means cached).
         if (r.added.length || r.removed.length) labeled++
-        else skipped++
-        added += r.added.length
-        removed += r.removed.length
         done++
         cost += r.cost
-        this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, added, removed, cost })
+        this.emit('classify:progress', { jobId, done, total: targets.length, labeled, skipped, failed: 0, cost })
         if (done % 5 === 0) this.changed()
       }
       this.jobs.delete(jobId)
       this.changed()
-      this.emit('classify:finished', { jobId, done, total: targets.length, labeled, skipped, added, removed, cost, cancelled: job.cancelled, finished: true })
+      this.emit('classify:finished', { jobId, done, total: targets.length, labeled, skipped, failed: 0, cost, cancelled: job.cancelled, error: '' })
     })()
     return { jobId, total: targets.length }
   }

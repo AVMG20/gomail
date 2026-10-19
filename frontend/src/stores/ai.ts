@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage } from '@/lib/api'
-import type { ClassifyJobProgress, ListQuery } from '@/lib/types'
+import type { ClassifyJobProgress, ClassifyJobState, ListQuery } from '@/lib/types'
 import { useMailStore } from './mail'
 import { useSettingsStore } from './settings'
 import { useAccountsStore } from './accounts'
@@ -23,7 +23,7 @@ export const useAiStore = defineStore('ai', () => {
   /** Most recent AI scores per message, shown in the label popover. */
   const scores = ref<Record<string, Record<string, number>>>({})
   const labeling = ref<Set<string>>(new Set())
-  const job = ref<ClassifyJobProgress | null>(null)
+  const job = ref<ClassifyJobState | null>(null)
   const bulkRequest = ref<BulkRequest | null>(null)
 
   function labelName(id: string) {
@@ -108,12 +108,12 @@ export const useAiStore = defineStore('ai', () => {
       if (req.query) {
         const started = await api.classifyQuery(req.query, onlyUnlabeled, includeTrashDrafts)
         // Progress events may already have arrived for this job; keep them.
-        if (job.value?.jobId !== started.jobId) job.value = { jobId: started.jobId, done: 0, total: started.total, labeled: 0, skipped: 0, added: 0, removed: 0, cost: 0 }
+        if (job.value?.jobId !== started.jobId) job.value = { jobId: started.jobId, done: 0, total: started.total, labeled: 0, skipped: 0, cost: 0 }
       } else {
         // Explicit selection: classify in place, in small batches, with local progress.
         const ids = req.ids
         const id = `local_${Date.now()}`
-        job.value = { jobId: id, done: 0, total: ids.length, labeled: 0, skipped: 0, added: 0, removed: 0, cost: 0 }
+        job.value = { jobId: id, done: 0, total: ids.length, labeled: 0, skipped: 0, cost: 0 }
         for (let i = 0; i < ids.length; i += 10) {
           if (job.value?.jobId !== id || job.value.cancelled) break
           const batch = ids.slice(i, i + 10)
@@ -123,8 +123,6 @@ export const useAiStore = defineStore('ai', () => {
           for (const r of results) {
             if (r.skipped) j.skipped++
             else if (r.added.length || r.removed.length) j.labeled++
-            j.added = (j.added ?? 0) + r.added.length
-            j.removed = (j.removed ?? 0) + r.removed.length
             j.cost += r.cost
             scores.value[r.messageId] = r.scores
           }
@@ -157,8 +155,6 @@ export const useAiStore = defineStore('ai', () => {
       total: p.total ?? cur?.total ?? 0,
       labeled: p.labeled ?? cur?.labeled ?? 0,
       skipped: p.skipped ?? cur?.skipped ?? 0,
-      added: p.added ?? cur?.added,
-      removed: p.removed ?? cur?.removed,
       failed: p.failed ?? cur?.failed ?? 0,
       cost: p.cost ?? cur?.cost ?? 0,
       finished: false,

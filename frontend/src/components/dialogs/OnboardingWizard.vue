@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { CheckIcon, ExternalLinkIcon, KeyRoundIcon, LoaderIcon, SparklesIcon, TagIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -25,7 +25,11 @@ const step = ref(0)
 const open = ref(true)
 const steps = ['Connect', 'AI labeling', 'Labels']
 
-const oauthMissing = computed(() => !settings.settings?.googleClientId && !settings.settings?.microsoftClientId)
+// In demo mode the "configure OAuth / try demo mode" hint makes no sense.
+const oauthMissing = computed(() => !settings.settings?.googleClientId && !settings.settings?.microsoftClientId && !settings.appInfo?.demo)
+onMounted(() => {
+  if (!settings.appInfo) void settings.loadAppInfo()
+})
 
 // ---- step 2: OpenRouter
 const key = ref('')

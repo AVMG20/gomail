@@ -80,6 +80,8 @@ export const useMailStore = defineStore('mail', () => {
   const selectAllQuery = ref(false)
 
   const threadCache = new Map<string, Message[]>()
+  /** Conversations (thread ids) where the user chose "Load images" this session. */
+  const remoteAllowed = shallowRef<Set<string>>(new Set())
   const addressBook = shallowRef<Map<string, Address>>(new Map())
 
   const labelFilter = computed<LabelFilter>(() => filters.value[mailboxKey(mailbox.value)] ?? { labels: [], unlabeled: false })
@@ -644,7 +646,7 @@ export const useMailStore = defineStore('mail', () => {
 
   return {
     mailbox, search, unreadOnly, filters, messages, nextCursor, hasMoreRemote, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
-    openId, selection, anchorId, selectAllQuery, addressBook,
+    openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
     labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleUnlabeledFilter, clearLabelFilter,

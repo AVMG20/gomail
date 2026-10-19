@@ -152,6 +152,7 @@ const actions = computed<Action[]>(() => {
     { id: 'theme', title: currentIsDark() ? 'Switch to light theme' : 'Switch to dark theme', icon: MoonIcon, run: () => settings.update({ theme: currentIsDark() ? 'light' : 'dark' }) },
     { id: 'shortcuts', title: 'Keyboard shortcuts', icon: KeyboardIcon, shortcut: '?', run: () => (ui.shortcutsOpen = true) },
     { id: 'add', title: 'Add account', icon: PlusIcon, run: () => (ui.addAccountOpen = true) },
+    { id: 'welcome', title: 'Show welcome guide', icon: SparklesIcon, run: () => ui.welcomeTick++ },
     { id: 'read-all', title: `Mark all as read in ${mail.mailboxName}`, icon: MailCheckIcon, run: () => folderAction('markAllRead') },
     { id: 'pane', title: settings.settings?.readingPane === 'off' ? 'Show reading pane' : 'Hide reading pane', icon: PanelRightIcon, run: () => settings.update({ readingPane: settings.settings?.readingPane === 'off' ? 'right' : 'off' }) },
     { id: 'conv', title: settings.settings?.conversationView === false ? 'Group by conversation' : 'Show individual messages', icon: MessagesSquareIcon, run: () => settings.update({ conversationView: settings.settings?.conversationView === false }) },
@@ -245,9 +246,9 @@ function onKeydown(e: KeyboardEvent) {
 // Strong local matches (an action/mailbox name) beat purely typo-tolerant mail hits.
 const order = computed(() => {
   const weakMail = results.value.length > 0 && results.value.every((r) => r.fuzzy)
-  // A command whose title starts with the typed word ("mark" → "Mark as read") beats mail hits.
+  // A command with a word starting with the typed text ("mark" → "Mark as read", "dark" → "Switch to dark theme") beats mail hits.
   const word = q.value.toLowerCase()
-  const actionHit = word.length >= 3 && actions.value.some((a) => a.title.toLowerCase().startsWith(word))
+  const actionHit = word.length >= 3 && actions.value.some((a) => a.title.toLowerCase().split(/\s+/).some((_w, i, all) => all.slice(i).join(' ').startsWith(word)))
   return weakMail || actionHit || !results.value.length ? ['actions', 'labels', 'mailboxes', 'mail'] : ['labels', 'mail', 'mailboxes', 'actions']
 })
 

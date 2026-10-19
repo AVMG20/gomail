@@ -38,6 +38,8 @@ export interface Draft {
   savedAt?: number
   /** Server-side draft id once SaveDraft has run (backend pass 2). */
   remoteId?: string
+  /** Account that server draft lives in (the From account can change afterwards). */
+  remoteAccountId?: string
   /** Restored after the app closed during the undo-send delay (never sent). */
   interrupted?: boolean
 }
@@ -109,7 +111,10 @@ export const useComposeStore = defineStore('compose', () => {
       if (!cur || cur.queued || cur.sending) return
       const run = (async () => {
         try {
+          dropForeignRemote(cur)
+          const accountId = cur.accountId
           cur.remoteId = await api.saveDraft(toRequest(cur), cur.remoteId ?? '')
+          cur.remoteAccountId = accountId
           lastRemote.set(d.id, sig)
         } catch {
           /* keep the local copy; retry on the next edit */
@@ -119,6 +124,16 @@ export const useComposeStore = defineStore('compose', () => {
       await run
       if (remoteInflight.get(d.id) === run) remoteInflight.delete(d.id)
     }, 3000))
+  }
+
+  /** The From account changed: the old server draft belongs to another mailbox, so delete it
+   *  and let the next save create one in the new account (otherwise it lingers in Drafts). */
+  function dropForeignRemote(d: Draft) {
+    if (!d.remoteId || !d.remoteAccountId || d.remoteAccountId === d.accountId) return
+    const old = d.remoteId
+    d.remoteId = undefined
+    d.remoteAccountId = undefined
+    if (hasMethod('DeleteDraft')) void api.deleteDraft(old).catch(() => {})
   }
 
   function persist() {
@@ -178,6 +193,9 @@ export const useComposeStore = defineStore('compose', () => {
   }
 
   async function respond(mode: Exclude<ComposeMode, 'new'>, m: Message) {
+    // Pressing r twice (or Reply on the same message again) reopens the existing reply.
+    const open = drafts.value.find((d) => d.replyToId === m.id && d.mode === mode && !d.queued && !d.sending)
+    if (open) return focus(open.id)
     const accounts = useAccountsStore()
     const own = accounts.accountMap.get(m.accountId)?.email.toLowerCase() ?? ''
     const notMe = (a: Address) => a.email.toLowerCase() !== own
@@ -208,7 +226,7 @@ export const useComposeStore = defineStore('compose', () => {
     if (existing) return focus(existing.id)
     create({
       mode: 'new', accountId: m.accountId, to: m.to, cc: m.cc, bcc: m.bcc, showCc: m.cc.length + m.bcc.length > 0,
-      subject: m.subject === '(no subject)' ? '' : m.subject, html: m.bodyHtml || textToHtml(m.bodyText), remoteId: m.id,
+      subject: m.subject === '(no subject)' ? '' : m.subject, html: m.bodyHtml || textToHtml(m.bodyText), remoteId: m.id, remoteAccountId: m.accountId,
     })
   }
 
@@ -226,7 +244,10 @@ export const useComposeStore = defineStore('compose', () => {
     }
     if (!hasMethod('SaveDraft')) return false
     try {
+      dropForeignRemote(d)
+      const accountId = d.accountId
       d.remoteId = await api.saveDraft(toRequest(d), d.remoteId ?? '')
+      d.remoteAccountId = accountId
       close(id)
       toast('Draft saved', { description: 'You can find it in Drafts.' })
       void useMailStore().softRefresh()
@@ -266,6 +287,7 @@ export const useComposeStore = defineStore('compose', () => {
     // Let a SaveDraft in flight finish so its id goes out with the send; the
     // backend then removes that server draft instead of leaving an orphan.
     await remoteInflight.get(d.id)
+    dropForeignRemote(d)
     await api.sendMessage(toRequest(d))
   }
 

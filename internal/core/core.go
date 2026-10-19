@@ -308,10 +308,27 @@ func (n notifyingEmitter) Emit(event string, data any) {
 // ---- providers ----
 
 func (s *Service) seedDemo() error {
+	// The demo provider generates fresh mail on every launch, so local rows
+	// from a previous run would point at messages that no longer exist.
+	// Reset each demo account's data but keep its customizations.
 	for _, a := range demo.Accounts() {
-		if _, err := s.store.Account(a.ID); errors.Is(err, store.ErrNotFound) {
+		existing, err := s.store.Account(a.ID)
+		switch {
+		case err == nil:
+			if err := s.store.DeleteAccount(a.ID); err != nil {
+				return err
+			}
+			a = existing
+		case !errors.Is(err, store.ErrNotFound):
+			return err
+		default:
 			a.CreatedAt = time.Now()
-			if err := s.store.InsertAccount(a); err != nil {
+		}
+		if err := s.store.InsertAccount(a); err != nil {
+			return err
+		}
+		if a.Signature != "" {
+			if err := s.store.UpdateSignature(a.ID, a.Signature); err != nil {
 				return err
 			}
 		}

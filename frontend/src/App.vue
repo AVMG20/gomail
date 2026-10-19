@@ -39,6 +39,10 @@ const ai = useAiStore()
 
 const booted = ref(false)
 const onboarded = ref(readLocal('onboarded', false))
+watch(() => ui.welcomeTick, () => {
+  ui.settingsOpen = false
+  onboarded.value = false
+})
 const bootError = ref('')
 
 useShortcuts()

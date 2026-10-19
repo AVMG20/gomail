@@ -52,6 +52,19 @@ describe('mail list races', () => {
     expect(mail.messages[0].starred).toBe(true)
   })
 
+  it('marks the auto-advanced message read after archiving the open one', async () => {
+    const mail = useMailStore()
+    mail.messages = [row('a', { unread: false }), row('b', { unread: true })]
+    const markRead = vi.spyOn(api, 'markRead').mockResolvedValue(undefined)
+    vi.spyOn(api, 'archive').mockResolvedValue(undefined)
+    mail.openId = 'a'
+    await mail.archive(['a'])
+    await Promise.resolve()
+    expect(mail.openId).toBe('b')
+    expect(mail.messages.find((m) => m.id === 'b')?.unread).toBe(false)
+    expect(markRead).toHaveBeenCalledWith(['b'], true)
+  })
+
   it('rolls back a failed star per message', async () => {
     const mail = useMailStore()
     mail.messages = [row('a', { starred: true }), row('b', { starred: false })]
@@ -112,6 +125,24 @@ describe('compose: autosave vs send', () => {
     saveGate.resolve('draft:42')
     await sending
     expect(order).toEqual(['save:start', 'save:end', 'send:draft:42'])
+  })
+
+  it('moves the server draft when the From account changes', async () => {
+    vi.useFakeTimers()
+    const compose = useComposeStore()
+    vi.spyOn(api, 'saveDraft').mockResolvedValueOnce('gmail-draft').mockResolvedValueOnce('outlook-draft')
+    const del = vi.spyOn(api, 'deleteDraft').mockResolvedValue(undefined)
+    const send = vi.spyOn(api, 'sendMessage').mockResolvedValue(undefined)
+    vi.spyOn(useMailStore(), 'softRefresh').mockResolvedValue(undefined as never)
+    const d = compose.compose([{ name: '', email: 'to@x.io' }])
+    d.accountId = 'gmail'
+    d.subject = 'Hi'
+    await vi.advanceTimersByTimeAsync(4000) // saved in the Gmail account
+    expect(d.remoteId).toBe('gmail-draft')
+    d.accountId = 'outlook'
+    await compose.send(d.id, 0)
+    expect(del).toHaveBeenCalledWith('gmail-draft')
+    expect(send.mock.calls[0][0]).toMatchObject({ accountId: 'outlook', draftId: '' })
   })
 
   it('persists a draft once per change, not in a loop', async () => {
