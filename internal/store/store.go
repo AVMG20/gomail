@@ -216,3 +216,33 @@ func saveSyncState(tx *sql.Tx, accountID string, state map[string]string) error 
 	}
 	return nil
 }
+
+// kindBits maps folder kinds to the bits of messages.folder_kinds. Starred
+// is a flag, not a folder membership.
+var kindBits = map[string]int{
+	"inbox": 1, "sent": 2, "drafts": 4, "archive": 8, "spam": 16, "trash": 32, "custom": 64,
+}
+
+func kindMask(kinds []string) int {
+	m := 0
+	for _, k := range kinds {
+		m |= kindBits[k]
+	}
+	return m
+}
+
+const kindBitSQL = `CASE f.kind WHEN 'inbox' THEN 1 WHEN 'sent' THEN 2 WHEN 'drafts' THEN 4 WHEN 'archive' THEN 8
+	WHEN 'spam' THEN 16 WHEN 'trash' THEN 32 WHEN 'custom' THEN 64 ELSE 0 END`
+
+// recomputeKinds refreshes messages.folder_kinds for one message ("" + accountID = all of an account).
+func recomputeKinds(tx *sql.Tx, msgID, accountID string) error {
+	q := `UPDATE messages SET folder_kinds = coalesce((SELECT sum(DISTINCT ` + kindBitSQL + `)
+		FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = messages.id), 0)`
+	var err error
+	if msgID != "" {
+		_, err = tx.Exec(q+` WHERE id = ?`, msgID)
+	} else {
+		_, err = tx.Exec(q+` WHERE account_id = ?`, accountID)
+	}
+	return err
+}

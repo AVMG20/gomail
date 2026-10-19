@@ -59,6 +59,7 @@ CREATE TABLE messages (
 	body_html       TEXT,
 	body_text       TEXT,
 	has_remote      INTEGER NOT NULL DEFAULT 0,
+	folder_kinds    INTEGER NOT NULL DEFAULT 0, -- bitmask of the kinds of folders containing the message (see kindBits)
 	body_fetched_at INTEGER NOT NULL DEFAULT 0,
 	updated_at      INTEGER NOT NULL DEFAULT 0,
 	UNIQUE(account_id, remote_id)
@@ -66,6 +67,7 @@ CREATE TABLE messages (
 CREATE INDEX messages_date ON messages(date DESC, id DESC);
 CREATE INDEX messages_account_date ON messages(account_id, date DESC, id DESC);
 CREATE INDEX messages_thread ON messages(account_id, thread_id, date);
+CREATE INDEX messages_account_kinds ON messages(account_id, folder_kinds);
 CREATE INDEX messages_unread_date ON messages(unread, date DESC, id DESC) WHERE unread = 1;
 
 CREATE TABLE message_folders (

@@ -1,8 +1,8 @@
-// The ONLY module that talks to the Wails bindings. Everything else in the UI
-// imports `api` from here. When the page is not running inside Wails (plain
-// browser via `npm run dev`) every call is routed to the in-memory mock.
-import * as Bindings from '../../wailsjs/go/main/App'
-import * as Runtime from '../../wailsjs/runtime/runtime'
+// The ONLY module that talks to the Wails (v3) backend. Everything else in
+// the UI imports `api` from here. When the page is not running inside a Wails
+// webview (plain browser via `npm run dev`) every call is routed to the
+// in-memory mock in ./mock.
+import { Browser, Clipboard, Events } from '@wailsio/runtime'
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ComposeRequest, DefaultPrompts, EventName,
   EventPayloads, Folder, LabelCount, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings,
@@ -11,16 +11,40 @@ import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
 
 type AnyFn = (...args: unknown[]) => Promise<unknown>
 
-interface WailsWindow {
-  go?: { main?: { App?: Record<string, AnyFn> } }
-  runtime?: unknown
+// Generated v3 bindings (`wails3 generate bindings -ts`), discovered at build
+// time so the app does not depend on exact service/package paths and still
+// builds before the bindings exist. Wails' own internal modules are skipped.
+const bindingModules = import.meta.glob<Record<string, unknown>>(
+  ['../../bindings/**/*.ts', '../../bindings/**/*.js', '!../../bindings/github.com/wailsapp/**', '!**/models.ts', '!**/models.js', '!**/index.ts', '!**/index.js', '!**/*.d.ts'],
+  { eager: true },
+)
+
+const registry = new Map<string, AnyFn>()
+for (const mod of Object.values(bindingModules)) {
+  for (const [name, value] of Object.entries(mod)) {
+    // Service methods are exported as PascalCase functions; model classes have a createFrom.
+    if (typeof value === 'function' && /^[A-Z]/.test(name) && !('createFrom' in value) && !registry.has(name)) {
+      registry.set(name, value as AnyFn)
+    }
+  }
 }
 
 let mode: 'wails' | 'mock' | null = null
 let mockPromise: Promise<typeof import('./mock/backend')> | null = null
 
+interface HostWindow {
+  chrome?: { webview?: { postMessage?: unknown } }
+  webkit?: { messageHandlers?: { external?: { postMessage?: unknown } } }
+}
+
+/** True inside a Wails webview (WebView2 / WKWebView / WebKitGTK). VITE_MOCK=1|0 overrides. */
 export function isWails(): boolean {
-  if (mode === null) mode = (window as unknown as WailsWindow).go?.main?.App ? 'wails' : 'mock'
+  if (mode === null) {
+    const forced = import.meta.env.VITE_MOCK as string | undefined
+    const w = window as unknown as HostWindow
+    const host = !!(w.chrome?.webview?.postMessage || w.webkit?.messageHandlers?.external?.postMessage)
+    mode = forced === '1' ? 'mock' : forced === '0' ? 'wails' : host ? 'wails' : 'mock'
+  }
   return mode === 'wails'
 }
 
@@ -38,15 +62,11 @@ export class NotSupportedError extends Error {
 }
 
 function boundFn(name: string): AnyFn | undefined {
-  const generated = (Bindings as unknown as Record<string, AnyFn | undefined>)[name]
-  if (generated) return generated
-  // Methods added after the bindings were generated are still reachable at runtime.
-  const live = (window as unknown as WailsWindow).go?.main?.App?.[name]
-  return live ? (...args: unknown[]) => live(...args) : undefined
+  return registry.get(name)
 }
 
 export function hasMethod(name: string): boolean {
-  return isWails() ? !!boundFn(name) : true
+  return isWails() ? registry.has(name) : true
 }
 
 async function call<T>(name: string, ...args: unknown[]): Promise<T> {
@@ -167,7 +187,7 @@ export const api = {
   openExternal: async (url: string) => {
     if (isWails()) {
       if (boundFn('OpenExternalURL')) return call<void>('OpenExternalURL', url)
-      return Runtime.BrowserOpenURL(url)
+      return Browser.OpenURL(url)
     }
     return call<void>('OpenExternalURL', url)
   },
@@ -210,7 +230,7 @@ export const api = {
 
   // ---- runtime
   on<E extends EventName>(event: E, cb: (payload: EventPayloads[E]) => void): () => void {
-    if (isWails()) return Runtime.EventsOn(event, (p: EventPayloads[E]) => cb(p))
+    if (isWails()) return Events.On(event, (ev: { data: unknown }) => cb(ev.data as EventPayloads[E]))
     let off: (() => void) | null = null
     let cancelled = false
     void loadMock().then(({ mock }) => {
@@ -223,7 +243,7 @@ export const api = {
   },
 
   async clipboardGet(): Promise<string> {
-    if (isWails()) return Runtime.ClipboardGetText()
+    if (isWails()) return Clipboard.Text()
     try {
       return await navigator.clipboard.readText()
     } catch {
@@ -233,7 +253,7 @@ export const api = {
 
   async clipboardSet(text: string): Promise<void> {
     if (isWails()) {
-      await Runtime.ClipboardSetText(text)
+      await Clipboard.SetText(text)
       return
     }
     try {

@@ -66,8 +66,6 @@ type FilterOptions struct {
 	OnlyUnlabeled bool
 }
 
-const folderKindExists = `EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = m.id AND f.kind IN (%s))`
-
 // buildFilter translates a ListQuery (+ options) into SQL conditions.
 func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, error) {
 	w := &where{}
@@ -82,10 +80,15 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 		if err != nil {
 			return nil, err
 		}
-		if f.Kind == models.FolderStarred {
+		switch f.Kind {
+		case models.FolderStarred:
 			w.add(`m.account_id = ? AND m.starred = 1`, f.AccountID)
-		} else {
+		case models.FolderCustom:
+			w.add(`m.account_id = ? AND (m.folder_kinds & 64) != 0`, f.AccountID)
 			w.add(`EXISTS (SELECT 1 FROM message_folders mf WHERE mf.message_id = m.id AND mf.folder_id = ?)`, f.ID)
+		default:
+			// One system folder per kind and account: the bitmask is exact.
+			w.add(`m.account_id = ? AND (m.folder_kinds & ?) != 0`, f.AccountID, kindBits[f.Kind])
 		}
 	} else if q.FolderKind != "" {
 		addKindFilter(w, []string{q.FolderKind})
@@ -100,7 +103,7 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 		w.add(`m.unread = 1`)
 	}
 	if len(opt.ExcludeFolderKinds) > 0 {
-		w.add(`NOT `+fmt.Sprintf(folderKindExists, placeholders(len(opt.ExcludeFolderKinds))), anySlice(opt.ExcludeFolderKinds)...)
+		w.add(`(m.folder_kinds & ?) = 0`, kindMask(opt.ExcludeFolderKinds))
 	}
 	if strings.TrimSpace(q.Search) != "" {
 		ps := ParseSearch(q.Search)
@@ -128,8 +131,8 @@ func addKindFilter(w *where, kinds []string) {
 		parts = append(parts, `m.starred = 1`)
 	}
 	if len(real) > 0 {
-		parts = append(parts, fmt.Sprintf(folderKindExists, placeholders(len(real))))
-		args = append(args, anySlice(real)...)
+		parts = append(parts, `(m.folder_kinds & ?) != 0`)
+		args = append(args, kindMask(real))
 	}
 	w.add(`(`+strings.Join(parts, " OR ")+`)`, args...)
 }

@@ -133,6 +133,21 @@ func (s *Store) ReplaceFolders(accountID string, folders []mail.Folder) error {
 			return err
 		}
 		defer up.Close()
+		oldKinds := map[string]string{}
+		krows, err := tx.Query(`SELECT id, kind FROM folders WHERE account_id = ?`, accountID)
+		if err != nil {
+			return err
+		}
+		for krows.Next() {
+			var id, k string
+			if err := krows.Scan(&id, &k); err != nil {
+				krows.Close()
+				return err
+			}
+			oldKinds[id] = k
+		}
+		krows.Close()
+		changedKinds := false
 		keep := map[string]bool{}
 		for _, f := range folders {
 			if _, ok := kindOrder[f.Kind]; !ok {
@@ -140,6 +155,9 @@ func (s *Store) ReplaceFolders(accountID string, folders []mail.Folder) error {
 			}
 			id := FolderID(accountID, f.RemoteID)
 			keep[id] = true
+			if k, ok := oldKinds[id]; ok && k != f.Kind {
+				changedKinds = true
+			}
 			if _, err := up.Exec(id, accountID, f.RemoteID, f.Name, f.Kind, f.Unread, f.Total); err != nil {
 				return err
 			}
@@ -162,6 +180,11 @@ func (s *Store) ReplaceFolders(accountID string, folders []mail.Folder) error {
 		rows.Close()
 		for _, id := range stale {
 			if _, err := tx.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
+				return err
+			}
+		}
+		if len(stale) > 0 || changedKinds {
+			if err := recomputeKinds(tx, "", accountID); err != nil {
 				return err
 			}
 		}

@@ -237,7 +237,7 @@ func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 	s.addSearchFilters(w, ps)
 	nowMs := now().UnixMilli()
 	// recency multiplier in [1, 2): 2 for brand new mail, ~1.5 after 30 days.
-	recency := fmt.Sprintf(`(1.0 + 1.0 / (1.0 + max(0, %d - m.date) / 2592000000.0))`, nowMs)
+	recency := fmt.Sprintf(`(1.0 + 1.0 / (1.0 + max(0, %d - m.date) / 2592000000.0))`, nowMs) // == recencyBoost
 
 	var cands []candidate
 	seen := map[string]bool{}
@@ -246,32 +246,17 @@ func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 		return []models.SearchResult{}, nil
 	}
 	if expr != "" {
-		args := append([]any{expr}, w.args...)
-		filter := ""
-		if len(w.conds) > 0 {
-			filter = " AND " + strings.Join(w.conds, " AND ")
-		}
-		rows, err := s.db.Query(`WITH hits AS (SELECT rowid AS rid, rank FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT 2000)
-			SELECT `+s.summaryCols()+`, (-hits.rank) * `+recency+` AS score
-			FROM hits JOIN messages m ON m.rid = hits.rid WHERE 1=1`+filter+` ORDER BY score DESC LIMIT ?`, append(args, limit)...)
+		var err error
+		cands, err = s.ftsCandidates(expr, w, ps.highlightTerms(), nowMs)
 		if err != nil {
-			return nil, fmt.Errorf("search failed: %w", err)
-		}
-		terms := ps.highlightTerms()
-		for rows.Next() {
-			var c candidate
-			sum, err := scanSummary(rows, &c.score)
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			c.sum, c.terms = sum, terms
-			cands = append(cands, c)
-			seen[sum.ID] = true
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
 			return nil, err
+		}
+		sort.SliceStable(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
+		if len(cands) > limit {
+			cands = cands[:limit]
+		}
+		for _, c := range cands {
+			seen[c.sum.ID] = true
 		}
 		if len(cands) < limit/2+1 && len(ps.Terms) > 0 {
 			fz, err := s.fuzzySearch(ps, w, recency, limit, seen)
@@ -302,6 +287,9 @@ func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 	if len(cands) > limit {
 		cands = cands[:limit]
 	}
+	if err := s.fillSummaries(cands); err != nil {
+		return nil, err
+	}
 	out := make([]models.SearchResult, 0, len(cands))
 	for _, c := range cands {
 		r := models.SearchResult{Message: c.sum, Score: c.score, Fuzzy: c.fuzzy}
@@ -309,6 +297,95 @@ func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// Field weights for ranking: a term found in the subject counts most.
+const (
+	weightSubject = 10.0
+	weightFrom    = 6.0
+	weightTo      = 3.0
+	weightSnippet = 2.0
+	weightOther   = 1.0 // body (or tokenizer-only match)
+	ftsPool       = 600 // most recent full-text hits considered for ranking
+)
+
+// ftsCandidates scores the most recent full-text hits. Ranking is done in
+// Go (field weights x recency) rather than with bm25(), which costs ~10x
+// more than the match itself on large mailboxes.
+func (s *Store) ftsCandidates(expr string, w *where, terms []hlTerm, nowMs int64) ([]candidate, error) {
+	filter := ""
+	if len(w.conds) > 0 {
+		filter = " AND " + strings.Join(w.conds, " AND ")
+	}
+	rows, err := s.db.Query(`SELECT m.id, m.date, m.subject, m.from_name, m.from_email, m.to_json, m.snippet
+		FROM messages m WHERE m.rid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)`+filter+`
+		ORDER BY m.date DESC LIMIT `+fmt.Sprint(ftsPool), append([]any{expr}, w.args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+	defer rows.Close()
+	var out []candidate
+	for rows.Next() {
+		var id, subject, fromName, fromEmail, toJSON, snippet string
+		var date int64
+		if err := rows.Scan(&id, &date, &subject, &fromName, &fromEmail, &toJSON, &snippet); err != nil {
+			return nil, err
+		}
+		total := 0.0
+		for _, t := range terms {
+			switch {
+			case matchTerm(subject, t):
+				total += weightSubject
+			case matchTerm(fromName+" "+fromEmail, t):
+				total += weightFrom
+			case matchTerm(toJSON, t):
+				total += weightTo
+			case matchTerm(snippet, t):
+				total += weightSnippet
+			default:
+				total += weightOther
+			}
+		}
+		if len(terms) > 0 {
+			total /= float64(len(terms))
+		}
+		out = append(out, candidate{sum: models.MessageSummary{ID: id}, score: total * recencyBoost(date, nowMs), terms: terms})
+	}
+	return out, rows.Err()
+}
+
+// recencyBoost is a multiplier in (1, 2]: 2 for brand new mail, 1.5 after
+// 30 days, approaching 1 for old mail.
+func recencyBoost(dateMs, nowMs int64) float64 {
+	age := float64(max(0, nowMs-dateMs)) / 86400000.0
+	return 1 + 1/(1+age/30)
+}
+
+// fillSummaries loads full summaries for candidates that only carry an id.
+func (s *Store) fillSummaries(cands []candidate) error {
+	var ids []string
+	for _, c := range cands {
+		if c.sum.AccountID == "" {
+			ids = append(ids, c.sum.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sums, err := s.Summaries(ids)
+	if err != nil {
+		return err
+	}
+	byID := map[string]models.MessageSummary{}
+	for _, m := range sums {
+		byID[m.ID] = m
+	}
+	for i := range cands {
+		if cands[i].sum.AccountID == "" {
+			cands[i].sum = byID[cands[i].sum.ID]
+		}
+	}
+	return nil
 }
 
 // fuzzySearch finds typo'd matches via the trigram index over subject and
@@ -528,42 +605,64 @@ func truncateRunes(s string, n int) string {
 // Matching is case- and diacritics-insensitive and anchored at word starts.
 // The excerpt is cut to about maxRunes around the first match. ok is false
 // when nothing matched.
-func Highlight(text string, terms []hlTerm, maxRunes int) (string, bool) {
-	src := []rune(strings.Join(strings.Fields(text), " "))
-	folded := make([]rune, len(src))
+type span struct{ a, b int }
+
+func foldRunes(text string) (src, folded []rune) {
+	src = []rune(strings.Join(strings.Fields(text), " "))
+	folded = make([]rune, len(src))
 	for i, r := range src {
 		folded[i] = fold(r)
 	}
-	type span struct{ a, b int }
+	return src, folded
+}
+
+// findSpans locates t in folded text at word starts.
+func findSpans(folded []rune, t hlTerm, first bool) []span {
+	tr := []rune(strings.Join(strings.Fields(t.text), " "))
+	for i := range tr {
+		tr[i] = fold(tr[i])
+	}
+	// Trim non-word characters at the ends (e.g. "alice@" -> "alice").
+	for len(tr) > 0 && !isWordRune(tr[0]) {
+		tr = tr[1:]
+	}
+	for len(tr) > 0 && !isWordRune(tr[len(tr)-1]) {
+		tr = tr[:len(tr)-1]
+	}
+	if len(tr) == 0 {
+		return nil
+	}
 	var spans []span
-	for _, t := range terms {
-		tr := []rune(strings.Join(strings.Fields(t.text), " "))
-		for i := range tr {
-			tr[i] = fold(tr[i])
-		}
-		// Trim non-word characters at the ends (e.g. "alice@" -> "alice").
-		for len(tr) > 0 && !isWordRune(tr[0]) {
-			tr = tr[1:]
-		}
-		for len(tr) > 0 && !isWordRune(tr[len(tr)-1]) {
-			tr = tr[:len(tr)-1]
-		}
-		if len(tr) == 0 {
+	for i := 0; i+len(tr) <= len(folded); i++ {
+		if i > 0 && isWordRune(folded[i-1]) {
 			continue
 		}
-		for i := 0; i+len(tr) <= len(folded); i++ {
-			if i > 0 && isWordRune(folded[i-1]) {
-				continue
-			}
-			if !runesEqual(folded[i:i+len(tr)], tr) {
-				continue
-			}
-			end := i + len(tr)
-			if !t.prefix && end < len(folded) && isWordRune(folded[end]) {
-				continue
-			}
-			spans = append(spans, span{i, end})
+		if !runesEqual(folded[i:i+len(tr)], tr) {
+			continue
 		}
+		end := i + len(tr)
+		if !t.prefix && end < len(folded) && isWordRune(folded[end]) {
+			continue
+		}
+		spans = append(spans, span{i, end})
+		if first {
+			break
+		}
+	}
+	return spans
+}
+
+// matchTerm reports whether t occurs in text (folded, at a word start).
+func matchTerm(text string, t hlTerm) bool {
+	_, folded := foldRunes(text)
+	return len(findSpans(folded, t, true)) > 0
+}
+
+func Highlight(text string, terms []hlTerm, maxRunes int) (string, bool) {
+	src, folded := foldRunes(text)
+	var spans []span
+	for _, t := range terms {
+		spans = append(spans, findSpans(folded, t, false)...)
 	}
 	if len(spans) == 0 {
 		return "", false

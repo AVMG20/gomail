@@ -165,6 +165,9 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 					}
 				}
 			}
+			if err := recomputeKinds(tx, id, ""); err != nil {
+				return err
+			}
 			var lids []string
 			for _, name := range m.Labels {
 				if lid, ok := labelIDs[strings.ToLower(name)]; ok {
@@ -186,7 +189,11 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				continue
 			}
 			for _, rid := range rids {
-				if _, err := tx.Exec(`DELETE FROM message_folders WHERE folder_id = ? AND message_id = ?`, fid, MessageID(accountID, rid)); err != nil {
+				mid := MessageID(accountID, rid)
+				if _, err := tx.Exec(`DELETE FROM message_folders WHERE folder_id = ? AND message_id = ?`, fid, mid); err != nil {
+					return err
+				}
+				if err := recomputeKinds(tx, mid, ""); err != nil {
 					return err
 				}
 			}
@@ -318,18 +325,18 @@ func (p *providerLabeler) set(msgID string, labelIDs []string, now int64) error 
 
 const junkID = "junk"
 
-const inSpam = `EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = %s AND f.kind = 'spam')`
+const inSpam = `(%s & 16) != 0`
 
 // refreshJunk gives every message in a Spam/Junk folder the system "junk"
 // label and removes it from messages that left spam.
 func refreshJunk(tx *sql.Tx, accountID string, now int64) error {
 	stmts := []string{
 		`DELETE FROM message_labels WHERE label_id = 'junk' AND source = 'system' AND message_id IN
-			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.id") + `)`,
+			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.folder_kinds") + `)`,
 		`DELETE FROM label_overrides WHERE label_id = 'junk' AND message_id IN
-			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.id") + `)`,
+			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.folder_kinds") + `)`,
 		`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
-			SELECT m.id, 'junk', 'system', 1, ? FROM messages m WHERE m.account_id = ? AND ` + fmt.Sprintf(inSpam, "m.id") + `
+			SELECT m.id, 'junk', 'system', 1, ? FROM messages m WHERE m.account_id = ? AND ` + fmt.Sprintf(inSpam, "m.folder_kinds") + `
 			AND NOT EXISTS (SELECT 1 FROM label_overrides o WHERE o.message_id = m.id AND o.label_id = 'junk')
 			ON CONFLICT(message_id, label_id) DO UPDATE SET source = 'system', confidence = 1 WHERE source = 'ai'`,
 	}
@@ -640,6 +647,9 @@ func (s *Store) SetMessageFolders(sets map[string][]string) error {
 					}
 				}
 			}
+			if err := recomputeKinds(tx, id, ""); err != nil {
+				return err
+			}
 			accounts[acct] = true
 		}
 		now := time.Now().UnixMilli()
@@ -799,8 +809,7 @@ func (s *Store) DeleteUnknownLabels(valid []string) error {
 func (s *Store) LabelCounts(accountID string) ([]models.LabelCount, error) {
 	q := `SELECT ml.label_id, count(*), coalesce(sum(m.unread), 0)
 		FROM message_labels ml JOIN messages m ON m.id = ml.message_id
-		WHERE NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.id = mf.folder_id
-			WHERE mf.message_id = m.id AND f.kind = 'trash')` + s.labelCond()
+		WHERE (m.folder_kinds & 32) = 0` + s.labelCond()
 	var args []any
 	if accountID != "" {
 		q += ` AND m.account_id = ?`
