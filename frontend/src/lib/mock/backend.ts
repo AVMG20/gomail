@@ -533,7 +533,7 @@ class MockBackend {
     const results: ClassificationResult[] = []
     for (const id of ids) {
       const m = this.messages.get(id)
-      if (!m || this.neverLabel(m)) continue
+      if (!m) continue
       const r = this.classifyOne(m)
       this.applyResult(m, r)
       results.push(r)
@@ -563,7 +563,6 @@ class MockBackend {
     const counts = new Map<string, LabelCount>()
     for (const m of this.messages.values()) {
       if (accountId && m.accountId !== accountId) continue
-      if (this.neverLabel(m)) continue
       for (const l of m.labels) {
         const c = counts.get(l) ?? { labelId: l, total: 0, unread: 0 }
         c.total++
@@ -596,7 +595,13 @@ class MockBackend {
   }
 
   private classifyTargets(q: ListQuery, onlyUnlabeled: boolean): Message[] {
-    return this.filter({ ...q, cursor: '' }).filter((m) => !this.neverLabel(m) && (!onlyUnlabeled || m.labels.length === 0))
+    // A query without a folder never includes Spam/Trash (see filter); Drafts/Spam/Trash
+    // are only labeled in bulk when explicitly requested.
+    const includeAll = !!q.includeDraftsSpamTrash
+    const base = includeAll && !q.folderId && !q.folderKind
+      ? [...this.messages.values()].filter((m) => !q.accountId || m.accountId === q.accountId)
+      : this.filter({ ...q, cursor: '' })
+    return base.filter((m) => (includeAll || !this.neverLabel(m)) && (!onlyUnlabeled || m.labels.length === 0))
   }
 
   async EstimateClassify(q: ListQuery, onlyUnlabeled: boolean): Promise<ClassifyEstimate> {
