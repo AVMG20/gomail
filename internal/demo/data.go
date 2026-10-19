@@ -122,6 +122,7 @@ func htmlBody(t template, cid string) string {
 		b.WriteString(`<tr><td style="padding:16px 24px 24px"><a href="https://example.com/read" style="background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none">Read more</a></td></tr>`)
 		b.WriteString(`<tr><td style="padding:12px 24px;font-size:12px;color:#6b7280">You are receiving this because you subscribed. <a href="https://example.com/unsubscribe">Unsubscribe</a></td></tr>`)
 		b.WriteString(`</table></td></tr></table>`)
+		b.WriteString(`<img src="https://example.com/open-pixel.gif" width="1" height="1" alt="">`) // tracking pixel
 		return b.String()
 	}
 	b.WriteString(`<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5">`)

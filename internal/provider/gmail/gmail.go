@@ -992,4 +992,39 @@ func (c *Client) Search(ctx context.Context, q mail.SearchQuery, limit int) ([]m
 	return msgs, err
 }
 
+// ---- folder-wide operations ----
+
+func folderQuery(folder mail.Folder) (label, q string) {
+	if folder.RemoteID == AllMail {
+		return "", "-in:spam -in:trash"
+	}
+	return folder.RemoteID, ""
+}
+
+func (c *Client) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
+	label, q := folderQuery(folder)
+	ids, err := c.listIDs(ctx, label, strings.TrimSpace(q+" is:unread"), provider.MaxFolderOp)
+	if err != nil {
+		return err
+	}
+	return c.SetRead(ctx, ids, true)
+}
+
+// ErrGmailTrash explains why Gmail's Trash can't be emptied.
+var ErrGmailTrash = errors.New("Gmail deletes messages in Trash automatically after 30 days; permanently deleting them needs full mailbox access, which gomail doesn't request")
+
+func (c *Client) EmptyFolder(ctx context.Context, folder mail.Folder) error {
+	switch folder.Kind {
+	case models.FolderSpam:
+		ids, err := c.listIDs(ctx, "SPAM", "", provider.MaxFolderOp)
+		if err != nil {
+			return err
+		}
+		return c.Move(ctx, ids, mail.Folder{Kind: models.FolderTrash})
+	case models.FolderTrash:
+		return ErrGmailTrash
+	}
+	return errors.New("only Trash and Spam can be emptied")
+}
+
 var _ provider.Provider = (*Client)(nil)

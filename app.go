@@ -482,6 +482,42 @@ func (m *MailService) ReauthAccount(accountID string) (models.Account, error) {
 	return s.ReauthAccount(accountID)
 }
 
+// UpdateAccountSignature sets an account's HTML signature (sanitized).
+func (m *MailService) UpdateAccountSignature(accountID, html string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.UpdateAccountSignature(accountID, html)
+}
+
+// SearchContacts suggests recipients ranked by frequency and recency.
+func (m *MailService) SearchContacts(query string, limit int) ([]models.Contact, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return s.SearchContacts(query, limit)
+}
+
+// MarkFolderRead marks every message of a folder read.
+func (m *MailService) MarkFolderRead(folderID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.MarkFolderRead(folderID)
+}
+
+// EmptyFolder permanently deletes everything in a Trash or Spam folder.
+func (m *MailService) EmptyFolder(folderID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.EmptyFolder(folderID)
+}
+
 // ---- Labels ----
 
 // AddLabel assigns a label manually.

@@ -4,6 +4,7 @@ import { useAccountsStore } from '@/stores/accounts'
 import { useComposeStore } from '@/stores/compose'
 import { useMailStore } from '@/stores/mail'
 import { useUiStore } from '@/stores/ui'
+import { useSettingsStore } from '@/stores/settings'
 
 /** Global keyboard shortcuts. Single keys never fire while typing or in dialogs. */
 export function useShortcuts() {
@@ -11,6 +12,7 @@ export function useShortcuts() {
   const ui = useUiStore()
   const compose = useComposeStore()
   const accounts = useAccountsStore()
+  const settings = useSettingsStore()
   let gPending = false
   let gTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -50,13 +52,23 @@ export function useShortcuts() {
       ui.openSettings()
       return
     }
-    if (mod && !e.shiftKey && !e.altKey && /^[0-9]$/.test(key)) {
+    // Text size: mod + / - / 0 (like browsers); All inboxes moved to mod+shift+0.
+    if (mod && !e.altKey && (key === '=' || key === '+' || key === '-' || (key === '0' && !e.shiftKey))) {
       e.preventDefault()
-      if (key === '0') mail.switchAccount('')
-      else {
-        const acc = accounts.accounts[Number(key) - 1]
-        if (acc) mail.switchAccount(acc.id)
-      }
+      const z = settings.settings?.zoom ?? 1
+      const next = key === '0' ? 1 : Math.min(1.25, Math.max(0.9, Math.round((z + (key === '-' ? -0.05 : 0.05)) * 100) / 100))
+      void settings.update({ zoom: next })
+      return
+    }
+    if (mod && e.shiftKey && e.code === 'Digit0') {
+      e.preventDefault()
+      mail.switchAccount('')
+      return
+    }
+    if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(key)) {
+      e.preventDefault()
+      const acc = accounts.accounts[Number(key) - 1]
+      if (acc) mail.switchAccount(acc.id)
       return
     }
 

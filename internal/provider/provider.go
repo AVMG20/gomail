@@ -95,7 +95,17 @@ type Provider interface {
 	DeleteDraft(ctx context.Context, draftID string) error
 	// DraftID returns the draft id for a message in the Drafts folder.
 	DraftID(ctx context.Context, messageRemoteID string) (string, error)
+
+	// MarkFolderRead marks every message of a folder read on the server.
+	MarkFolderRead(ctx context.Context, folder mail.Folder) error
+	// EmptyFolder permanently deletes everything in a Trash or Spam folder
+	// (Gmail without full-mailbox scope: Spam moves to Trash; Trash is
+	// emptied by Gmail itself after 30 days).
+	EmptyFolder(ctx context.Context, folder mail.Folder) error
 }
+
+// MaxFolderOp caps how many messages a folder-wide operation touches.
+const MaxFolderOp = 20000
 
 // ErrUnsupported is returned for operations a provider can't do.
 var ErrUnsupported = errors.New("not supported by this account")

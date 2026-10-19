@@ -168,6 +168,62 @@ ALTER TABLE messages ADD COLUMN unsub_mailto TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN unsub_one_click INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0;
 `,
+	// 3: signatures, contacts, faster conversation and label counts
+	`
+ALTER TABLE accounts ADD COLUMN signature TEXT NOT NULL DEFAULT '';
+
+-- Conversation counts: covering index over the filter columns + thread.
+CREATE INDEX messages_kinds_thread ON messages(account_id, folder_kinds, thread_key);
+
+-- Label counts: denormalized message state on assignments (trigger-maintained).
+ALTER TABLE message_labels ADD COLUMN account_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE message_labels ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE message_labels ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0;
+UPDATE message_labels SET (account_id, unread, trashed) =
+	(SELECT m.account_id, m.unread, (m.folder_kinds & 32) != 0 FROM messages m WHERE m.id = message_labels.message_id);
+CREATE INDEX message_labels_counts ON message_labels(trashed, label_id, account_id, unread, source);
+CREATE TRIGGER message_labels_fill AFTER INSERT ON message_labels BEGIN
+	UPDATE message_labels SET (account_id, unread, trashed) =
+		(SELECT m.account_id, m.unread, (m.folder_kinds & 32) != 0 FROM messages m WHERE m.id = new.message_id)
+	WHERE message_id = new.message_id AND label_id = new.label_id;
+END;
+CREATE TRIGGER messages_label_state AFTER UPDATE OF unread, folder_kinds ON messages
+WHEN old.unread != new.unread OR ((old.folder_kinds & 32) != 0) != ((new.folder_kinds & 32) != 0) BEGIN
+	UPDATE message_labels SET unread = new.unread, trashed = (new.folder_kinds & 32) != 0 WHERE message_id = new.id;
+END;
+
+-- Only re-index full text when indexed columns really change.
+DROP TRIGGER messages_fts_au;
+CREATE TRIGGER messages_fts_au AFTER UPDATE OF subject, from_name, from_email, to_json, cc_json, snippet, body_text ON messages
+WHEN old.subject IS NOT new.subject OR old.from_name IS NOT new.from_name OR old.from_email IS NOT new.from_email
+	OR old.to_json IS NOT new.to_json OR old.cc_json IS NOT new.cc_json OR old.snippet IS NOT new.snippet OR old.body_text IS NOT new.body_text
+BEGIN
+	DELETE FROM messages_fts WHERE rowid = old.rid;
+	INSERT INTO messages_fts(rowid, subject, sender, recipients, snippet, body)
+	VALUES (new.rid, new.subject, new.from_name || ' ' || new.from_email,
+		(SELECT coalesce(group_concat(coalesce(json_extract(value, '$.name'), '') || ' ' || coalesce(json_extract(value, '$.email'), ''), ' '), '')
+		 FROM json_each(new.to_json)) || ' ' ||
+		(SELECT coalesce(group_concat(coalesce(json_extract(value, '$.name'), '') || ' ' || coalesce(json_extract(value, '$.email'), ''), ' '), '')
+		 FROM json_each(new.cc_json)),
+		new.snippet, coalesce(new.body_text, ''));
+END;
+
+-- Address book for recipient autocomplete (weights: received 1, sent-to 5).
+CREATE TABLE contacts (
+	email     TEXT PRIMARY KEY, -- lower-cased
+	name      TEXT NOT NULL DEFAULT '',
+	count     INTEGER NOT NULL DEFAULT 0,
+	last_seen INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+INSERT INTO contacts(email, name, count, last_seen)
+	SELECT lower(from_email), max(from_name), count(*), max(date) FROM messages WHERE from_email != '' GROUP BY lower(from_email)
+	ON CONFLICT(email) DO NOTHING;
+INSERT INTO contacts(email, name, count, last_seen)
+	SELECT lower(json_extract(j.value, '$.email')), max(coalesce(json_extract(j.value, '$.name'), '')), count(*), max(m.date)
+	FROM messages m, json_each(m.to_json) j WHERE coalesce(json_extract(j.value, '$.email'), '') != '' GROUP BY 1
+	ON CONFLICT(email) DO UPDATE SET count = count + excluded.count, last_seen = max(last_seen, excluded.last_seen),
+		name = CASE WHEN name = '' THEN excluded.name ELSE name END;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

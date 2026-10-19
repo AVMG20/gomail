@@ -43,6 +43,16 @@ type Account struct {
 	// NeedsReauth is set when the provider revoked or expired the sign-in;
 	// call ReauthAccount to sign in again (local data is kept).
 	NeedsReauth bool `json:"needsReauth"`
+	// Signature is sanitized HTML inserted by the composer.
+	Signature string `json:"signature"`
+}
+
+// Contact is an address seen in mail, ranked by frequency and recency.
+type Contact struct {
+	Name     string    `json:"name"`
+	Email    string    `json:"email"`
+	Count    int       `json:"count"`
+	LastSeen time.Time `json:"lastSeen"`
 }
 
 type Folder struct {
@@ -230,6 +240,10 @@ type Settings struct {
 	ConversationView    bool    `json:"conversationView"` // group the message list by conversation (default true)
 	ShowInTray          bool    `json:"showInTray"`       // system tray icon with unread count (default true)
 	CloseToTray         bool    `json:"closeToTray"`      // closing the window hides it to the tray (default false)
+	UndoSendSeconds     int     `json:"undoSendSeconds"`  // send delay handled by the UI (default 5, 0..30)
+	MarkReadMode        string  `json:"markReadMode"`     // "immediate" | "delay" | "manual" (default "immediate")
+	ReadingPane         string  `json:"readingPane"`      // "right" | "off" (default "right")
+	Zoom                float64 `json:"zoom"`             // UI zoom factor (default 1.0, 0.5..2)
 
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`

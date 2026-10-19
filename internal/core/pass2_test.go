@@ -368,3 +368,78 @@ func TestServerSearchAndLoadOlder(t *testing.T) {
 	}
 	_ = store.ConversationPrefix
 }
+
+func TestContactsSignatureAndFolderOps(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	cs, err := s.SearchContacts("pri", 5)
+	if err != nil || len(cs) == 0 || cs[0].Email != "priya.raman@northwind.io" || cs[0].Name != "Priya Raman" || cs[0].Count < 2 {
+		t.Fatalf("contacts %+v %v", cs, err)
+	}
+	cs, _ = s.SearchContacts("raman", 5) // word start in the name
+	if len(cs) == 0 || cs[0].Email != "priya.raman@northwind.io" {
+		t.Fatalf("name word match %+v", cs)
+	}
+	cs, _ = s.SearchContacts("alex.demo", 5)
+	if len(cs) != 0 {
+		t.Fatalf("own address suggested: %+v", cs)
+	}
+	if cs, _ := s.SearchContacts("%", 5); len(cs) != 0 {
+		t.Fatal("LIKE wildcard not escaped")
+	}
+
+	if err := s.UpdateAccountSignature(demo.GmailAccountID, `<p>Alex <b>Demo</b></p><script>alert(1)</script>`); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.store.Account(demo.GmailAccountID)
+	if !strings.Contains(a.Signature, "<b>Demo</b>") || strings.Contains(a.Signature, "script") {
+		t.Fatalf("signature %q", a.Signature)
+	}
+
+	inbox, _ := s.store.FolderByKind(demo.GmailAccountID, models.FolderInbox)
+	if err := s.MarkFolderRead(inbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNow(demo.GmailAccountID)
+	p, _ := s.ListMessages(models.ListQuery{FolderID: inbox.ID, UnreadOnly: true})
+	if p.Total != 0 {
+		t.Fatalf("unread left: %d", p.Total)
+	}
+	if err := s.EmptyFolder(inbox.ID); err == nil {
+		t.Fatal("emptying the inbox must be refused")
+	}
+	trash, _ := s.store.FolderByKind(demo.OutlookAccountID, models.FolderTrash)
+	if n, _ := s.store.LocalFolderCount(trash.ID); n == 0 {
+		t.Fatal("demo trash is empty")
+	}
+	if err := s.EmptyFolder(trash.ID); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNow(demo.OutlookAccountID)
+	if n, _ := s.store.LocalFolderCount(trash.ID); n != 0 {
+		t.Fatalf("trash not empty: %d", n)
+	}
+}
+
+func TestRemoteContentBlocking(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	res, _ := s.SearchMessages(models.SearchQuery{Query: "morning brew"})
+	m, err := s.Message(res[0].Message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasRemoteContent || !m.RemoteContentBlocked || strings.Contains(m.BodyHTML, "open-pixel") {
+		t.Fatalf("not blocked: remote=%v blocked=%v", m.HasRemoteContent, m.RemoteContentBlocked)
+	}
+	full, _ := s.MessageWithRemoteContent(m.ID)
+	if !strings.Contains(full.BodyHTML, "open-pixel") || full.RemoteContentBlocked {
+		t.Fatal("remote content not restored")
+	}
+	st := s.GetSettings()
+	st.ShowRemoteImages = true
+	s.SaveSettings(st)
+	if m, _ := s.Message(m.ID); m.RemoteContentBlocked {
+		t.Fatal("blocked although showRemoteImages is on")
+	}
+}

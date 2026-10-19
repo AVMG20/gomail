@@ -19,6 +19,7 @@ import (
 	"github.com/AVMG20/gomail/internal/auth"
 	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/demo"
+	"github.com/AVMG20/gomail/internal/mailmime"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/provider/gmail"
@@ -497,3 +498,41 @@ func (s *Service) UpdateAccount(accountID, displayName, color string) error {
 func (s *Service) SyncNow(accountID string) error {
 	return s.engine.SyncNow(s.ctx, accountID)
 }
+
+// UpdateAccountSignature stores a sanitized HTML signature.
+func (s *Service) UpdateAccountSignature(accountID, html string) error {
+	clean := ""
+	if strings.TrimSpace(html) != "" {
+		clean = mailmime.SanitizeHTML(html)
+	}
+	if len(clean) > 64<<10 {
+		return errors.New("the signature is too long (max 64 KB)")
+	}
+	if err := s.store.UpdateSignature(accountID, clean); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errors.New("account not found")
+		}
+		return err
+	}
+	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
+	return nil
+}
+
+// SearchContacts suggests recipients (prefix match on name or email).
+func (s *Service) SearchContacts(query string, limit int) ([]models.Contact, error) {
+	accts, err := s.store.Accounts()
+	if err != nil {
+		return nil, err
+	}
+	own := make([]string, 0, len(accts))
+	for _, a := range accts {
+		own = append(own, a.Email)
+	}
+	return s.store.SearchContacts(query, limit, own)
+}
+
+// MarkFolderRead marks every message of a folder read.
+func (s *Service) MarkFolderRead(folderID string) error { return s.engine.MarkFolderRead(folderID) }
+
+// EmptyFolder permanently deletes the contents of Trash or Spam.
+func (s *Service) EmptyFolder(folderID string) error { return s.engine.EmptyFolder(folderID) }

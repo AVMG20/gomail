@@ -20,10 +20,14 @@ import { api, errorMessage } from '@/lib/api'
 import { shortcutLabel } from '@/lib/platform'
 import { useSettingsStore } from '@/stores/settings'
 import { AiPending, clearArrived, clearPending, markArrived, pendingRange, setPending } from './aiPending'
+import { Signature, setSignature } from './signature'
 
 const props = defineProps<{ modelValue: string; version: number; placeholder?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [html: string]; submit: [] }>()
 const settings = useSettingsStore()
+function openAiSettings() {
+  void import('@/stores/ui').then((m) => m.useUiStore().openSettings('ai'))
+}
 
 const editor = useEditor({
   content: props.modelValue,
@@ -34,6 +38,7 @@ const editor = useEditor({
     }),
     Placeholder.configure({ placeholder: props.placeholder ?? 'Write your message…' }),
     AiPending,
+    Signature,
   ],
   editorProps: {
     attributes: { class: 'compose-editor-content', spellcheck: 'true' },
@@ -194,7 +199,13 @@ async function improveGrammar() {
   }
 }
 
-defineExpose({ editor, improveGrammar })
+function applySignature(html: string) {
+  if (!editor.value) return
+  setSignature(editor.value, html)
+  emit('update:modelValue', editor.value.getHTML())
+}
+
+defineExpose({ editor, improveGrammar, applySignature })
 </script>
 
 <template>
@@ -210,6 +221,10 @@ defineExpose({ editor, improveGrammar })
         <ContextMenuItem :disabled="!snap || snap.from === snap.to" @click="copy"><CopyIcon /> Copy <ContextMenuShortcut>{{ shortcutLabel('mod+c') }}</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuItem @click="paste"><ClipboardPasteIcon /> Paste <ContextMenuShortcut>{{ shortcutLabel('mod+v') }}</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuItem @click="selectAll"><TextSelectIcon /> Select all</ContextMenuItem>
+        <template v-if="!settings.grammarReady">
+          <ContextMenuSeparator />
+          <ContextMenuItem @click="openAiSettings"><SparklesIcon class="text-muted-foreground" /> Set up AI to improve grammar…</ContextMenuItem>
+        </template>
         <template v-if="settings.grammarReady">
           <ContextMenuSeparator />
           <ContextMenuItem :disabled="improving" @click="improveGrammar">

@@ -158,3 +158,8 @@ export function textToHtml(text: string): string {
     .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
     .join('')
 }
+
+/** Wrap a signature for the compose editor (a dedicated Tiptap node parses it). */
+export function signatureBlock(html: string): string {
+  return html.trim() ? `<div data-signature="">${html}</div>` : ''
+}

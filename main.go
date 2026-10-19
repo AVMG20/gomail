@@ -29,6 +29,9 @@ func init() {
 	application.RegisterEvent[models.ClassifyProgress](models.EventClassifyProgress)
 	application.RegisterEvent[models.ClassifyProgress](models.EventClassifyFinished)
 	application.RegisterEvent[models.NewMailEvent](models.EventNewMail)
+	application.RegisterEvent[models.SyncProgress](models.EventSyncProgress)
+	application.RegisterEvent[models.NetworkStatus](models.EventNetworkStatus)
+	application.RegisterEvent[models.SearchUpdated](models.EventSearchUpdated)
 }
 
 func main() {

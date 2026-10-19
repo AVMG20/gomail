@@ -102,7 +102,7 @@ const MATCH_FIELDS: Record<string, string> = { subject: 'subject', from: 'sender
 function matchHint(r: SearchResult): string {
   const field = MATCH_FIELDS[r.matchedIn]
   if (r.fuzzy) return field ? `Similar match in ${field}` : 'Similar match'
-  if (field && !r.highlight.includes('<mark>')) return `Matched in ${field}`
+  if (field && r.matchedIn !== 'subject' && !r.highlight.includes('<mark>')) return `Matched in ${field}`
   return ''
 }
 
@@ -242,6 +242,12 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+// Strong local matches (an action/mailbox name) beat purely typo-tolerant mail hits.
+const order = computed(() => {
+  const weakMail = results.value.length > 0 && results.value.every((r) => r.fuzzy)
+  return weakMail || !results.value.length ? ['actions', 'labels', 'mailboxes', 'mail'] : ['labels', 'mail', 'mailboxes', 'actions']
+})
+
 const activeLabels = computed(() => mail.labelFilter.labels.map((id) => settings.labelMap.get(id)).filter((l): l is Label => !!l))
 const nothing = computed(() => q.value && !searching.value && !results.value.length && !labelItems.value.length && !mailboxItems.value.length && !actions.value.length && !completions.value.length)
 const accountOf = (id: string) => accounts.accountMap.get(id)
@@ -299,61 +305,68 @@ const tipKeys = shortcutLabel('mod+enter')
             </CmdItem>
           </CmdGroup>
 
-          <CmdGroup v-if="labelItems.length" heading="Labels">
-            <CmdItem v-for="l in labelItems" :key="l.id" :value="`label:${l.id}`" @select="mail.toggleLabelFilter(l.id)">
-              <span class="size-2.5 rounded-full" :style="{ background: l.color }" />
-              <span class="flex-1 truncate">{{ l.name }}</span>
-              <span class="text-muted-foreground text-xs">{{ mail.labelFilter.labels.includes(l.id) ? 'Filtering' : 'Filter list' }}</span>
-              <CheckIcon class="size-4" :class="mail.labelFilter.labels.includes(l.id) ? 'opacity-100' : 'opacity-0'" />
-            </CmdItem>
-          </CmdGroup>
-
-          <!-- Server results (backend ranking preserved) -->
-          <CmdGroup v-if="results.length" heading="Mail">
-            <CmdItem v-for="r in results" :key="r.message.id" :value="`mail:${r.message.id}`" class="items-start py-2" @select="openResult(r)">
-              <span class="mt-1.5 size-2 shrink-0 rounded-full" :style="{ background: accountOf(r.message.accountId)?.color ?? 'var(--muted-foreground)' }" :title="accountOf(r.message.accountId)?.email" />
-              <span class="min-w-0 flex-1">
-                <span class="flex items-center gap-2">
-                  <span :class="['truncate text-[13px]', r.message.unread ? 'font-semibold' : 'font-medium']">{{ displayName(r.message.from) }}</span>
-                  <span class="text-muted-foreground ml-auto shrink-0 text-[11px]">{{ listDate(r.message.date) }}</span>
+          <template v-for="section in order" :key="section">
+            <template v-if="section === 'labels'">
+            <CmdGroup v-if="labelItems.length" heading="Labels">
+              <CmdItem v-for="l in labelItems" :key="l.id" :value="`label:${l.id}`" @select="mail.toggleLabelFilter(l.id)">
+                <span class="size-2.5 rounded-full" :style="{ background: l.color }" />
+                <span class="flex-1 truncate">{{ l.name }}</span>
+                <span class="text-muted-foreground text-xs">{{ mail.labelFilter.labels.includes(l.id) ? 'Filtering' : 'Filter list' }}</span>
+                <CheckIcon class="size-4" :class="mail.labelFilter.labels.includes(l.id) ? 'opacity-100' : 'opacity-0'" />
+              </CmdItem>
+            </CmdGroup>
+            </template>
+            <template v-if="section === 'mail'">
+            <!-- Server results (backend ranking preserved) -->
+            <CmdGroup v-if="results.length" heading="Mail">
+              <CmdItem v-for="r in results" :key="r.message.id" :value="`mail:${r.message.id}`" class="items-start py-2" @select="openResult(r)">
+                <span class="mt-1.5 size-2 shrink-0 rounded-full" :style="{ background: accountOf(r.message.accountId)?.color ?? 'var(--muted-foreground)' }" :title="accountOf(r.message.accountId)?.email" />
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-center gap-2">
+                    <span :class="['truncate text-[13px]', r.message.unread ? 'font-semibold' : 'font-medium']">{{ displayName(r.message.from) }}</span>
+                    <span class="text-muted-foreground ml-auto shrink-0 text-[11px]">{{ listDate(r.message.date) }}</span>
+                  </span>
+                  <span class="block truncate text-[13px]">{{ r.message.subject || '(no subject)' }}</span>
+                  <!-- eslint-disable-next-line vue/no-v-html -- sanitized to <mark> only -->
+                  <span class="text-muted-foreground line-clamp-1 text-xs" v-html="safeHighlight(r.highlight)" />
+                  <span v-if="matchHint(r)" class="text-muted-foreground/80 mt-0.5 block text-[10.5px]">{{ matchHint(r) }}</span>
                 </span>
-                <span class="block truncate text-[13px]">{{ r.message.subject || '(no subject)' }}</span>
-                <!-- eslint-disable-next-line vue/no-v-html -- sanitized to <mark> only -->
-                <span class="text-muted-foreground line-clamp-1 text-xs" v-html="safeHighlight(r.highlight)" />
-                <span v-if="matchHint(r)" class="text-muted-foreground/80 mt-0.5 block text-[10.5px]">{{ matchHint(r) }}</span>
-              </span>
-              <span v-if="r.message.labels.length" class="mt-0.5 flex shrink-0 gap-1">
-                <template v-for="id in r.message.labels.slice(0, 2)" :key="id">
-                  <LabelPill v-if="settings.labelMap.get(id)" :label="settings.labelMap.get(id)!" />
-                </template>
-              </span>
-            </CmdItem>
-            <CmdItem :value="'mail:all'" @select="showAll">
-              <SearchIcon class="text-muted-foreground size-4" />
-              <span class="flex-1">Show all results for “{{ q }}”</span>
-              <KeyCaps combo="mod+enter" />
-            </CmdItem>
-          </CmdGroup>
-
-          <CmdGroup v-if="mailboxItems.length" heading="Mailboxes">
-            <CmdItem v-for="(x, i) in mailboxItems" :key="x.key" :value="`mb:${x.key}`" @select="pickMailbox(x)">
-              <AccountAvatar v-if="x.isAccount && accountOf(x.accountId)" :account="accountOf(x.accountId)!" :size="18" :glyph="false" />
-              <component :is="x.icon" v-else class="text-muted-foreground size-4" />
-              <span class="truncate">{{ x.title }}</span>
-              <span class="text-muted-foreground truncate text-xs">{{ x.subtitle }}</span>
-              <span class="ml-auto" />
-              <KeyCaps v-if="x.isAccount && !q && i < 10" :combo="`mod+${accounts.accounts.findIndex((a) => a.id === x.accountId) + 1}`" />
-              <KeyCaps v-else-if="x.key === 'all' && !q" combo="mod+0" />
-            </CmdItem>
-          </CmdGroup>
-
-          <CmdGroup v-if="actions.length" heading="Actions">
-            <CmdItem v-for="a in actions" :key="a.id" :value="`act:${a.id}`" @select="runAction(a)">
-              <component :is="a.icon" class="text-muted-foreground size-4" :class="a.icon === SparklesIcon && 'text-violet-500'" />
-              <span class="flex-1 truncate">{{ a.title }}</span>
-              <KeyCaps v-if="a.shortcut" :combo="a.shortcut" />
-            </CmdItem>
-          </CmdGroup>
+                <span v-if="r.message.labels.length" class="mt-0.5 flex shrink-0 gap-1">
+                  <template v-for="id in r.message.labels.slice(0, 2)" :key="id">
+                    <LabelPill v-if="settings.labelMap.get(id)" :label="settings.labelMap.get(id)!" />
+                  </template>
+                </span>
+              </CmdItem>
+              <CmdItem :value="'mail:all'" @select="showAll">
+                <SearchIcon class="text-muted-foreground size-4" />
+                <span class="flex-1">Show all results for “{{ q }}”</span>
+                <KeyCaps combo="mod+enter" />
+              </CmdItem>
+            </CmdGroup>
+            </template>
+            <template v-if="section === 'mailboxes'">
+            <CmdGroup v-if="mailboxItems.length" heading="Mailboxes">
+              <CmdItem v-for="(x, i) in mailboxItems" :key="x.key" :value="`mb:${x.key}`" @select="pickMailbox(x)">
+                <AccountAvatar v-if="x.isAccount && accountOf(x.accountId)" :account="accountOf(x.accountId)!" :size="18" :glyph="false" />
+                <component :is="x.icon" v-else class="text-muted-foreground size-4" />
+                <span class="truncate">{{ x.title }}</span>
+                <span class="text-muted-foreground truncate text-xs">{{ x.subtitle }}</span>
+                <span class="ml-auto" />
+                <KeyCaps v-if="x.isAccount && !q && i < 10" :combo="`mod+${accounts.accounts.findIndex((a) => a.id === x.accountId) + 1}`" />
+                <KeyCaps v-else-if="x.key === 'all' && !q" combo="mod+shift+0" />
+              </CmdItem>
+            </CmdGroup>
+            </template>
+            <template v-if="section === 'actions'">
+            <CmdGroup v-if="actions.length" heading="Actions">
+              <CmdItem v-for="a in actions" :key="a.id" :value="`act:${a.id}`" @select="runAction(a)">
+                <component :is="a.icon" class="text-muted-foreground size-4" :class="a.icon === SparklesIcon && 'text-violet-500'" />
+                <span class="flex-1 truncate">{{ a.title }}</span>
+                <KeyCaps v-if="a.shortcut" :combo="a.shortcut" />
+              </CmdItem>
+            </CmdGroup>
+            </template>
+          </template>
 
           <div v-if="nothing" class="px-6 py-10 text-center">
             <p class="text-sm font-medium">No results for “{{ q }}”</p>

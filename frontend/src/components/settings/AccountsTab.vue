@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { defineAsyncComponent, ref } from 'vue'
 import { PlusIcon, RefreshCwIcon, Trash2Icon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -26,6 +26,15 @@ const settings = useSettingsStore()
 const mail = useMailStore()
 const ui = useUiStore()
 const removing = ref<Account | null>(null)
+const editingSig = ref<string | null>(null)
+const SignatureEditor = defineAsyncComponent(() => import('./SignatureEditor.vue'))
+let sigTimer: ReturnType<typeof setTimeout> | null = null
+function saveSig(id: string, html: string) {
+  if (sigTimer) clearTimeout(sigTimer)
+  sigTimer = setTimeout(() => {
+    accounts.saveSignature(id, html).catch((e) => toast.error('Could not save signature', { description: errorMessage(e) }))
+  }, 700)
+}
 
 async function save(a: Account, patch: Partial<Pick<Account, 'displayName' | 'color'>>) {
   const name = patch.displayName ?? a.displayName
@@ -59,12 +68,14 @@ async function remove() {
 <template>
   <div v-if="settings.settings">
     <SettingSection title="Accounts">
-      <div v-for="a in accounts.accounts" :key="a.id" class="flex items-center gap-3 py-3">
+      <template v-for="a in accounts.accounts" :key="a.id">
+      <div class="flex items-center gap-3 py-3">
         <AccountAvatar :account="a" :size="36" />
         <div class="min-w-0 flex-1">
           <Input :model-value="a.displayName" class="h-8 max-w-64 text-[13px] font-medium" aria-label="Account name" @change="(e: Event) => save(a, { displayName: (e.target as HTMLInputElement).value.trim() || a.email })" />
           <div class="text-muted-foreground mt-1 truncate pl-0.5 text-xs">
             {{ a.email }} · {{ a.provider === 'gmail' ? 'Gmail' : 'Outlook' }} · <span :class="a.syncError && 'text-destructive'">{{ a.syncError ? a.syncError : `synced ${relativeTime(a.lastSyncAt)}` }}</span>
+            · <button type="button" class="hover:text-foreground underline-offset-2 hover:underline" @click="editingSig = editingSig === a.id ? null : a.id">{{ a.signature ? 'Edit signature' : 'Add signature' }}</button>
           </div>
         </div>
         <Popover>
@@ -82,6 +93,10 @@ async function remove() {
         <Button variant="ghost" size="icon-sm" aria-label="Sync now" @click="accounts.sync(a.id)"><RefreshCwIcon :class="accounts.syncing.has(a.id) && 'animate-spin'" /></Button>
         <Button variant="ghost" size="icon-sm" class="hover:text-destructive" aria-label="Remove account" @click="removing = a"><Trash2Icon /></Button>
       </div>
+      <div v-if="editingSig === a.id" class="-mt-1 pb-3 pl-12">
+        <SignatureEditor :model-value="a.signature ?? ''" @update:model-value="(v: string) => saveSig(a.id, v)" />
+      </div>
+      </template>
       <div class="py-3">
         <Button variant="outline" size="sm" @click="ui.addAccountOpen = true"><PlusIcon /> Add account</Button>
       </div>

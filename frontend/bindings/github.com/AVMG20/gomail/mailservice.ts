@@ -74,6 +74,13 @@ export function DeleteDraft(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * EmptyFolder permanently deletes everything in a Trash or Spam folder.
+ */
+export function EmptyFolder(folderID: string): $CancellablePromise<void> {
+    return $Call.ByID(2763767611, folderID);
+}
+
+/**
  * EstimateClassify estimates how many messages ClassifyQuery would label
  * and what it would cost.
  */
@@ -188,6 +195,13 @@ export function LoadOlder(q: models$0.ListQuery): $CancellablePromise<number> {
     return $Call.ByID(2167194788, q);
 }
 
+/**
+ * MarkFolderRead marks every message of a folder read.
+ */
+export function MarkFolderRead(folderID: string): $CancellablePromise<void> {
+    return $Call.ByID(1032349627, folderID);
+}
+
 export function MarkRead(ids: string[] | null, read: boolean): $CancellablePromise<void> {
     return $Call.ByID(2773403271, ids, read);
 }
@@ -261,6 +275,13 @@ export function SaveSettings(st: models$0.Settings): $CancellablePromise<void> {
 }
 
 /**
+ * SearchContacts suggests recipients ranked by frequency and recency.
+ */
+export function SearchContacts(query: string, limit: number): $CancellablePromise<models$0.Contact[] | null> {
+    return $Call.ByID(824865675, query, limit);
+}
+
+/**
  * SearchMessages runs a ranked, typo-tolerant search (command palette).
  */
 export function SearchMessages(q: models$0.SearchQuery): $CancellablePromise<models$0.SearchResult[] | null> {
@@ -324,4 +345,11 @@ export function Unsubscribe(messageID: string): $CancellablePromise<models$0.Uns
  */
 export function UpdateAccount(accountID: string, displayName: string, color: string): $CancellablePromise<void> {
     return $Call.ByID(2975065014, accountID, displayName, color);
+}
+
+/**
+ * UpdateAccountSignature sets an account's HTML signature (sanitized).
+ */
+export function UpdateAccountSignature(accountID: string, html: string): $CancellablePromise<void> {
+    return $Call.ByID(3311730108, accountID, html);
 }

@@ -33,7 +33,9 @@ func latestInThread(w *where) {
 		inner = append(inner, aliasRe.ReplaceAllString(c, "n."))
 	}
 	args := append([]any(nil), w.args...)
-	w.add(`NOT EXISTS (SELECT 1 FROM messages n WHERE `+strings.Join(inner, " AND ")+`)`, args...)
+	// INDEXED BY keeps the planner on the thread index (another index on
+	// e.g. unread would make this quadratic).
+	w.add(`NOT EXISTS (SELECT 1 FROM messages n INDEXED BY messages_thread_key WHERE `+strings.Join(inner, " AND ")+`)`, args...)
 }
 
 // ListMessages returns one page of message summaries (or conversations),
@@ -51,11 +53,17 @@ func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.Messag
 	if err != nil {
 		return page, err
 	}
+	// In conversation view the total is the number of distinct threads
+	// with a matching message (cheaper than counting latest-per-thread rows).
+	countExpr := `count(*)`
+	if opt.Conversations {
+		countExpr = `count(DISTINCT m.account_id || char(0) || m.thread_key)`
+	}
+	if page.Total, err = s.cachedCount(`SELECT `+countExpr+` FROM messages m`+w.sql(), w.args); err != nil {
+		return page, err
+	}
 	if opt.Conversations {
 		latestInThread(w)
-	}
-	if err := s.db.QueryRow(`SELECT count(*) FROM messages m`+w.sql(), w.args...).Scan(&page.Total); err != nil {
-		return page, err
 	}
 	if q.Cursor != "" {
 		d, id, err := decodeCursor(q.Cursor)
@@ -370,7 +378,9 @@ func (s *Store) SetOlderDone(accountID, folderID string, done bool) error {
 	if done {
 		v = "1"
 	}
-	return s.tx(context.Background(), func(tx *sql.Tx) error { return saveSyncState(tx, accountID, map[string]string{olderDoneKey(folderID): v}) })
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		return saveSyncState(tx, accountID, map[string]string{olderDoneKey(folderID): v})
+	})
 }
 
 func (s *Store) hasMoreRemote(q models.ListQuery) bool {

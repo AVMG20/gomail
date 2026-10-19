@@ -21,6 +21,7 @@ import ReauthBanner from './ReauthBanner.vue'
 import { defineAsyncComponent, h } from 'vue'
 const BulkBar = defineAsyncComponent(() => import('./BulkBar.vue'))
 const RowContextMenu = defineAsyncComponent(() => import('./RowContextMenu.vue'))
+const FolderActions = defineAsyncComponent(() => import('./FolderActions.vue'))
 // Static stand-in while the (popover-heavy) filter chunk loads.
 const LabelFilter = defineAsyncComponent({
   loader: () => import('./LabelFilter.vue'),
@@ -288,6 +289,7 @@ const emptyState = computed(() => {
               <RefreshCwIcon :class="syncing && 'animate-spin'" />
             </Button>
           </Tip>
+          <FolderActions />
         </template>
       </div>
 
@@ -367,7 +369,7 @@ const emptyState = computed(() => {
     <!-- List -->
         <div
           ref="scroller"
-          class="thin-scroll @container relative min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+          class="thin-scroll @container relative min-h-0 flex-1 overflow-y-auto outline-none"
           role="listbox"
           tabindex="0"
           :aria-label="`${mail.mailboxName}, ${mail.total} messages`"

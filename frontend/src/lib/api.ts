@@ -4,7 +4,7 @@
 // in-memory mock in ./mock.
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
-  EventPayloads, Folder, LabelCount, AttachmentData, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings,
+  EventPayloads, Folder, LabelCount, AttachmentData, Contact, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings,
 } from './types'
 import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
 
@@ -107,7 +107,7 @@ export const USED_METHODS = [
   'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
-export const OPTIONAL_METHODS = ['GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels']
+export const OPTIONAL_METHODS = ['UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels']
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -201,6 +201,9 @@ function normSettings(s: Settings): Settings {
     showInTray: s.showInTray ?? readLocal('showInTray', true),
     closeToTray: s.closeToTray ?? readLocal('closeToTray', false),
     conversationView: s.conversationView ?? readLocal('conversationView', true),
+    markReadMode: s.markReadMode ?? readLocal('markReadMode', 'immediate'),
+    readingPane: s.readingPane ?? readLocal('readingPane', 'right'),
+    zoom: s.zoom ?? readLocal('zoom', 1),
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
   }
 }
@@ -270,6 +273,20 @@ export const api = {
     return call<void>('OpenExternalURL', url)
   },
 
+  updateAccountSignature: (id: string, html: string) => call<void>('UpdateAccountSignature', id, html),
+  /** Frequency-ranked contacts from all mail (backend pass 3). */
+  searchContacts: async (query: string, limit = 8): Promise<Contact[]> => (await call<Contact[] | null>('SearchContacts', query, limit)) ?? [],
+  emptyFolder: (folderId: string) => call<void>('EmptyFolder', folderId),
+  markFolderRead: (folderId: string) => call<void>('MarkFolderRead', folderId),
+  /** UI zoom: native webview zoom in Wails, CSS zoom in the browser. */
+  async setZoom(z: number) {
+    if (isWails() && runtime) {
+      await runtime.Window.SetZoom(z)
+      return
+    }
+    ;(document.documentElement.style as CSSStyleDeclaration & { zoom: string }).zoom = String(z)
+  },
+
   /** Fetch older mail from the server beyond the local cache (backend pass 2). */
   loadOlder: async (q: Partial<ListQuery>): Promise<number> => {
     const r = await call<number | { added?: number } | null>('LoadOlder', normQuery(q))
@@ -300,6 +317,9 @@ export const api = {
     writeLocal('undoSendSeconds', s.undoSendSeconds)
     writeLocal('closeToTray', s.closeToTray)
     writeLocal('conversationView', s.conversationView)
+    writeLocal('markReadMode', s.markReadMode)
+    writeLocal('readingPane', s.readingPane)
+    writeLocal('zoom', s.zoom)
     return call<void>('SaveSettings', s)
   },
   setOpenRouterKey: (key: string) => call<void>('SetOpenRouterKey', key),

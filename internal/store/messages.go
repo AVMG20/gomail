@@ -93,19 +93,28 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		// Folder remote id -> local id (skipping "starred", which is
 		// computed from the flag).
 		folderIDs := map[string]string{}
-		rows, err := tx.Query(`SELECT id, remote_id FROM folders WHERE account_id = ? AND kind != 'starred'`, accountID)
+		sentFolders := map[string]bool{}
+		rows, err := tx.Query(`SELECT id, remote_id, kind FROM folders WHERE account_id = ? AND kind != 'starred'`, accountID)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var id, rid string
-			if err := rows.Scan(&id, &rid); err != nil {
+			var id, rid, kind string
+			if err := rows.Scan(&id, &rid, &kind); err != nil {
 				rows.Close()
 				return err
 			}
 			folderIDs[rid] = id
+			sentFolders[rid] = kind == "sent"
 		}
 		rows.Close()
+		contact, err := tx.Prepare(`INSERT INTO contacts(email, name, count, last_seen) VALUES(?, ?, ?, ?)
+			ON CONFLICT(email) DO UPDATE SET count = count + excluded.count, last_seen = max(last_seen, excluded.last_seen),
+				name = CASE WHEN excluded.name != '' AND (name = '' OR excluded.last_seen >= last_seen) THEN excluded.name ELSE name END`)
+		if err != nil {
+			return err
+		}
+		defer contact.Close()
 
 		exists, err := tx.Prepare(`SELECT 1 FROM messages WHERE id = ?`)
 		if err != nil {
@@ -147,6 +156,11 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 			return err
 		}
 		defer pl.close()
+		kinds, err := newKindsUpdater(tx)
+		if err != nil {
+			return err
+		}
+		defer kinds.close()
 		vins, err := tx.Prepare(`INSERT OR IGNORE INTO vocab(term) VALUES(?)`)
 		if err != nil {
 			return err
@@ -167,6 +181,28 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 			}
 			if isNew {
 				res.New = append(res.New, id)
+				sent := false
+				for _, fr := range m.FolderRemoteIDs {
+					sent = sent || sentFolders[fr]
+				}
+				addContact := func(a models.Address, weight int) error {
+					if a.Email == "" || !strings.Contains(a.Email, "@") {
+						return nil
+					}
+					_, err := contact.Exec(strings.ToLower(a.Email), a.Name, weight, toMillis(m.Date))
+					return err
+				}
+				weight := 1
+				if sent {
+					weight = 5
+				} else if err := addContact(m.From, 1); err != nil {
+					return err
+				}
+				for _, a := range append(append([]models.Address{}, m.To...), m.Cc...) {
+					if err := addContact(a, weight); err != nil {
+						return err
+					}
+				}
 			}
 			if _, err := delMF.Exec(id); err != nil {
 				return err
@@ -178,7 +214,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 					}
 				}
 			}
-			if err := recomputeKinds(tx, id, ""); err != nil {
+			if err := kinds.update(id); err != nil {
 				return err
 			}
 			for _, vw := range vocabWords(m) {
@@ -213,7 +249,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				if _, err := tx.Exec(`DELETE FROM message_folders WHERE folder_id = ? AND message_id = ?`, fid, mid); err != nil {
 					return err
 				}
-				if err := recomputeKinds(tx, mid, ""); err != nil {
+				if err := kinds.update(mid); err != nil {
 					return err
 				}
 			}
@@ -858,12 +894,12 @@ func (s *Store) DeleteUnknownLabels(valid []string) error {
 // optionally restricted to one account. Messages in Trash are not
 // counted.
 func (s *Store) LabelCounts(accountID string) ([]models.LabelCount, error) {
-	q := `SELECT ml.label_id, count(*), coalesce(sum(m.unread), 0)
-		FROM message_labels ml JOIN messages m ON m.id = ml.message_id
-		WHERE (m.folder_kinds & 32) = 0` + s.labelCond()
+	// message_labels carries denormalized account_id/unread/trashed columns
+	// (kept current by triggers), so this is an index-only scan.
+	q := `SELECT ml.label_id, count(*), coalesce(sum(ml.unread), 0) FROM message_labels ml WHERE ml.trashed = 0` + s.labelCond()
 	var args []any
 	if accountID != "" {
-		q += ` AND m.account_id = ?`
+		q += ` AND ml.account_id = ?`
 		args = append(args, accountID)
 	}
 	q += ` GROUP BY ml.label_id ORDER BY ml.label_id`

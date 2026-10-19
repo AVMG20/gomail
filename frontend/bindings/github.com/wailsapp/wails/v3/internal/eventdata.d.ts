@@ -18,7 +18,10 @@ declare module "@wailsio/runtime" {
             "labels:changed": models$0.AccountEvent;
             "mail:new": models$0.NewMailEvent;
             "messages:changed": models$0.AccountEvent;
+            "network:status": models$0.NetworkStatus;
+            "search:updated": models$0.SearchUpdated;
             "sync:finished": models$0.SyncEvent;
+            "sync:progress": models$0.SyncProgress;
             "sync:started": models$0.SyncEvent;
         }
     }

@@ -1043,4 +1043,56 @@ func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.Outgo
 	return "", nil
 }
 
+// ---- folder-wide operations ----
+
+// folderIDs lists message ids of a folder (optionally filtered).
+func (c *Client) folderIDs(ctx context.Context, folderID, filter string) ([]string, error) {
+	q := url.Values{"$select": {"id"}, "$top": {"1000"}}
+	if filter != "" {
+		q.Set("$filter", filter)
+	}
+	next := "me/mailFolders/" + url.PathEscape(folderID) + "/messages?" + q.Encode()
+	var ids []string
+	for next != "" && len(ids) < provider.MaxFolderOp {
+		var resp struct {
+			Value []struct {
+				ID string `json:"id"`
+			} `json:"value"`
+			NextLink string `json:"@odata.nextLink"`
+		}
+		if err := c.api.JSON(ctx, http.MethodGet, next, nil, &resp); err != nil {
+			return nil, err
+		}
+		for _, v := range resp.Value {
+			ids = append(ids, v.ID)
+		}
+		next = resp.NextLink
+	}
+	return ids, nil
+}
+
+func (c *Client) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
+	if folder.RemoteID == Flagged {
+		return provider.ErrUnsupported
+	}
+	ids, err := c.folderIDs(ctx, folder.RemoteID, "isRead eq false")
+	if err != nil {
+		return err
+	}
+	return c.SetRead(ctx, ids, true)
+}
+
+func (c *Client) EmptyFolder(ctx context.Context, folder mail.Folder) error {
+	if folder.Kind != models.FolderTrash && folder.Kind != models.FolderSpam {
+		return errors.New("only Deleted Items and Junk Email can be emptied")
+	}
+	ids, err := c.folderIDs(ctx, folder.RemoteID, "")
+	if err != nil {
+		return err
+	}
+	return c.batchEach(ctx, ids, func(id string) batchReq {
+		return batchReq{Method: http.MethodPost, URL: "/me/messages/" + url.PathEscape(id) + "/permanentDelete", Body: map[string]any{}}
+	})
+}
+
 var _ provider.Provider = (*Client)(nil)

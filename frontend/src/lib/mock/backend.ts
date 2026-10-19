@@ -234,7 +234,7 @@ class MockBackend {
 
   private highlight(m: Message, p: ParsedSearch, matchedIn: string): string {
     const body = (m.bodyText || m.snippet).replace(/\s+/g, ' ')
-    const source = matchedIn === 'from' ? `${m.from.name} <${m.from.email}>` : body
+    const source = matchedIn === 'from' ? `${m.from.name} <${m.from.email}>` : matchedIn === 'subject' ? m.subject : body
     const needles = [...p.phrases, ...p.terms, ...p.from, ...p.subject].filter((n) => n.length > 0)
     const lower = source.toLowerCase()
     let start = 0
@@ -420,6 +420,48 @@ class MockBackend {
     }
     this.changed(q.accountId)
     return added
+  }
+
+  async UpdateAccountSignature(id: string, html: string): Promise<void> {
+    await latency(40, 100)
+    const a = this.accounts.find((x) => x.id === id)
+    if (!a) throw new Error('account not found')
+    a.signature = html
+    this.emit('accounts:changed', { accountId: id })
+  }
+
+  async SearchContacts(query: string, limit = 8): Promise<{ name: string; email: string; count: number }[]> {
+    await latency(15, 50)
+    const q = query.trim().toLowerCase()
+    const own = new Set(this.accounts.map((a) => a.email.toLowerCase()))
+    const map = new Map<string, { name: string; email: string; count: number }>()
+    for (const m of this.messages.values()) {
+      for (const a of [m.from, ...m.to, ...m.cc]) {
+        const key = a.email.toLowerCase()
+        if (own.has(key)) continue
+        const c = map.get(key) ?? { name: a.name, email: a.email, count: 0 }
+        c.count++
+        if (!c.name && a.name) c.name = a.name
+        map.set(key, c)
+      }
+    }
+    return [...map.values()]
+      .filter((c) => !q || c.email.toLowerCase().includes(q) || c.name.toLowerCase().includes(q))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, limit)
+  }
+
+  async EmptyFolder(folderId: string): Promise<void> {
+    await sleep(400)
+    for (const [id, m] of this.messages) if (m.folderIds.includes(folderId)) this.messages.delete(id)
+    this.changed(folderId.split(':')[0])
+  }
+
+  async MarkFolderRead(folderId: string): Promise<void> {
+    await latency(80, 200)
+    this.version++
+    for (const m of this.messages.values()) if (m.folderIds.includes(folderId)) m.unread = false
+    this.changed(folderId.split(':')[0])
   }
 
   async ReauthAccount(id: string): Promise<Account> {

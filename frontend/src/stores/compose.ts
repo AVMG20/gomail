@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
-import { displayName, escapeHtml, formatAddress, htmlToText, longDate, textToHtml } from '@/lib/format'
+import { displayName, escapeHtml, formatAddress, htmlToText, isEmail, longDate, signatureBlock, textToHtml } from '@/lib/format'
 import { uid } from '@/lib/platform'
 import type { Address, ComposeMode, Message } from '@/lib/types'
 import { useAccountsStore } from './accounts'
@@ -127,6 +127,11 @@ export const useComposeStore = defineStore('compose', () => {
       minimized: false, expanded: false, sending: false, version: 0,
       ...partial,
     }
+    // New messages start with the From account's signature.
+    if (!partial.html && d.mode === 'new') {
+      const sig = accounts.accountMap.get(d.accountId)?.signature ?? ''
+      d.html = sig ? `<p></p>${signatureBlock(sig)}` : ''
+    }
     // Minimise other windows; keep at most four drafts in the dock (queued sends are never dropped).
     drafts.value.forEach((x) => (x.minimized = true))
     const next = [...drafts.value, d]
@@ -159,7 +164,8 @@ export const useComposeStore = defineStore('compose', () => {
     const header = mode === 'forward'
       ? `<p>---------- Forwarded message ----------<br>From: ${escapeHtml(formatAddress(m.from))}<br>Date: ${escapeHtml(longDate(m.date))}<br>Subject: ${escapeHtml(m.subject)}<br>To: ${escapeHtml(m.to.map(formatAddress).join(', '))}</p>`
       : `<p>On ${escapeHtml(longDate(m.date))}, ${escapeHtml(displayName(m.from))} wrote:</p>`
-    const html = `<p></p><p></p>${header}<blockquote>${await quotedBody(m)}</blockquote>`
+    const sig = accounts.accountMap.get(m.accountId)?.signature ?? ''
+    const html = `<p></p>${signatureBlock(sig)}<p></p>${header}<blockquote>${await quotedBody(m)}</blockquote>`
     return create({
       mode, accountId: m.accountId, to, cc, showCc: cc.length > 0,
       subject: prefixSubject(mode === 'forward' ? 'Fwd' : 'Re', m.subject), html, replyToId: m.id,
@@ -224,6 +230,11 @@ export const useComposeStore = defineStore('compose', () => {
     if (!d || d.sending || d.queued) return
     if (!d.to.length && !d.cc.length && !d.bcc.length) {
       toast.error('Add at least one recipient')
+      return
+    }
+    const invalid = [...d.to, ...d.cc, ...d.bcc].filter((a) => !isEmail(a.email))
+    if (invalid.length) {
+      toast.error(`Check ${invalid.length === 1 ? 'this address' : 'these addresses'}: ${invalid.map((a) => a.email).join(', ')}`)
       return
     }
     if (delaySeconds > 0) {

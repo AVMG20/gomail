@@ -31,6 +31,40 @@ type Store struct {
 
 	vocabMu sync.Mutex
 	vocab   *vocab // lazily loaded spelling vocabulary
+
+	// gen increments on every committed write transaction; it invalidates
+	// cached list totals (infinite scroll re-asks for the same count).
+	gen        atomic.Int64
+	countMu    sync.Mutex
+	countCache map[string]countEntry
+}
+
+type countEntry struct {
+	gen   int64
+	count int
+}
+
+// cachedCount runs a COUNT query, reusing the result until the next write.
+func (s *Store) cachedCount(q string, args []any) (int, error) {
+	key := q + "\x00" + fmt.Sprint(args...)
+	gen := s.gen.Load()
+	s.countMu.Lock()
+	if e, ok := s.countCache[key]; ok && e.gen == gen {
+		s.countMu.Unlock()
+		return e.count, nil
+	}
+	s.countMu.Unlock()
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	s.countMu.Lock()
+	if s.countCache == nil || len(s.countCache) > 64 {
+		s.countCache = map[string]countEntry{}
+	}
+	s.countCache[key] = countEntry{gen, n}
+	s.countMu.Unlock()
+	return n, nil
 }
 
 // SetHideProviderLabels hides (true) or shows provider-sourced label
@@ -149,7 +183,9 @@ func (s *Store) tx(ctx context.Context, f func(*sql.Tx) error) error {
 		_ = t.Rollback()
 		return err
 	}
-	return t.Commit()
+	err = t.Commit()
+	s.gen.Add(1)
+	return err
 }
 
 // ---- settings ----
@@ -238,10 +274,23 @@ func kindMask(kinds []string) int {
 const kindBitSQL = `CASE f.kind WHEN 'inbox' THEN 1 WHEN 'sent' THEN 2 WHEN 'drafts' THEN 4 WHEN 'archive' THEN 8
 	WHEN 'spam' THEN 16 WHEN 'trash' THEN 32 WHEN 'custom' THEN 64 ELSE 0 END`
 
+const recomputeKindsSQL = `UPDATE messages SET folder_kinds = coalesce((SELECT sum(DISTINCT ` + kindBitSQL + `)
+		FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = messages.id), 0)`
+
+// kindsUpdater prepares the per-message folder_kinds refresh once per tx.
+type kindsUpdater struct{ st *sql.Stmt }
+
+func newKindsUpdater(tx *sql.Tx) (*kindsUpdater, error) {
+	st, err := tx.Prepare(recomputeKindsSQL + ` WHERE id = ?`)
+	return &kindsUpdater{st}, err
+}
+
+func (k *kindsUpdater) update(id string) error { _, err := k.st.Exec(id); return err }
+func (k *kindsUpdater) close()                 { k.st.Close() }
+
 // recomputeKinds refreshes messages.folder_kinds for one message ("" + accountID = all of an account).
 func recomputeKinds(tx *sql.Tx, msgID, accountID string) error {
-	q := `UPDATE messages SET folder_kinds = coalesce((SELECT sum(DISTINCT ` + kindBitSQL + `)
-		FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = messages.id), 0)`
+	q := recomputeKindsSQL
 	var err error
 	if msgID != "" {
 		_, err = tx.Exec(q+` WHERE id = ?`, msgID)

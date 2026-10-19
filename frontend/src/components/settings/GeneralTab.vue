@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { Switch } from '@/components/ui/switch'
+import { Slider } from '@/components/ui/slider'
+import { shortcutLabel } from '@/lib/platform'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useSettingsStore } from '@/stores/settings'
 import { useMailStore } from '@/stores/mail'
@@ -20,6 +22,27 @@ async function setConversation(v: boolean) {
     <SettingSection title="Reading">
       <SettingRow title="Group messages into conversations" description="Show one row per conversation instead of one per message.">
         <Switch :model-value="settings.settings.conversationView ?? true" @update:model-value="(v: boolean) => setConversation(v)" />
+      </SettingRow>
+      <SettingRow title="Mark as read" description="When an opened message counts as read.">
+        <Select :model-value="settings.settings.markReadMode ?? 'immediate'" @update:model-value="(v) => settings.update({ markReadMode: v as 'immediate' | 'delay' | 'manual' })">
+          <SelectTrigger class="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="immediate">Immediately</SelectItem>
+            <SelectItem value="delay">After 2 seconds</SelectItem>
+            <SelectItem value="manual">Manually</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow title="Reading pane" description="Off shows a full-width list; messages open in place with a back button.">
+        <div class="bg-muted inline-flex rounded-lg p-0.5">
+          <button v-for="o in [{ v: 'right', l: 'Right' }, { v: 'off', l: 'Off' }]" :key="o.v" type="button" :class="['rounded-md px-3 py-1 text-xs font-medium transition-colors', (settings.settings.readingPane ?? 'right') === o.v ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground']" @click="settings.update({ readingPane: o.v as 'right' | 'off' })">{{ o.l }}</button>
+        </div>
+      </SettingRow>
+      <SettingRow title="Text size" :description="`${Math.round((settings.settings.zoom ?? 1) * 100)}% · ${shortcutLabel('mod+=')} / ${shortcutLabel('mod+-')} / ${shortcutLabel('mod+0')}`">
+        <div class="flex w-56 items-center gap-3">
+          <Slider :model-value="[settings.settings.zoom ?? 1]" :min="0.9" :max="1.25" :step="0.05" class="flex-1" @update:model-value="(v) => v && settings.update({ zoom: Math.round(v[0] * 100) / 100 })" />
+          <button type="button" class="text-muted-foreground hover:text-foreground text-xs" @click="settings.update({ zoom: 1 })">Reset</button>
+        </div>
       </SettingRow>
     </SettingSection>
     <SettingSection title="Sync">

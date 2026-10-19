@@ -2,7 +2,7 @@
 import { computed, ref, shallowRef, watch } from 'vue'
 import {
   ArchiveIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MoreHorizontalIcon, ReplyAllIcon, SparklesIcon, StarIcon,
-  Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon,
+  Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon,
 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,7 @@ import { FOLDER_ICONS } from './folderIcons'
 import LabelPopover from './LabelPopover.vue'
 import ThreadMessage from './ThreadMessage.vue'
 
+defineProps<{ showBack?: boolean }>()
 const mail = useMailStore()
 const accounts = useAccountsStore()
 const settings = useSettingsStore()
@@ -167,6 +168,10 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
     <template v-else>
       <!-- Toolbar -->
       <div class="border-border flex h-[52px] shrink-0 items-center gap-0.5 border-b px-3">
+        <template v-if="showBack">
+          <Tip label="Back to list" shortcut="esc"><Button variant="ghost" size="icon-sm" aria-label="Back to list" @click="mail.open(null)"><ArrowLeftIcon /></Button></Tip>
+          <div class="bg-border mx-1.5 h-5 w-px" />
+        </template>
         <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="mail.archive(ids())"><ArchiveIcon /></Button></Tip>
         <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="mail.trash(ids())"><Trash2Icon /></Button></Tip>
         <Tip :label="current?.unread ? 'Mark as read' : 'Mark as unread'" shortcut="u">
@@ -198,7 +203,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
           <DropdownMenuContent align="end" class="w-56">
             <DropdownMenuItem v-if="settings.aiReady" @click="summarize"><TextQuoteIcon /> Summarize</DropdownMenuItem>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger><FolderInputIcon class="size-4" /> Move to</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger class="gap-2"><FolderInputIcon class="size-4" /> Move to</DropdownMenuSubTrigger>
               <DropdownMenuSubContent class="w-48">
                 <DropdownMenuItem v-for="f in moveTargets" :key="f.id" @click="moveTo(f.id)">
                   <component :is="FOLDER_ICONS[f.kind] ?? FOLDER_ICONS.custom" /> {{ f.kind === 'spam' ? 'Junk' : f.name }}
@@ -212,6 +217,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
       </div>
 
       <div ref="scroller" class="thin-scroll min-h-0 flex-1 overflow-y-auto">
+        <div :class="showBack ? 'mx-auto w-full max-w-4xl' : ''">
         <div v-if="loading && !thread.length" class="space-y-4 px-6 py-6">
           <Skeleton class="h-6 w-2/3" />
           <div class="flex items-center gap-3"><Skeleton class="size-9 rounded-full" /><div class="space-y-2"><Skeleton class="h-3.5 w-40" /><Skeleton class="h-3 w-56" /></div></div>
@@ -271,6 +277,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
             </button>
           </div>
         </template>
+        </div>
       </div>
     </template>
   </section>

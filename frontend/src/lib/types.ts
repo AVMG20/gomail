@@ -32,6 +32,14 @@ export interface Account {
   unreadCount: number
   /** Sign-in expired/revoked: show a Reconnect banner (backend pass 2). */
   needsReauth?: boolean
+  /** Per-account HTML signature (backend pass 3). */
+  signature?: string
+}
+
+export interface Contact {
+  name: string
+  email: string
+  count: number
 }
 
 export interface Folder {
@@ -206,6 +214,12 @@ export interface Settings {
   closeToTray?: boolean
   /** Group messages into conversations (default true). */
   conversationView?: boolean
+  /** When opening a message marks it read. Frontend preference (stored locally). */
+  markReadMode?: 'immediate' | 'delay' | 'manual'
+  /** "right" = three panes; "off" = full-width list, message opens in the main area. */
+  readingPane?: 'right' | 'off'
+  /** UI zoom factor 0.9–1.25. */
+  zoom?: number
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
   primaryColor: string

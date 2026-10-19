@@ -226,6 +226,11 @@
 .compose-editor .ProseMirror ul { list-style: disc; padding-left: 1.4em; margin: .25em 0; }
 .compose-editor .ProseMirror ol { list-style: decimal; padding-left: 1.4em; margin: .25em 0; }
 .compose-editor .ProseMirror a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.compose-editor .ProseMirror .gm-signature {
+  color: var(--muted-foreground);
+  margin: .75em 0 .5em;
+  font-size: 13px;
+}
 .compose-editor .ProseMirror blockquote {
   border-left: 2px solid var(--border);
   margin: .5em 0;

@@ -14,6 +14,7 @@ export type {
     ClassifyJob,
     ClassifyProgress,
     ComposeRequest,
+    Contact,
     DefaultPrompts,
     Folder,
     Label,
@@ -23,12 +24,15 @@ export type {
     MessageLabel,
     MessagePage,
     MessageSummary,
+    NetworkStatus,
     NewMailEvent,
     OutgoingAttachment,
     SearchQuery,
     SearchResult,
+    SearchUpdated,
     Settings,
     SyncEvent,
+    SyncProgress,
     Unsubscribe,
     UnsubscribeResult
 } from "./models.js";

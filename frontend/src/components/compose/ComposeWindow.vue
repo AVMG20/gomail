@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   ClipboardPasteIcon, CopyIcon, Maximize2Icon, Minimize2Icon, MinusIcon, PaperclipIcon, ScissorsIcon,
   SendIcon, SparklesIcon, Trash2Icon, XIcon, LoaderIcon, TextSelectIcon,
@@ -145,6 +145,10 @@ const subjParts = computed(() => {
 })
 
 const fromAccount = computed(() => accounts.accountMap.get(d.value.accountId))
+// Swap the signature when the From account changes.
+watch(() => d.value.accountId, (id, prev) => {
+  if (id !== prev) editorRef.value?.applySignature(accounts.accountMap.get(id)?.signature ?? '')
+})
 </script>
 
 <template>

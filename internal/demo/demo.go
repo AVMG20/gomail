@@ -683,4 +683,39 @@ func (p *Provider) Search(ctx context.Context, q mail.SearchQuery, limit int) ([
 	return out, nil
 }
 
+// ---- folder-wide operations ----
+
+func (p *Provider) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
+	if err := p.sleep(ctx); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, m := range p.msgs {
+		if m.meta.Unread && (contains(m.meta.FolderRemoteIDs, folder.RemoteID) || (folder.Kind == models.FolderStarred && m.meta.Starred)) {
+			m.meta.Unread = false
+			p.touch(id, false)
+		}
+	}
+	return nil
+}
+
+func (p *Provider) EmptyFolder(ctx context.Context, folder mail.Folder) error {
+	if folder.Kind != models.FolderTrash && folder.Kind != models.FolderSpam {
+		return errors.New("only Trash and Spam can be emptied")
+	}
+	if err := p.sleep(ctx); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, m := range p.msgs {
+		if contains(m.meta.FolderRemoteIDs, folder.RemoteID) {
+			delete(p.msgs, id)
+			p.touch(id, true)
+		}
+	}
+	return nil
+}
+
 var _ provider.Provider = (*Provider)(nil)

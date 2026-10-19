@@ -30,9 +30,116 @@ internal/models      types shared with the frontend (JSON = contract)
 mail per folder (inbox 300, other system folders 100, custom folders 50).
 After that Gmail uses `history.list` from the stored `historyId` and Graph
 uses per-folder delta links. Expired state falls back to a full resync.
-Events: `sync:started`, `sync:finished`, `messages:changed`,
+Events: `sync:started`, `sync:finished`, `sync:progress` (first sync only:
+phases `folders`, `listing`, `fetching`, `saving`), `messages:changed`,
 `accounts:changed`, `labels:changed`, `mail:new` (plus a desktop
-notification), `classify:progress`, `classify:finished`.
+notification), `classify:progress`, `classify:finished`, `network:status`
+and `search:updated`.
+
+**Reliability.**
+
+- A revoked or expired refresh token (`invalid_grant`, or a 401 after a
+  token refresh) sets `Account.needsReauth` and a readable `syncError`.
+  The account is then skipped until `ReauthAccount(id)` runs OAuth again.
+  That call requires the same mailbox and keeps all local data.
+- Repeated failures back off exponentially: 30 s, doubling, capped at 30
+  minutes. `SyncNow` always tries immediately.
+- Network errors trigger a connectivity probe (TCP to the provider hosts).
+  When offline, the engine emits `network:status {online:false}`, doesn't
+  record an account error, and probes every 30 s. When the network comes
+  back it emits `online:true` and syncs everything.
+
+**Older mail.** `ListMessages` sets `hasMoreRemote` on the last local page
+when the server folder holds more mail than is cached. `LoadOlder(query)`
+then fetches the next 50 messages per folder in the view and emits
+`messages:changed`. Gmail uses `before:<epoch>` and Graph uses
+`receivedDateTime lt`. Once a folder has nothing older, it is marked done.
+
+**Server search.** When `SearchMessages` (or `ListMessages` with `search`)
+finds fewer than 5 local results, a background server search runs:
+
+- Gmail uses `q=`. Graph uses `$search` with KQL (from:, to:, subject:,
+  hasattachments:, received). Unread and starred are filtered locally.
+- It is throttled per account and query (2 min), with at most one request in
+  flight per account.
+- Results are cached locally. If anything new arrived, `search:updated
+  {query, accountId, added}` tells the UI to search again.
+
+**Conversations.** When `conversationView` is on (the default),
+`ListMessages` returns one row per thread: Gmail `threadId` or Graph
+`conversationId`. Each row works like this:
+
+- It shows the thread's newest message that matches the query.
+- `unread`, `starred`, `hasAttachments` and `labels`/`labelDetails` are
+  aggregated over the thread. Trashed messages only group with other
+  trashed messages.
+- `threadCount` and `participants` describe the whole thread. The account
+  itself shows as "me".
+- `total` counts conversations. Keyset pagination uses the row's message
+  (date, id), so it stays exact.
+
+Action methods accept `conversationId` (`"c:<message id>"`) in place of
+message ids:
+
+- `MarkRead` and `Add`/`RemoveLabel` apply to every message in the thread.
+- `Archive`, `Trash` and `MoveToFolder` apply to the thread's messages that
+  share a folder with the row. Gmail's All Mail is ignored for this, so
+  your replies in Sent stay where they are.
+- `SetStarred(true)` stars only the newest message; `SetStarred(false)`
+  unstars all of them.
+- `ClassifyMessages` labels the newest message.
+
+`GetMessage` and `GetThread` accept either kind of id.
+
+**Drafts.** `SaveDraft(req, draftId)` creates a provider draft (Gmail
+`drafts`, Graph draft messages) and returns a handle
+`draft:<account>:<id>`. You can also pass the id of a message in Drafts to
+keep editing it.
+
+- Saves of the same draft within 3 s are coalesced: the latest content is
+  written when the window closes.
+- `SendMessage` with `draftId` sends that draft. `DeleteDraft` discards it.
+- Replies and forwards keep threading. Forwards include the original's
+  attachments: Graph's `createForward` adds them, and Gmail and the demo
+  provider re-attach them.
+
+**Attachments.** `GetAttachmentData` returns at most 15 MB, base64-encoded,
+for previews. Attachment bytes are cached in `<data dir>/attachments`: the
+cache is LRU, bounded at 500 MB, and cleared per account when the account is
+removed.
+
+**Unsubscribe.** `List-Unsubscribe` and `List-Unsubscribe-Post` are parsed
+into `Message.unsubscribe`. `Unsubscribe(id)` tries these in order:
+
+- an RFC 8058 one-click POST, https only, with no cookies and https-only
+  redirects;
+- an email sent from the account to the mailto address;
+- opening the link in the browser.
+
+**Contacts.** Every address in from, to and cc of newly synced mail goes
+into a `contacts` table. Addresses you sent to count 5×.
+`SearchContacts(q, limit)` prefix-matches the email or any word of the
+name, and ranks by count × recency. noreply addresses are ranked down and
+your own addresses are excluded.
+
+**Folder operations.** `MarkFolderRead(folderId)` and
+`EmptyFolder(folderId)` (Trash or Spam only) are optimistic and revert on
+failure.
+
+- Graph permanently deletes via `$batch` `permanentDelete`.
+- Gmail moves Spam to Trash. It can't empty Trash: permanent deletion
+  needs the full `https://mail.google.com/` scope, which gomail doesn't
+  request, so it returns an explanation instead. Gmail purges Trash itself
+  after 30 days.
+
+**Tray.** The tray icon shows the unread count (macOS label, tooltip
+elsewhere). Its menu has Open gomail, Check mail and Quit.
+
+- `showInTray` (default true) shows or hides it.
+- With `closeToTray` (default false), closing the window hides it instead.
+  On Linux this only applies when a StatusNotifier host exists (checked
+  over D-Bus); otherwise the window closes normally.
+- Missing D-Bus or notification daemons are logged and ignored.
 
 **Actions** (read, star, archive, trash, move) update SQLite first, emit
 `messages:changed`, then go to the provider. Gmail uses `batchModify`
@@ -88,11 +195,30 @@ snippet and cached body text:
   `"phrases"`.
 - User input is always quoted, so it never reaches FTS as syntax.
 
-**HTML bodies** are sanitized with bluemonday. Tables, inline styles and
-images are kept; scripts, iframes, forms and event handlers are removed.
-`cid:` images are inlined as `data:` URIs. Remote images are left alone, and
-`hasRemoteContent` tells the UI whether a body has any. Render bodies in a
-sandboxed `<iframe srcdoc>` so their `<style>` rules cannot affect the app.
+**HTML bodies** are sanitized with bluemonday:
+
+- Kept: tables, inline styles, images, and `srcset` (http(s) candidates
+  only).
+- Removed: scripts, iframes, forms and event handlers.
+- `@import`, `expression()`, `javascript:` and `behavior` are stripped from
+  CSS.
+- Links get `rel="noreferrer noopener"` and `target="_blank"`.
+- `cid:` images are inlined as `data:` URIs.
+
+When `showRemoteImages` is off, `GetMessage` and `GetThread` also strip
+remote `src`, `background`, `srcset` and CSS `url()` references. In that
+case `remoteContentBlocked` is true, and `GetMessageWithRemoteContent(id)`
+returns the unblocked body. Render bodies in a sandboxed `<iframe srcdoc>`
+so their `<style>` rules cannot affect the app.
+
+**Security notes.**
+
+- Tokens and keys are never logged. Logs carry account ids, not
+  addresses.
+- `OpenExternalURL` only opens http(s) and mailto.
+- The OAuth loopback server listens only on loopback: 127.0.0.1, plus ::1
+  for Microsoft's `localhost` redirect. It shuts down as soon as the flow
+  ends or times out.
 
 ## Data directory
 
@@ -107,6 +233,7 @@ The directory contains:
 - `gomail.db`: SQLite in WAL mode, with migrations tracked by `PRAGMA user_version`.
 - `gomail.log`: the log, rotated at 5 MB.
 - `openrouter-models.json`: the model list cache (1 h).
+- `attachments/`: the attachment cache (LRU, 500 MB).
 - `secrets.enc` and `secrets.key`: the encrypted fallback secret store,
   created only when the OS keyring can't be used.
 
@@ -181,7 +308,7 @@ Add an API key in Settings. It is stored in the keyring and never sent back to t
 frontend.
 
 - **Chat model** (`openRouterModel`, default `openai/gpt-4o-mini`): used by
-  `ImproveGrammar`, `SummarizeMessage` and `DraftReply`.
+  `ImproveGrammar` and `SummarizeMessage`.
 - **Classifier** (`classifierModel`, default `typesafe/jev-1.13`, alias
   `~typesafe/jev-latest`): uses the Decisions API (`POST /api/alpha/decisions`).
 
@@ -207,15 +334,30 @@ features still need a real OpenRouter key.
 ```
 go build ./... && go vet ./... && go test ./...
 wails3 generate bindings -clean=true -ts -i   # after changing MailService or models
-go test -run xxx -bench Search ./internal/store   # search on 50k messages
+go test -run xxx -bench . -benchtime 3x ./internal/store ./internal/core
 ```
+
+Benchmarks on the reference box, a 4-vCPU Xeon:
+
+| Operation | Time |
+|---|---|
+| Storing 5,000 synced messages | 1.6 s |
+| Initial sync of a 5,000-message demo account, end to end | 2.0 s |
+| `ListMessages` on a 50k inbox, conversation view | ~40 ms on the first page |
+| `ListMessages` on a 50k inbox, conversation view, later pages | ~5 ms (the total is cached until the next write) |
+| `ListMessages` on a 50k inbox, message view | 6 ms |
+| `GetLabelCounts` on 50k messages | 5 ms (denormalized and index-only) |
+| Search on 50k messages | 8–25 ms per query |
+| List plus counts on a 5k account | 13 ms |
 
 ## Known limitations
 
 - Outlook attachments over 3 MB are sent with upload sessions. Gmail messages are capped
   at 35 MB, and the backend caps outgoing attachments at 25 MB in total.
-- Only the first sync window of messages is cached (see Sync above). Older mail is not
-  fetched or searchable yet: there is no server-side search fallback.
+- Mail fetched with `LoadOlder` or server search is not followed by Graph's delta queries,
+  which are restricted to the initial window, so later changes made elsewhere to those
+  older messages show up only when they are fetched again.
+- Gmail's Trash can't be emptied from gomail (see Folder operations).
 - Gmail user labels are labels, not folders, so `MoveToFolder` to a Gmail label isn't
   offered.
 - The encrypted-file secret fallback keeps its key next to the data. It protects against

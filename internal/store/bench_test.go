@@ -20,9 +20,9 @@ func benchMessages(n, offset int) []mail.Message {
 		i := offset + j
 		subj := fmt.Sprintf("%s %s %d", benchWords[i%len(benchWords)], benchWords[(i/7)%len(benchWords)], i/3)
 		m := mail.Message{RemoteID: fmt.Sprint(i), ThreadID: fmt.Sprint("t", i/3), Subject: subj, Snippet: subj + " details",
-			From:  models.Address{Name: fmt.Sprintf("Sender %d", i%300), Email: fmt.Sprintf("s%d@example.com", i%300)},
-			To:    []models.Address{{Name: "Me", Email: "me@example.com"}},
-			Date:  time.Now().Add(-time.Duration(i) * time.Minute), FolderRemoteIDs: []string{"INBOX", "ALL"}, Unread: i%4 == 0}
+			From: models.Address{Name: fmt.Sprintf("Sender %d", i%300), Email: fmt.Sprintf("s%d@example.com", i%300)},
+			To:   []models.Address{{Name: "Me", Email: "me@example.com"}},
+			Date: time.Now().Add(-time.Duration(i) * time.Minute), FolderRemoteIDs: []string{"INBOX", "ALL"}, Unread: i%4 == 0}
 		if i%3 == 0 {
 			m.Labels = []string{[]string{"Work", "Finance", "Travel"}[i%9/3]}
 		}

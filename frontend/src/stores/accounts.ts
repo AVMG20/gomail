@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
-import { api } from '@/lib/api'
+import { api, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import type { Account, Folder, LabelCount, SyncProgress } from '@/lib/types'
 
 export const SYSTEM_ORDER = ['inbox', 'starred', 'sent', 'drafts', 'archive', 'spam', 'trash']
@@ -53,14 +53,26 @@ export const useAccountsStore = defineStore('accounts', () => {
     }
   }
 
+  /** Signatures fall back to local storage until the backend stores them. */
+  function withSignatures(list: Account[]): Account[] {
+    return list.map((a) => (a.signature === undefined || a.signature === null ? { ...a, signature: readLocal<string>(`sig:${a.id}`, '') } : a))
+  }
+
+  async function saveSignature(id: string, html: string) {
+    const a = accounts.value.find((x) => x.id === id)
+    if (a) a.signature = html
+    if (hasMethod('UpdateAccountSignature')) await api.updateAccountSignature(id, html)
+    else writeLocal(`sig:${id}`, html)
+  }
+
   async function load() {
-    accounts.value = await api.getAccounts()
+    accounts.value = withSignatures(await api.getAccounts())
     await Promise.all([loadFolders(), loadLabelCounts()])
     loaded.value = true
   }
 
   async function reloadAccounts() {
-    accounts.value = await api.getAccounts()
+    accounts.value = withSignatures(await api.getAccounts())
   }
 
   /** Counts (folder unread, label counts, account unread) after mail changes. */
@@ -109,6 +121,6 @@ export const useAccountsStore = defineStore('accounts', () => {
 
   return {
     accounts, folders, labelCounts, labelScope, loaded, syncing, progress, setProgress, accountMap, anySyncing, folderMap,
-    load, loadFolders, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
+    load, saveSignature, loadFolders, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })

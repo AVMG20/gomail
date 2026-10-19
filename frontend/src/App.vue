@@ -10,7 +10,7 @@ import Onboarding from '@/components/dialogs/Onboarding.vue'
 import TooltipLayer from '@/components/common/TooltipLayer.vue'
 import { useBackendEvents } from '@/composables/useBackendEvents'
 import { useShortcuts } from '@/composables/useShortcuts'
-import { errorMessage, isWails, missingMethods } from '@/lib/api'
+import { api, errorMessage, isWails, missingMethods, readLocal } from '@/lib/api'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useComposeStore } from '@/stores/compose'
@@ -25,6 +25,7 @@ const SettingsDialog = defineAsyncComponent(() => import('@/components/settings/
 const CommandPalette = defineAsyncComponent(() => import('@/components/dialogs/CommandPalette.vue'))
 const AddAccountDialog = defineAsyncComponent(() => import('@/components/dialogs/AddAccountDialog.vue'))
 const ShortcutsDialog = defineAsyncComponent(() => import('@/components/dialogs/ShortcutsDialog.vue'))
+const OnboardingWizard = defineAsyncComponent(() => import('@/components/dialogs/OnboardingWizard.vue'))
 const ClassifyProgress = defineAsyncComponent(() => import('@/components/dialogs/ClassifyProgress.vue'))
 const ClassifyConfirmDialog = defineAsyncComponent(() => import('@/components/dialogs/ClassifyConfirmDialog.vue'))
 
@@ -36,6 +37,7 @@ const compose = useComposeStore()
 const ai = useAiStore()
 
 const booted = ref(false)
+const onboarded = ref(readLocal('onboarded', false))
 const bootError = ref('')
 
 useShortcuts()
@@ -75,10 +77,12 @@ onMounted(async () => {
 })
 
 watch(() => mail.mailbox.accountId, (id) => void accounts.loadLabelCounts(id))
+watch(() => settings.settings?.zoom, (z) => z && void api.setZoom(z).catch(() => {}))
 
 // Narrow windows: collapse the folder sidebar first (the rail stays).
 watch(() => ui.narrow, (n) => (ui.folderSidebarOpen = !n), { immediate: true })
 
+const paneOff = computed(() => settings.settings?.readingPane === 'off')
 const accountColor = computed(() => mail.mailboxAccount?.color ?? 'var(--muted-foreground)')
 const toasterTheme = computed(() => (settings.settings?.theme === 'light' || settings.settings?.theme === 'dark' ? settings.settings.theme : 'system') as 'light' | 'dark' | 'system')
 
@@ -104,6 +108,7 @@ watch(() => mail.mailboxName, (name) => {
         <p class="text-muted-foreground max-w-md text-sm">{{ bootError }}</p>
       </div>
 
+      <OnboardingWizard v-else-if="!accounts.accounts.length && !onboarded" embedded @done="onboarded = true" />
       <Onboarding v-else-if="!accounts.accounts.length" />
 
       <template v-else>
@@ -115,7 +120,12 @@ watch(() => mail.mailboxName, (name) => {
         </div>
         <div v-if="ui.narrow && ui.folderSidebarOpen" class="absolute inset-y-0 right-0 left-14 z-20 bg-black/10" @click="ui.folderSidebarOpen = false" />
 
-        <ResizablePanelGroup direction="horizontal" auto-save-id="gomail.panes.v1" class="min-w-0 flex-1">
+        <!-- Reading pane off: full-width list; the message opens in place with a back button. -->
+        <div v-if="paneOff" class="min-w-0 flex-1">
+          <MessageList v-show="!mail.openId" />
+          <ReadingPane v-if="mail.openId" show-back />
+        </div>
+        <ResizablePanelGroup v-else direction="horizontal" auto-save-id="gomail.panes.v1" class="min-w-0 flex-1">
           <ResizablePanel :default-size="42" :min-size="30" :max-size="65" class="min-w-0">
             <MessageList />
           </ResizablePanel>
@@ -129,6 +139,7 @@ watch(() => mail.mailboxName, (name) => {
 
     <ComposeDock v-if="compose.drafts.length" />
     <ClassifyProgress v-if="ai.job" />
+    <OnboardingWizard v-if="booted && !bootError && accounts.accounts.length && !onboarded" @done="onboarded = true" />
     <SettingsDialog v-if="used.settings" />
     <CommandPalette v-if="used.palette" />
     <AddAccountDialog v-if="used.addAccount" />

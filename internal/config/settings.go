@@ -70,6 +70,10 @@ func DefaultSettings() models.Settings {
 		ImportProviderLabels:     true,
 		Notifications:            true,
 		ConversationView:         true,
+		UndoSendSeconds:          5,
+		MarkReadMode:             "immediate",
+		ReadingPane:              "right",
+		Zoom:                     1,
 		ShowInTray:               true,
 		Labels:                   DefaultLabels(),
 		PrimaryColor:             DefaultPrimaryColor,
@@ -95,6 +99,22 @@ func Normalize(s *models.Settings) {
 	case "comfortable", "compact":
 	default:
 		s.Density = DefaultDensity
+	}
+	if s.UndoSendSeconds < 0 || s.UndoSendSeconds > 30 {
+		s.UndoSendSeconds = 5
+	}
+	switch s.MarkReadMode {
+	case "immediate", "delay", "manual":
+	default:
+		s.MarkReadMode = "immediate"
+	}
+	switch s.ReadingPane {
+	case "right", "off":
+	default:
+		s.ReadingPane = "right"
+	}
+	if s.Zoom < 0.5 || s.Zoom > 2 {
+		s.Zoom = 1
 	}
 	if s.SyncIntervalMinutes <= 0 {
 		s.SyncIntervalMinutes = DefaultSyncInterval

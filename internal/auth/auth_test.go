@@ -70,6 +70,7 @@ func TestLoginPKCEAndState(t *testing.T) {
 	withGoogleEndpoint(t, srv)
 
 	creds := Credentials{GoogleClientID: "cid", GoogleClientSecret: "secret"}
+	var redirect string
 	tok, err := Login(context.Background(), models.ProviderGmail, creds, func(authURL string) error {
 		u, _ := url.Parse(authURL)
 		q := u.Query()
@@ -83,6 +84,7 @@ func TestLoginPKCEAndState(t *testing.T) {
 			t.Errorf("scope %s", q.Get("scope"))
 		}
 		challenge = q.Get("code_challenge")
+		redirect = q.Get("redirect_uri")
 		go func() {
 			resp, err := http.Get(q.Get("redirect_uri") + "?code=good-code&state=" + url.QueryEscape(q.Get("state")))
 			if err == nil {
@@ -100,6 +102,14 @@ func TestLoginPKCEAndState(t *testing.T) {
 	}
 	if tok.AccessToken != "at1" || tok.RefreshToken != "rt1" {
 		t.Fatalf("token %+v", tok)
+	}
+	// The loopback server listens on 127.0.0.1 only and is gone afterwards.
+	if !strings.HasPrefix(redirect, "http://127.0.0.1:") {
+		t.Fatalf("redirect %s", redirect)
+	}
+	if resp, err := http.Get(redirect + "?code=x&state=y"); err == nil {
+		resp.Body.Close()
+		t.Fatal("loopback server still running after login")
 	}
 	id := IdentityFromToken(tok)
 	if id.Email != "me@example.com" || id.Name != "Me Myself" {

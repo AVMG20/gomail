@@ -58,12 +58,13 @@ const HOUR = 3600_000
 
 export const SEED_ACCOUNTS: Account[] = [
   {
-    id: 'acc_personal', provider: 'gmail', email: 'alex.morgan@gmail.com', displayName: 'Personal',
+    id: 'acc_personal', provider: 'gmail', email: 'alex.morgan@gmail.com', displayName: 'Personal', signature: '<p>Alex</p>',
     color: '#3b82f6', createdAt: new Date(now - 400 * 24 * HOUR).toISOString(),
     lastSyncAt: new Date(now - 4 * 60_000).toISOString(), syncError: '', syncing: false, unreadCount: 0,
   },
   {
     id: 'acc_work', provider: 'outlook', email: 'alex.morgan@northwind.io', displayName: 'Northwind',
+    signature: '<p><strong>Alex Morgan</strong><br>Product Lead · Northwind<br>+31 20 555 0134</p>',
     color: '#f59e0b', createdAt: new Date(now - 200 * 24 * HOUR).toISOString(),
     lastSyncAt: new Date(now - 2 * 60_000).toISOString(), syncError: '', syncing: false, unreadCount: 0,
   },

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { api, hasMethod } from '@/lib/api'
 import { XIcon } from '@lucide/vue'
 import { displayName, isEmail, parseAddressList } from '@/lib/format'
 import type { Address } from '@/lib/types'
@@ -14,11 +15,40 @@ const focused = ref(false)
 const active = ref(0)
 const input = ref<HTMLInputElement | null>(null)
 
+// Frequency-ranked contacts from the backend (all mail), falling back to
+// addresses seen in loaded messages. Stale responses are dropped.
+const remote = ref<Address[]>([])
+let token = 0
+let timer: ReturnType<typeof setTimeout> | null = null
+watch(text, (q) => {
+  if (timer) clearTimeout(timer)
+  const query = q.trim()
+  if (!query || !hasMethod('SearchContacts')) {
+    remote.value = []
+    return
+  }
+  timer = setTimeout(async () => {
+    const t = ++token
+    try {
+      const list = await api.searchContacts(query, 8)
+      if (t === token) remote.value = list.map((c) => ({ name: c.name, email: c.email }))
+    } catch {
+      if (t === token) remote.value = []
+    }
+  }, 100)
+})
 const suggestions = computed(() => {
   if (!text.value.trim()) return []
   const taken = new Set(model.value.map((a) => a.email.toLowerCase()))
-  return mail.suggestAddresses(text.value, 7).filter((a) => !taken.has(a.email.toLowerCase()))
+  const seen = new Set<string>()
+  return [...remote.value, ...mail.suggestAddresses(text.value, 7)].filter((a) => {
+    const k = a.email.toLowerCase()
+    if (taken.has(k) || seen.has(k)) return false
+    seen.add(k)
+    return true
+  }).slice(0, 7)
 })
+watch(suggestions, () => (active.value = 0))
 
 function add(a: Address) {
   if (!model.value.some((x) => x.email.toLowerCase() === a.email.toLowerCase())) model.value = [...model.value, a]
@@ -27,12 +57,15 @@ function add(a: Address) {
 }
 
 function commit(): boolean {
+  const raw = text.value.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean)
+  if (!raw.length) return false
   const parsed = parseAddressList(text.value)
-  if (parsed.length) {
-    parsed.forEach(add)
-    return true
-  }
-  return false
+  parsed.forEach(add)
+  // Keep invalid entries as flagged chips instead of silently dropping them.
+  const ok = new Set(parsed.map((a) => a.email.toLowerCase()))
+  for (const r of raw) if (![...ok].some((e) => r.toLowerCase().includes(e))) add({ name: '', email: r })
+  text.value = ''
+  return true
 }
 
 function onKey(e: KeyboardEvent) {
@@ -59,9 +92,10 @@ function onKey(e: KeyboardEvent) {
 
 function onPaste(e: ClipboardEvent) {
   const data = e.clipboardData?.getData('text') ?? ''
-  if (/[,;\n]/.test(data)) {
+  if (/[,;\n]/.test(data) || isEmail(data.trim())) {
     e.preventDefault()
-    parseAddressList(data).forEach(add)
+    text.value = data
+    commit()
   }
 }
 
@@ -81,8 +115,8 @@ defineExpose({ focus: () => input.value?.focus() })
     <span
       v-for="a in model"
       :key="a.email"
-      :class="['bg-muted inline-flex h-6 max-w-60 items-center gap-1 rounded-full pr-1 pl-2.5 text-xs', !isEmail(a.email) && 'bg-destructive/10 text-destructive']"
-      :title="a.email"
+      :class="['bg-muted inline-flex h-6 max-w-60 items-center gap-1 rounded-full pr-1 pl-2.5 text-xs', !isEmail(a.email) && 'bg-destructive/10 text-destructive ring-destructive/30 ring-1']"
+      :title="isEmail(a.email) ? a.email : `${a.email} is not a valid address`"
     >
       <span class="truncate">{{ displayName(a) }}</span>
       <button type="button" class="text-muted-foreground hover:text-foreground rounded-full p-0.5" :aria-label="`Remove ${a.email}`" @click.stop="model = model.filter((x) => x !== a)">

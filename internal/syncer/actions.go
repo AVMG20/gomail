@@ -11,6 +11,7 @@ import (
 
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/store"
 )
 
@@ -298,4 +299,100 @@ func (e *Engine) PushLabel(ids []string, labelName string, add bool) {
 			}
 		}(acct, ms)
 	}
+}
+
+// MarkFolderRead marks every message of a folder read (optimistically).
+func (e *Engine) MarkFolderRead(folderID string) error {
+	f, err := e.cfg.Store.Folder(folderID)
+	if err != nil {
+		return errors.New("that folder no longer exists")
+	}
+	ids, err := e.cfg.Store.ResolveIDs(models.ListQuery{FolderID: folderID, UnreadOnly: true}, store.FilterOptions{}, provider.MaxFolderOp)
+	if err != nil {
+		return err
+	}
+	changed, err := e.cfg.Store.SetUnread(ids, false)
+	if err != nil {
+		return err
+	}
+	_ = e.cfg.Store.SetFolderCounts(f.ID, 0, f.Total)
+	e.changed(f.AccountID)
+	p, err := e.cfg.Provider(f.AccountID)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(e.ctx, 5*time.Minute)
+		err = p.MarkFolderRead(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind})
+		cancel()
+	}
+	if err != nil {
+		_, _ = e.cfg.Store.SetUnread(changed, true)
+		_ = e.cfg.Store.SetFolderCounts(f.ID, f.Unread, f.Total)
+		e.changed(f.AccountID)
+		a, _ := e.cfg.Store.Account(f.AccountID)
+		return fmt.Errorf("couldn't mark %s as read: %s", f.Name, HumanError(a, err))
+	}
+	return nil
+}
+
+// EmptyFolder permanently deletes the contents of a Trash or Spam folder.
+// Messages disappear locally right away and come back if the server
+// refuses.
+func (e *Engine) EmptyFolder(folderID string) error {
+	f, err := e.cfg.Store.Folder(folderID)
+	if err != nil {
+		return errors.New("that folder no longer exists")
+	}
+	if f.Kind != models.FolderTrash && f.Kind != models.FolderSpam {
+		return errors.New("only Trash and Spam can be emptied")
+	}
+	ids, err := e.cfg.Store.FolderMessageIDs(f.ID, false)
+	if err != nil {
+		return err
+	}
+	old, err := e.cfg.Store.MessageFolders(ids)
+	if err != nil {
+		return err
+	}
+	next := map[string][]string{}
+	for _, id := range ids {
+		var keep []string
+		for _, fid := range old[id] {
+			if fid != f.ID {
+				keep = append(keep, fid)
+			}
+		}
+		next[id] = keep
+	}
+	if err := e.cfg.Store.SetMessageFolders(next); err != nil {
+		return err
+	}
+	_ = e.cfg.Store.SetFolderCounts(f.ID, 0, 0)
+	e.changed(f.AccountID)
+	p, err := e.cfg.Provider(f.AccountID)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(e.ctx, 10*time.Minute)
+		err = p.EmptyFolder(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind})
+		cancel()
+	}
+	if err != nil {
+		_ = e.cfg.Store.SetMessageFolders(old)
+		_ = e.cfg.Store.SetFolderCounts(f.ID, f.Unread, f.Total)
+		e.changed(f.AccountID)
+		a, _ := e.cfg.Store.Account(f.AccountID)
+		return fmt.Errorf("couldn't empty %s: %s", f.Name, HumanError(a, err))
+	}
+	// Drop local copies that are in no folder any more.
+	sums, _ := e.cfg.Store.Summaries(ids)
+	var gone []string
+	for _, m := range sums {
+		if len(m.FolderIDs) == 0 {
+			gone = append(gone, m.RemoteID)
+		}
+	}
+	if len(gone) > 0 {
+		if _, err := e.cfg.Store.ApplySync(f.AccountID, mail.SyncResult{Deleted: gone}, nil); err != nil {
+			slog.Warn("removing emptied messages", "err", err)
+		}
+	}
+	e.changed(f.AccountID)
+	return nil
 }

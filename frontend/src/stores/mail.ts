@@ -331,15 +331,24 @@ export const useMailStore = defineStore('mail', () => {
   )
 
   // ------------------------------------------------------------ open & move
+  let readTimer: ReturnType<typeof setTimeout> | null = null
+  function markOpenedRead(id: string) {
+    const m = byId.value.get(id)
+    if (!m?.unread) return
+    patchLocal([id], { unread: false })
+    api.markRead([id], true).catch(() => patchLocal([id], { unread: true }))
+    accounts.refreshCounts()
+  }
+
+  /** Open a message; marks it read per Settings → General (immediately / after 2 s / manually). */
   function open(id: string | null) {
     openId.value = id
+    if (readTimer) clearTimeout(readTimer)
+    readTimer = null
     if (!id) return
-    const m = byId.value.get(id)
-    if (m?.unread) {
-      patchLocal([id], { unread: false })
-      api.markRead([id], true).catch(() => patchLocal([id], { unread: true }))
-      accounts.refreshCounts()
-    }
+    const mode = settings.settings?.markReadMode ?? 'immediate'
+    if (mode === 'immediate') markOpenedRead(id)
+    else if (mode === 'delay') readTimer = setTimeout(() => openId.value === id && markOpenedRead(id), 2000)
   }
 
   function move(delta: number) {
@@ -378,6 +387,11 @@ export const useMailStore = defineStore('mail', () => {
   function selectAllLoaded() {
     selection.value = new Set(messages.value.map((m) => m.id))
     selectAllQuery.value = false
+  }
+
+  /** All ids in the current view (for "mark all as read" fallbacks). */
+  function targetIdsForQuery(): Promise<string[]> {
+    return api.resolveQueryIds({ ...query.value, cursor: '' }, 10000)
   }
 
   /** Ids targeted by a bulk action: explicit selection, or the whole query. */
@@ -601,7 +615,7 @@ export const useMailStore = defineStore('mail', () => {
     labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleUnlabeledFilter, clearLabelFilter,
-    open, move, clearSelection, toggleSelect, selectAllLoaded, targetIds, patchLocal, removeLocal,
+    open, move, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     archive, trash, setRead, setStarred, addLabel, removeLabel, loadThread, invalidateThread, suggestAddresses,
   }
 })

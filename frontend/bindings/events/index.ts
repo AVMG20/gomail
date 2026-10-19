@@ -39,9 +39,24 @@ export const MailNew = "mail:new";
 export const MessagesChanged = "messages:changed";
 
 /**
+ * Name of the custom event "network:status".
+ */
+export const NetworkStatus = "network:status";
+
+/**
+ * Name of the custom event "search:updated".
+ */
+export const SearchUpdated = "search:updated";
+
+/**
  * Name of the custom event "sync:finished".
  */
 export const SyncFinished = "sync:finished";
+
+/**
+ * Name of the custom event "sync:progress".
+ */
+export const SyncProgress = "sync:progress";
 
 /**
  * Name of the custom event "sync:started".

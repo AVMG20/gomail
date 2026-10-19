@@ -45,6 +45,11 @@ export interface Account {
      * call ReauthAccount to sign in again (local data is kept).
      */
     "needsReauth": boolean;
+
+    /**
+     * Signature is sanitized HTML inserted by the composer.
+     */
+    "signature": string;
 }
 
 /**
@@ -194,6 +199,16 @@ export interface ComposeRequest {
      */
     "mode": string;
     "attachments": OutgoingAttachment[] | null;
+}
+
+/**
+ * Contact is an address seen in mail, ranked by frequency and recency.
+ */
+export interface Contact {
+    "name": string;
+    "email": string;
+    "count": number;
+    "lastSeen": string;
 }
 
 /**
@@ -435,6 +450,13 @@ export interface MessageSummary {
 }
 
 /**
+ * NetworkStatus is emitted when connectivity changes.
+ */
+export interface NetworkStatus {
+    "online": boolean;
+}
+
+/**
  * NewMailEvent announces newly arrived inbox mail.
  */
 export interface NewMailEvent {
@@ -501,6 +523,15 @@ export interface SearchResult {
     "fuzzy": boolean;
 }
 
+/**
+ * SearchUpdated is emitted when a server-side search added messages.
+ */
+export interface SearchUpdated {
+    "query": string;
+    "accountId": string;
+    "added": number;
+}
+
 export interface Settings {
     /**
      * "system" | "light" | "dark"
@@ -543,6 +574,26 @@ export interface Settings {
      * closing the window hides it to the tray (default false)
      */
     "closeToTray": boolean;
+
+    /**
+     * send delay handled by the UI (default 5, 0..30)
+     */
+    "undoSendSeconds": number;
+
+    /**
+     * "immediate" | "delay" | "manual" (default "immediate")
+     */
+    "markReadMode": string;
+
+    /**
+     * "right" | "off" (default "right")
+     */
+    "readingPane": string;
+
+    /**
+     * UI zoom factor (default 1.0, 0.5..2)
+     */
+    "zoom": number;
     "googleClientId": string;
     "googleClientSecret": string;
     "microsoftClientId": string;
@@ -615,6 +666,20 @@ export interface SyncEvent {
     "accountId": string;
     "newMessages": number;
     "error": string;
+}
+
+/**
+ * SyncProgress reports the progress of an account's initial sync.
+ */
+export interface SyncProgress {
+    "accountId": string;
+
+    /**
+     * "folders" | "listing" | "fetching" | "saving"
+     */
+    "phase": string;
+    "done": number;
+    "total": number;
 }
 
 /**

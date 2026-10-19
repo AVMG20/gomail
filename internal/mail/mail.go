@@ -77,9 +77,9 @@ type Body struct {
 	Text        string
 	Attachments []Attachment
 	// Optional header data discovered while fetching the full message.
-	MessageID  string
-	InReplyTo  string
-	References string
+	MessageID   string
+	InReplyTo   string
+	References  string
 	Cc          []models.Address
 	Bcc         []models.Address
 	ReplyTo     []models.Address

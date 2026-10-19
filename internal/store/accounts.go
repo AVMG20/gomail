@@ -11,7 +11,7 @@ import (
 	"github.com/AVMG20/gomail/internal/models"
 )
 
-const accountCols = `a.id, a.provider, a.email, a.display_name, a.color, a.created_at, a.last_sync_at, a.sync_error, a.needs_reauth,
+const accountCols = `a.id, a.provider, a.email, a.display_name, a.color, a.created_at, a.last_sync_at, a.sync_error, a.needs_reauth, a.signature,
 	coalesce((SELECT sum(f.unread) FROM folders f WHERE f.account_id = a.id AND f.kind = 'inbox'), 0)`
 
 func scanAccount(sc interface{ Scan(...any) error }) (models.Account, error) {
@@ -19,7 +19,7 @@ func scanAccount(sc interface{ Scan(...any) error }) (models.Account, error) {
 	var created int64
 	var last sql.NullInt64
 	var reauth int
-	err := sc.Scan(&a.ID, &a.Provider, &a.Email, &a.DisplayName, &a.Color, &created, &last, &a.SyncError, &reauth, &a.UnreadCount)
+	err := sc.Scan(&a.ID, &a.Provider, &a.Email, &a.DisplayName, &a.Color, &created, &last, &a.SyncError, &reauth, &a.Signature, &a.UnreadCount)
 	a.NeedsReauth = reauth == 1
 	if err != nil {
 		return a, err
@@ -99,6 +99,18 @@ func (s *Store) SetSyncResult(id string, at time.Time, syncErr string) error {
 	}
 	_, err := s.db.Exec(`UPDATE accounts SET last_sync_at = ?, sync_error = '' WHERE id = ?`, toMillis(at), id)
 	return err
+}
+
+// UpdateSignature stores an account's (sanitized) HTML signature.
+func (s *Store) UpdateSignature(id, html string) error {
+	res, err := s.db.Exec(`UPDATE accounts SET signature = ? WHERE id = ?`, html, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetNeedsReauth flags (or clears) an account whose sign-in was revoked.
@@ -258,4 +270,72 @@ func (s *Store) FolderByKind(accountID, kind string) (models.Folder, error) {
 		return f, ErrNotFound
 	}
 	return f, err
+}
+
+// SearchContacts prefix-matches contacts by email or by the start of any
+// word of the name, ranked by frequency (sent-to counts 5x) and recency.
+// exclude lists addresses to leave out (the user's own accounts).
+func (s *Store) SearchContacts(query string, limit int, exclude []string) ([]models.Contact, error) {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
+	q := `SELECT email, name, count, last_seen FROM contacts
+		WHERE (email LIKE ? ESCAPE '\' OR name LIKE ? ESCAPE '\' OR name LIKE ? ESCAPE '\')`
+	args := []any{esc + "%", esc + "%", "% " + esc + "%"}
+	if len(exclude) > 0 {
+		q += ` AND email NOT IN (` + placeholders(len(exclude)) + `)`
+		for _, e := range exclude {
+			args = append(args, strings.ToLower(e))
+		}
+	}
+	q += ` ORDER BY count * (1.0 + 1.0 / (1.0 + max(0, ? - last_seen) / 2592000000.0))
+		* (CASE WHEN email LIKE '%noreply%' OR email LIKE '%no-reply%' OR email LIKE '%donotreply%' OR email LIKE 'notifications@%' THEN 0.2 ELSE 1 END) DESC,
+		email LIMIT ?`
+	args = append(args, time.Now().UnixMilli(), limit)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.Contact{}
+	for rows.Next() {
+		var c models.Contact
+		var last int64
+		if err := rows.Scan(&c.Email, &c.Name, &c.Count, &last); err != nil {
+			return nil, err
+		}
+		c.LastSeen = fromMillis(last)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// FolderMessageIDs lists the cached messages of a folder.
+func (s *Store) FolderMessageIDs(folderID string, unreadOnly bool) ([]string, error) {
+	q := `SELECT mf.message_id FROM message_folders mf`
+	if unreadOnly {
+		q += ` JOIN messages m ON m.id = mf.message_id AND m.unread = 1`
+	}
+	rows, err := s.db.Query(q+` WHERE mf.folder_id = ?`, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// SetFolderCounts overrides a folder's counters (optimistic updates).
+func (s *Store) SetFolderCounts(folderID string, unread, total int) error {
+	_, err := s.db.Exec(`UPDATE folders SET unread = ?, total = ? WHERE id = ?`, max(0, unread), max(0, total), folderID)
+	return err
 }

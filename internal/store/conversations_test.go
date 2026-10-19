@@ -32,7 +32,7 @@ func TestConversationView(t *testing.T) {
 		threadMsg("t1-b", "T1", 3, "Bob", "INBOX", "ALL"),
 		threadMsg("t2-a", "T2", 4, "Cid", "INBOX", "ALL"),
 		threadMsg("t3-a", "", 5, "Dee", "INBOX", "ALL"), // no thread id: its own conversation
-		threadMsg("t1-x", "T1", 6, "Eve", "TRASH"),       // trashed message doesn't join the inbox thread
+		threadMsg("t1-x", "T1", 6, "Eve", "TRASH"),      // trashed message doesn't join the inbox thread
 	}
 	ms[0].Unread = true
 	ms[0].HasAttachments = true
