@@ -1,8 +1,8 @@
 name: Release
 
 # Builds the desktop app for Linux, macOS and Windows and attaches the
-# binaries to the GitHub release. Publish a release (e.g. tag v1.0.0) to run
-# it, or start it manually with an existing tag.
+# packages to the GitHub release. Publish a release (e.g. tag v1.0.0) to run
+# it, or start it manually for an existing release tag.
 #
 # Optional repository secrets bake default OAuth client IDs into the build so
 # end users don't have to create their own:
@@ -21,7 +21,7 @@ permissions:
   contents: write
 
 env:
-  WAILS_VERSION: v2.17.0
+  WAILS_VERSION: v3.0.0-beta.33
   TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
@@ -33,14 +33,14 @@ jobs:
         include:
           - name: linux-amd64
             os: ubuntu-24.04
-            platform: linux/amd64
           - name: macos-universal
             os: macos-latest
-            platform: darwin/universal
           - name: windows-amd64
             os: windows-latest
-            platform: windows/amd64
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,14 +60,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libfuse2
 
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
 
       - name: Compute build flags
         id: flags
-        shell: bash
         env:
           GOOGLE_ID: ${{ secrets.GOMAIL_GOOGLE_CLIENT_ID }}
           GOOGLE_SECRET: ${{ secrets.GOMAIL_GOOGLE_CLIENT_SECRET }}
@@ -75,49 +74,58 @@ jobs:
         run: |
           version="${TAG#v}"
           pkg="github.com/AVMG20/gomail/internal/auth"
-          ldflags="-s -w -X main.version=${version}"
+          ldflags="-X main.version=${version}"
           [ -n "$GOOGLE_ID" ] && ldflags="$ldflags -X ${pkg}.DefaultGoogleClientID=${GOOGLE_ID}"
           [ -n "$GOOGLE_SECRET" ] && ldflags="$ldflags -X ${pkg}.DefaultGoogleClientSecret=${GOOGLE_SECRET}"
           [ -n "$MS_ID" ] && ldflags="$ldflags -X ${pkg}.DefaultMicrosoftClientID=${MS_ID}"
           echo "ldflags=$ldflags" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Stamp the version into the platform metadata (Info.plist, .exe info, nfpm).
+          sed -i.bak "s/^  version: .*/  version: \"${version}\"/" build/config.yml && rm build/config.yml.bak
+          (cd build && wails3 update build-assets -name gomail -binaryname gomail -config config.yml -dir .)
 
-      - name: Build (Linux)
+      - name: Package (Linux)
         if: runner.os == 'Linux'
-        run: wails build -clean -platform ${{ matrix.platform }} -tags webkit2_41 -ldflags "${{ steps.flags.outputs.ldflags }}"
+        run: |
+          wails3 task linux:build "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"
+          wails3 task linux:create:appimage "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"
+          wails3 task linux:create:deb "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"
+          wails3 task linux:create:rpm "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"
 
-      - name: Build (macOS)
+      - name: Package (macOS)
         if: runner.os == 'macOS'
-        run: wails build -clean -platform ${{ matrix.platform }} -ldflags "${{ steps.flags.outputs.ldflags }}"
+        run: |
+          wails3 task darwin:package:universal "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"
+          wails3 task darwin:create:dmg
 
-      - name: Build (Windows)
+      - name: Package (Windows)
         if: runner.os == 'Windows'
-        shell: bash
-        run: wails build -clean -platform ${{ matrix.platform }} -nsis -webview2 embed -ldflags "${{ steps.flags.outputs.ldflags }}"
+        run: wails3 task windows:package "EXTRA_LDFLAGS=${{ steps.flags.outputs.ldflags }}"
 
-      - name: Package
-        id: package
-        shell: bash
+      - name: Collect release assets
         run: |
           mkdir -p dist
           name="gomail-${{ steps.flags.outputs.version }}-${{ matrix.name }}"
+          ls -la bin
           case "${{ runner.os }}" in
             Linux)
-              tar -C build/bin -czf "dist/${name}.tar.gz" gomail
+              tar -C bin -czf "dist/${name}.tar.gz" gomail
+              for f in bin/*.AppImage; do cp "$f" "dist/${name}.AppImage"; done
+              for f in bin/*.deb; do cp "$f" "dist/${name}.deb"; done
+              for f in bin/*.rpm; do cp "$f" "dist/${name}.rpm"; done
               ;;
             macOS)
-              ditto -c -k --keepParent build/bin/gomail.app "dist/${name}.zip"
-              hdiutil create -volname gomail -srcfolder build/bin/gomail.app -ov -format UDZO "dist/${name}.dmg"
+              ditto -c -k --keepParent bin/gomail.app "dist/${name}.zip"
+              for f in bin/*.dmg; do cp "$f" "dist/${name}.dmg"; done
               ;;
             Windows)
-              cp build/bin/gomail.exe "dist/${name}-portable.exe"
-              cp build/bin/*installer.exe "dist/${name}-installer.exe"
+              cp bin/gomail.exe "dist/${name}-portable.exe"
+              for f in bin/*installer*.exe; do cp "$f" "dist/${name}-setup.exe"; done
               ;;
           esac
           ls -la dist
 
       - name: Upload to release
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"

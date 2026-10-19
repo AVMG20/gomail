@@ -5,3 +5,7 @@ frontend/dist/*
 *.db
 *.db-*
 .DS_Store
+bin/
+build/linux/appimage/build/
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+*.syso

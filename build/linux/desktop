@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=gomail
+Comment=A clean desktop mail client for Gmail and Outlook
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/gomail %u
+Terminal=false
+Type=Application
+Icon=gomail
+Categories=Utility;
+StartupWMClass=gomail
+
+ 
