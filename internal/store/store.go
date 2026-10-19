@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,7 +24,29 @@ var ErrNotFound = errors.New("not found")
 
 // Store wraps the SQLite database.
 type Store struct {
-	db *sql.DB
+	db           *sql.DB
+	labels       labelIndex
+	hideProvider atomic.Bool
+}
+
+// SetHideProviderLabels hides (true) or shows provider-sourced label
+// assignments in every read path. The data is kept and kept in sync either
+// way, so toggling is instant.
+func (s *Store) SetHideProviderLabels(hide bool) { s.hideProvider.Store(hide) }
+
+// labelCond returns an extra condition on the "ml" alias for visible labels.
+func (s *Store) labelCond() string {
+	if s.hideProvider.Load() {
+		return ` AND ml.source != 'provider'`
+	}
+	return ""
+}
+
+func (s *Store) summaryCols() string {
+	return `m.id, m.account_id, m.remote_id, m.thread_id, m.from_name, m.from_email, m.to_json, m.subject, m.snippet,
+	m.date, m.unread, m.starred, m.has_attachments,
+	coalesce((SELECT group_concat(mf.folder_id) FROM message_folders mf WHERE mf.message_id = m.id), ''),
+	coalesce((SELECT group_concat(ml.label_id || '|' || ml.source || '|' || ml.confidence) FROM message_labels ml WHERE ml.message_id = m.id` + s.labelCond() + `), '')`
 }
 
 // Open opens (creating if needed) the database at path and runs migrations.

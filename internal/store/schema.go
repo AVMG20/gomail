@@ -86,6 +86,16 @@ CREATE TABLE message_labels (
 ) WITHOUT ROWID;
 CREATE INDEX message_labels_label ON message_labels(label_id, message_id);
 
+-- AI corrections of provider/system labels: while a row exists, the next
+-- sync doesn't re-add that provider assignment. Rows are dropped once the
+-- provider stops reporting the label (so a later re-add counts again).
+CREATE TABLE label_overrides (
+	message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	label_id   TEXT NOT NULL,
+	created_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(message_id, label_id)
+) WITHOUT ROWID;
+
 CREATE TABLE attachments (
 	message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
 	id         TEXT NOT NULL,

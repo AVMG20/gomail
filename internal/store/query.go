@@ -91,10 +91,10 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 		addKindFilter(w, []string{q.FolderKind})
 	}
 	if len(q.Labels) > 0 {
-		w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (`+placeholders(len(q.Labels))+`))`, anySlice(q.Labels)...)
+		w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (`+placeholders(len(q.Labels))+`)`+s.labelCond()+`)`, anySlice(q.Labels)...)
 	}
 	if q.Unlabeled || opt.OnlyUnlabeled {
-		w.add(`NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id)`)
+		w.add(`NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id` + s.labelCond() + `)`)
 	}
 	if q.UnreadOnly {
 		w.add(`m.unread = 1`)
@@ -156,7 +156,7 @@ func (s *Store) addSearchFilters(w *where, ps ParsedSearch) {
 		}
 		// Each label: operator must match (AND semantics, like Gmail).
 		for _, id := range ids {
-			w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = ?)`, id)
+			w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = ?`+s.labelCond()+`)`, id)
 		}
 	}
 	if !ps.After.IsZero() {
@@ -218,7 +218,7 @@ func (s *Store) ListMessages(q models.ListQuery) (models.MessagePage, error) {
 		}
 		w.add(`(m.date < ? OR (m.date = ? AND m.id < ?))`, d, d, id)
 	}
-	rows, err := s.db.Query(`SELECT `+summaryCols+` FROM messages m`+w.sql()+` ORDER BY m.date DESC, m.id DESC LIMIT ?`,
+	rows, err := s.db.Query(`SELECT `+s.summaryCols()+` FROM messages m`+w.sql()+` ORDER BY m.date DESC, m.id DESC LIMIT ?`,
 		append(w.args, limit+1)...)
 	if err != nil {
 		return page, err

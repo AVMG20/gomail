@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,11 +14,6 @@ import (
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 )
-
-const summaryCols = `m.id, m.account_id, m.remote_id, m.thread_id, m.from_name, m.from_email, m.to_json, m.subject, m.snippet,
-	m.date, m.unread, m.starred, m.has_attachments,
-	coalesce((SELECT group_concat(mf.folder_id) FROM message_folders mf WHERE mf.message_id = m.id), ''),
-	coalesce((SELECT group_concat(ml.label_id || '|' || ml.source || '|' || ml.confidence) FROM message_labels ml WHERE ml.message_id = m.id), '')`
 
 func scanSummary(sc interface{ Scan(...any) error }, extra ...any) (models.MessageSummary, error) {
 	var m models.MessageSummary
@@ -86,7 +82,10 @@ type ApplyResult struct {
 
 // ApplySync stores a provider sync round atomically: upserts, deletions,
 // folder membership removals, orphan cleanup and the new sync state.
-func (s *Store) ApplySync(accountID string, r mail.SyncResult) (ApplyResult, error) {
+//
+// labelIDs maps lower-cased provider label names to local label ids; names
+// missing from it are ignored.
+func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[string]string) (ApplyResult, error) {
 	var res ApplyResult
 	err := s.tx(context.Background(), func(tx *sql.Tx) error {
 		// Folder remote id -> local id (skipping "starred", which is
@@ -137,6 +136,12 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult) (ApplyResult, err
 		}
 		defer insMF.Close()
 
+		pl, err := newProviderLabeler(tx)
+		if err != nil {
+			return err
+		}
+		defer pl.close()
+
 		now := time.Now().UnixMilli()
 		for _, m := range r.Upserts {
 			id := MessageID(accountID, m.RemoteID)
@@ -159,6 +164,15 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult) (ApplyResult, err
 						return err
 					}
 				}
+			}
+			var lids []string
+			for _, name := range m.Labels {
+				if lid, ok := labelIDs[strings.ToLower(name)]; ok {
+					lids = append(lids, lid)
+				}
+			}
+			if err := pl.set(id, lids, now); err != nil {
+				return err
 			}
 		}
 		for _, rid := range r.Deleted {
@@ -197,9 +211,136 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult) (ApplyResult, err
 		if err := saveSyncState(tx, accountID, r.State); err != nil {
 			return err
 		}
+		if err := refreshJunk(tx, accountID, now); err != nil {
+			return err
+		}
 		return recountStarred(tx, accountID)
 	})
 	return res, err
+}
+
+// providerLabeler replaces the provider-sourced label assignments of a
+// message, honoring AI overrides.
+type providerLabeler struct {
+	cur, del, ins, ovr, clearOvr *sql.Stmt
+}
+
+func newProviderLabeler(tx *sql.Tx) (*providerLabeler, error) {
+	p := &providerLabeler{}
+	var err error
+	prep := func(q string) *sql.Stmt {
+		if err != nil {
+			return nil
+		}
+		var st *sql.Stmt
+		st, err = tx.Prepare(q)
+		return st
+	}
+	p.cur = prep(`SELECT label_id FROM message_labels WHERE message_id = ? AND source = 'provider'`)
+	p.del = prep(`DELETE FROM message_labels WHERE message_id = ? AND label_id = ? AND source = 'provider'`)
+	p.ins = prep(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at) VALUES(?, ?, 'provider', 1, ?)
+		ON CONFLICT(message_id, label_id) DO UPDATE SET source = 'provider', confidence = 1 WHERE source = 'ai'`)
+	p.ovr = prep(`SELECT label_id FROM label_overrides WHERE message_id = ?`)
+	p.clearOvr = prep(`DELETE FROM label_overrides WHERE message_id = ? AND label_id = ?`)
+	if err != nil {
+		p.close()
+		return nil, err
+	}
+	return p, nil
+}
+
+func (p *providerLabeler) close() {
+	for _, st := range []*sql.Stmt{p.cur, p.del, p.ins, p.ovr, p.clearOvr} {
+		if st != nil {
+			st.Close()
+		}
+	}
+}
+
+func queryStrings(st *sql.Stmt, args ...any) (map[string]bool, error) {
+	rows, err := st.Query(args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out[v] = true
+	}
+	return out, rows.Err()
+}
+
+func (p *providerLabeler) set(msgID string, labelIDs []string, now int64) error {
+	want := map[string]bool{}
+	for _, l := range labelIDs {
+		if l != "" && l != junkID {
+			want[l] = true
+		}
+	}
+	cur, err := queryStrings(p.cur, msgID)
+	if err != nil {
+		return err
+	}
+	ovr, err := queryStrings(p.ovr, msgID)
+	if err != nil {
+		return err
+	}
+	for l := range cur {
+		if !want[l] {
+			if _, err := p.del.Exec(msgID, l); err != nil {
+				return err
+			}
+		}
+	}
+	for l := range ovr {
+		if l != junkID && !want[l] {
+			// The provider dropped the label: forget the AI override so a
+			// later re-add by the provider applies again.
+			if _, err := p.clearOvr.Exec(msgID, l); err != nil {
+				return err
+			}
+		}
+	}
+	for l := range want {
+		if ovr[l] || cur[l] {
+			continue
+		}
+		if _, err := p.ins.Exec(msgID, l, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const junkID = "junk"
+
+const inSpam = `EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = %s AND f.kind = 'spam')`
+
+// refreshJunk gives every message in a Spam/Junk folder the system "junk"
+// label and removes it from messages that left spam.
+func refreshJunk(tx *sql.Tx, accountID string, now int64) error {
+	stmts := []string{
+		`DELETE FROM message_labels WHERE label_id = 'junk' AND source = 'system' AND message_id IN
+			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.id") + `)`,
+		`DELETE FROM label_overrides WHERE label_id = 'junk' AND message_id IN
+			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.id") + `)`,
+		`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
+			SELECT m.id, 'junk', 'system', 1, ? FROM messages m WHERE m.account_id = ? AND ` + fmt.Sprintf(inSpam, "m.id") + `
+			AND NOT EXISTS (SELECT 1 FROM label_overrides o WHERE o.message_id = m.id AND o.label_id = 'junk')
+			ON CONFLICT(message_id, label_id) DO UPDATE SET source = 'system', confidence = 1 WHERE source = 'ai'`,
+	}
+	if _, err := tx.Exec(stmts[0], accountID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(stmts[1], accountID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(stmts[2], now, accountID)
+	return err
 }
 
 // Summaries returns summaries for the given ids (missing ids are skipped),
@@ -207,7 +348,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult) (ApplyResult, err
 func (s *Store) Summaries(ids []string) ([]models.MessageSummary, error) {
 	out := make([]models.MessageSummary, 0, len(ids))
 	for _, chunk := range chunks(ids, 500) {
-		rows, err := s.db.Query(`SELECT `+summaryCols+` FROM messages m WHERE m.id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
+		rows, err := s.db.Query(`SELECT `+s.summaryCols()+` FROM messages m WHERE m.id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +374,7 @@ func (s *Store) Message(id string) (msg models.Message, hasBody bool, err error)
 	var cc, bcc, replyTo string
 	var html, text sql.NullString
 	var remote int
-	row := s.db.QueryRow(`SELECT `+summaryCols+`, m.cc_json, m.bcc_json, m.reply_to_json, m.message_id_hdr, m.in_reply_to, m.refs,
+	row := s.db.QueryRow(`SELECT `+s.summaryCols()+`, m.cc_json, m.bcc_json, m.reply_to_json, m.message_id_hdr, m.in_reply_to, m.refs,
 		m.body_html, m.body_text, m.has_remote FROM messages m WHERE m.id = ?`, id)
 	sum, err := scanSummary(row, &cc, &bcc, &replyTo, &msg.MessageID, &msg.InReplyTo, &msg.References, &html, &text, &remote)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -342,7 +483,7 @@ func countNonInline(atts []models.Attachment) int {
 
 // Thread returns the messages of a thread in an account ordered by date.
 func (s *Store) Thread(accountID, threadID string) ([]models.MessageSummary, error) {
-	rows, err := s.db.Query(`SELECT `+summaryCols+` FROM messages m WHERE m.account_id = ? AND m.thread_id = ? ORDER BY m.date, m.id`,
+	rows, err := s.db.Query(`SELECT `+s.summaryCols()+` FROM messages m WHERE m.account_id = ? AND m.thread_id = ? ORDER BY m.date, m.id`,
 		accountID, threadID)
 	if err != nil {
 		return nil, err
@@ -451,9 +592,11 @@ func (s *Store) MessageFolders(ids []string) (map[string][]string, error) {
 // folder totals/unread counters by the difference.
 func (s *Store) SetMessageFolders(sets map[string][]string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		accounts := map[string]bool{}
 		for id, folders := range sets {
 			var unread int
-			if err := tx.QueryRow(`SELECT unread FROM messages WHERE id = ?`, id).Scan(&unread); err != nil {
+			var acct string
+			if err := tx.QueryRow(`SELECT unread, account_id FROM messages WHERE id = ?`, id).Scan(&unread, &acct); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					continue
 				}
@@ -497,6 +640,13 @@ func (s *Store) SetMessageFolders(sets map[string][]string) error {
 					}
 				}
 			}
+			accounts[acct] = true
+		}
+		now := time.Now().UnixMilli()
+		for a := range accounts {
+			if err := refreshJunk(tx, a, now); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -504,8 +654,8 @@ func (s *Store) SetMessageFolders(sets map[string][]string) error {
 
 // ---- labels ----
 
-// AddLabels assigns a label manually (upgrading an existing AI assignment
-// to manual). It returns the ids that exist.
+// AddLabels assigns a label manually (upgrading an existing AI, provider or
+// system assignment to manual).
 func (s *Store) AddLabels(ids []string, labelID string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
 		st, err := tx.Prepare(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
@@ -525,11 +675,17 @@ func (s *Store) AddLabels(ids []string, labelID string) error {
 	})
 }
 
-// RemoveLabels removes a label (manual or AI) from messages.
+// RemoveLabels removes a label from messages whatever its source. Removing
+// a provider/system assignment records an override so sync doesn't re-add it.
 func (s *Store) RemoveLabels(ids []string, labelID string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
 		for _, chunk := range chunks(ids, 500) {
 			args := append([]any{labelID}, anySlice(chunk)...)
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO label_overrides(message_id, label_id, created_at)
+				SELECT message_id, label_id, `+fmt.Sprint(time.Now().UnixMilli())+` FROM message_labels
+				WHERE label_id = ? AND source IN ('provider', 'system') AND message_id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(`DELETE FROM message_labels WHERE label_id = ? AND message_id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
 				return err
 			}
@@ -538,62 +694,103 @@ func (s *Store) RemoveLabels(ids []string, labelID string) error {
 	})
 }
 
-// AIResult is one classifier outcome. LabelID "" means "no label applies".
-type AIResult struct {
-	ID         string
-	LabelID    string
-	Confidence float64
+// AIPolicy controls how classifier scores change label assignments.
+type AIPolicy struct {
+	AddThreshold    float64 // add (or keep) an AI label when P >= this
+	RemoveThreshold float64 // remove provider/system labels when P < this ...
+	CorrectProvider bool    // ... if enabled
 }
 
-// ApplyAIResults replaces the previous AI labels of each message with the
-// new result. Manual labels are never touched; if the AI picks a label the
-// user already assigned manually it stays manual. The message is marked as
-// classified either way.
-func (s *Store) ApplyAIResults(results []AIResult) error {
-	return s.tx(context.Background(), func(tx *sql.Tx) error {
-		del, err := tx.Prepare(`DELETE FROM message_labels WHERE message_id = ? AND source = 'ai'`)
+// ApplyAIScores updates the labels of one message from classifier scores
+// (label id -> P(yes)):
+//   - manual assignments are never touched;
+//   - AI assignments are kept when P >= AddThreshold, otherwise removed
+//     (re-classifying replaces previous AI decisions);
+//   - provider/system assignments are removed when CorrectProvider and
+//     P < RemoveThreshold, recording an override so the next sync doesn't
+//     re-add them;
+//   - unassigned labels are added with source "ai" when P >= AddThreshold.
+//
+// Labels missing from scores are left alone. It returns the added and
+// removed label ids.
+func (s *Store) ApplyAIScores(msgID string, scores map[string]float64, p AIPolicy) (added, removed []string, err error) {
+	added, removed = []string{}, []string{}
+	err = s.tx(context.Background(), func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT label_id, source FROM message_labels WHERE message_id = ?`, msgID)
 		if err != nil {
 			return err
 		}
-		defer del.Close()
-		ins, err := tx.Prepare(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
-			SELECT id, ?, 'ai', ?, ? FROM messages WHERE id = ?
-			ON CONFLICT(message_id, label_id) DO NOTHING`)
-		if err != nil {
-			return err
-		}
-		defer ins.Close()
-		mark, err := tx.Prepare(`UPDATE messages SET classified_at = ? WHERE id = ?`)
-		if err != nil {
-			return err
-		}
-		defer mark.Close()
-		now := time.Now().UnixMilli()
-		for _, r := range results {
-			if _, err := del.Exec(r.ID); err != nil {
+		cur := map[string]string{}
+		for rows.Next() {
+			var l, src string
+			if err := rows.Scan(&l, &src); err != nil {
+				rows.Close()
 				return err
 			}
-			if r.LabelID != "" {
-				if _, err := ins.Exec(r.LabelID, r.Confidence, now, r.ID); err != nil {
+			cur[l] = src
+		}
+		rows.Close()
+		now := time.Now().UnixMilli()
+		ids := make([]string, 0, len(scores))
+		for l := range scores {
+			ids = append(ids, l)
+		}
+		sort.Strings(ids)
+		for _, l := range ids {
+			pr := scores[l]
+			switch src, ok := cur[l]; {
+			case !ok:
+				if pr >= p.AddThreshold {
+					if _, err := tx.Exec(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at) VALUES(?, ?, 'ai', ?, ?)`,
+						msgID, l, pr, now); err != nil {
+						return err
+					}
+					added = append(added, l)
+				}
+			case src == "manual":
+			case src == "ai":
+				if pr >= p.AddThreshold {
+					_, err = tx.Exec(`UPDATE message_labels SET confidence = ? WHERE message_id = ? AND label_id = ?`, pr, msgID, l)
+				} else {
+					_, err = tx.Exec(`DELETE FROM message_labels WHERE message_id = ? AND label_id = ?`, msgID, l)
+					removed = append(removed, l)
+				}
+				if err != nil {
 					return err
 				}
+			default: // provider, system
+				if p.CorrectProvider && pr < p.RemoveThreshold {
+					if _, err := tx.Exec(`DELETE FROM message_labels WHERE message_id = ? AND label_id = ?`, msgID, l); err != nil {
+						return err
+					}
+					if _, err := tx.Exec(`INSERT OR REPLACE INTO label_overrides(message_id, label_id, created_at) VALUES(?, ?, ?)`, msgID, l, now); err != nil {
+						return err
+					}
+					removed = append(removed, l)
+				}
 			}
-			if _, err := mark.Exec(now, r.ID); err != nil {
+		}
+		_, err = tx.Exec(`UPDATE messages SET classified_at = ? WHERE id = ?`, now, msgID)
+		return err
+	})
+	return added, removed, err
+}
+
+// DeleteUnknownLabels removes assignments (and overrides) of labels that no
+// longer exist.
+func (s *Store) DeleteUnknownLabels(valid []string) error {
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		for _, table := range []string{"message_labels", "label_overrides"} {
+			q := `DELETE FROM ` + table
+			if len(valid) > 0 {
+				q += ` WHERE label_id NOT IN (` + placeholders(len(valid)) + `)`
+			}
+			if _, err := tx.Exec(q, anySlice(valid)...); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
-}
-
-// DeleteUnknownLabels removes assignments of labels that no longer exist.
-func (s *Store) DeleteUnknownLabels(valid []string) error {
-	q := `DELETE FROM message_labels`
-	if len(valid) > 0 {
-		q += ` WHERE label_id NOT IN (` + placeholders(len(valid)) + `)`
-	}
-	_, err := s.db.Exec(q, anySlice(valid)...)
-	return err
 }
 
 // LabelCounts counts labeled messages per label (total and unread),
@@ -603,7 +800,7 @@ func (s *Store) LabelCounts(accountID string) ([]models.LabelCount, error) {
 	q := `SELECT ml.label_id, count(*), coalesce(sum(m.unread), 0)
 		FROM message_labels ml JOIN messages m ON m.id = ml.message_id
 		WHERE NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.id = mf.folder_id
-			WHERE mf.message_id = m.id AND f.kind = 'trash')`
+			WHERE mf.message_id = m.id AND f.kind = 'trash')` + s.labelCond()
 	var args []any
 	if accountID != "" {
 		q += ` AND m.account_id = ?`

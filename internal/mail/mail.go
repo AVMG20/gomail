@@ -39,6 +39,17 @@ type Message struct {
 	MessageID       string // RFC 5322 Message-ID
 	InReplyTo       string
 	References      string
+	// Labels are the provider label names on the message (Gmail user labels,
+	// Outlook categories). System labels/folders are never included.
+	Labels []string
+}
+
+// Label is a provider-side label definition (Gmail user label, Outlook
+// master category).
+type Label struct {
+	RemoteID string // Gmail label id; Outlook category display name
+	Name     string
+	Color    string // hex, "" if none
 }
 
 // Attachment describes an attachment; Data is only filled for inline parts

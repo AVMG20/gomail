@@ -9,7 +9,9 @@ export const SYSTEM_ORDER = ['inbox', 'starred', 'sent', 'drafts', 'archive', 's
 export const useAccountsStore = defineStore('accounts', () => {
   const accounts = ref<Account[]>([])
   const folders = shallowRef<Record<string, Folder[]>>({})
+  /** Label counts for the active scope (account id, or "" for all accounts). */
   const labelCounts = shallowRef<Map<string, LabelCount>>(new Map())
+  const labelScope = ref('')
   const loaded = ref(false)
   const syncing = ref<Set<string>>(new Set())
 
@@ -38,9 +40,11 @@ export const useAccountsStore = defineStore('accounts', () => {
     folders.value = next
   }
 
-  async function loadLabelCounts() {
+  async function loadLabelCounts(scope = labelScope.value) {
+    labelScope.value = scope
     try {
-      const counts = await api.getLabelCounts('')
+      const counts = await api.getLabelCounts(scope)
+      if (scope !== labelScope.value) return
       labelCounts.value = new Map(counts.map((c) => [c.labelId, c]))
     } catch {
       /* optional binding */
@@ -92,7 +96,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   }
 
   return {
-    accounts, folders, labelCounts, loaded, syncing, accountMap, anySyncing, folderMap,
+    accounts, folders, labelCounts, labelScope, loaded, syncing, accountMap, anySyncing, folderMap,
     load, loadFolders, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })
