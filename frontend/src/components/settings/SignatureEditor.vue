@@ -5,11 +5,13 @@ import StarterKit from '@tiptap/starter-kit'
 import { Placeholder } from '@tiptap/extensions'
 import { BoldIcon, ItalicIcon, LinkIcon } from '@lucide/vue'
 
-const props = defineProps<{ modelValue: string }>()
+const props = defineProps<{ modelValue: string; autofocus?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [html: string] }>()
 
 const editor = useEditor({
   content: props.modelValue,
+  // Opened from "Add signature": take focus so typing (incl. space) goes into the editor, not the toggle button.
+  autofocus: props.autofocus ? 'end' : false,
   extensions: [
     StarterKit.configure({ heading: false, codeBlock: false, code: false, horizontalRule: false, blockquote: false, link: { openOnClick: false, autolink: true } }),
     Placeholder.configure({ placeholder: 'Add a signature…' }),

@@ -59,6 +59,12 @@ describe('operator completions', () => {
     expect(operatorCompletions('from:bill', sources)[0]).toMatchObject({ label: 'billing@cloud.example', hint: '' })
   })
 
+  it('prefers substring sender matches over scattered fuzzy ones', () => {
+    const c = operatorCompletions('from:pri', { labels: [], contacts: [{ name: 'Priya', email: 'p@x.io' }, { name: '', email: 'no-reply@spotify.example' }] })
+    expect(c.map((x) => x.label)).toEqual(['Priya'])
+    expect(operatorCompletions('from:spfy', { labels: [], contacts: [{ name: '', email: 'no-reply@spotify.example' }] })).toHaveLength(1)
+  })
+
   it('completes fixed values and skips exact matches', () => {
     expect(operatorCompletions('is:', sources).map((c) => c.value)).toEqual(['is:unread', 'is:read', 'is:starred'])
     expect(operatorCompletions('in:tr', sources).map((c) => c.value)).toEqual(['in:trash'])

@@ -77,7 +77,10 @@ export function operatorCompletions(
     return fuzzyFilter(rest.replace(/^"/, ''), sources.labels, (l) => l.name, 8).map((l) => ({ value: `label:${l.name.includes(' ') ? `"${l.name}"` : l.name}`, label: l.name, color: l.color }))
   }
   if (op === 'from') {
-    return fuzzyFilter(rest, sources.contacts, (a) => `${a.name} ${a.email}`, 8).map((a) => ({ value: `from:${a.email}`, label: a.name || a.email, hint: a.name ? a.email : '' }))
+    // Prefer real substring matches; scattered-letter fuzzy hits only when nothing contains the text.
+    const key = (a: { name: string; email: string }) => `${a.name} ${a.email}`
+    const exact = rest ? sources.contacts.filter((a) => key(a).toLowerCase().includes(rest)) : sources.contacts
+    return fuzzyFilter(rest, exact.length ? exact : sources.contacts, key, 8).map((a) => ({ value: `from:${a.email}`, label: a.name || a.email, hint: a.name ? a.email : '' }))
   }
   return (OPERATOR_VALUES[op] ?? []).filter((o) => o.startsWith(rest) && o !== rest).map((o) => ({ value: `${op}:${o}`, label: `${op}:${o}` }))
 }

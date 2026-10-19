@@ -94,7 +94,7 @@ async function remove() {
         <Button variant="ghost" size="icon-sm" class="hover:text-destructive" aria-label="Remove account" @click="removing = a"><Trash2Icon /></Button>
       </div>
       <div v-if="editingSig === a.id" class="-mt-1 pb-3 pl-12">
-        <SignatureEditor :model-value="a.signature ?? ''" @update:model-value="(v: string) => saveSig(a.id, v)" />
+        <SignatureEditor autofocus :model-value="a.signature ?? ''" @update:model-value="(v: string) => saveSig(a.id, v)" />
       </div>
       </template>
       <div class="py-3">
