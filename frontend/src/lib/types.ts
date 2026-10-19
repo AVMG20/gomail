@@ -239,7 +239,7 @@ export interface Settings {
   markReadMode?: 'immediate' | 'delay' | 'manual'
   /** "right" = three panes; "off" = full-width list, message opens in the main area. */
   readingPane?: 'right' | 'off'
-  /** Dark mode: "auto" renders simple emails with theme colors; "light" always uses a light card. Stored locally until the backend has it. */
+  /** Dark mode: "auto" renders simple emails with theme colors; "light" always uses a light card. */
   emailBackground?: 'auto' | 'light'
   /** UI zoom factor 0.9–1.25. */
   zoom?: number
@@ -249,9 +249,9 @@ export interface Settings {
   syncDepthDays?: number
   /** Pause the background download of older mail. */
   backfillPaused?: boolean
-  /** Start gomail when you log in (next backend pass). */
+  /** Start gomail when you log in (minimized to the tray). */
   launchAtLogin?: boolean
-  /** Check GitHub releases for updates (next backend pass). */
+  /** Check GitHub releases for updates once a day. */
   checkUpdates?: boolean
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number

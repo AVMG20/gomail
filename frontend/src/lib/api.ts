@@ -217,9 +217,9 @@ export function normSettings(s: Settings): Settings {
     markReadMode: s.markReadMode ?? readLocal('markReadMode', 'immediate'),
     readingPane: s.readingPane ?? readLocal('readingPane', 'right'),
     zoom: s.zoom || readLocal('zoom', 1),
-    emailBackground: s.emailBackground ?? readLocal('emailBackground', 'auto'),
-    launchAtLogin: s.launchAtLogin ?? readLocal('launchAtLogin', false),
-    checkUpdates: s.checkUpdates ?? readLocal('checkUpdates', true),
+    emailBackground: s.emailBackground === 'light' ? 'light' : 'auto',
+    launchAtLogin: s.launchAtLogin ?? false,
+    checkUpdates: s.checkUpdates ?? true,
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,
     syncDepthDays: s.syncDepthDays ?? 90,
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
@@ -337,11 +337,7 @@ export const api = {
   getSettings: async () => normSettings(await call<Settings>('GetSettings')),
   // Reading/sending preferences now live in the backend's Settings; the
   // readLocal() fallbacks in normSettings only cover older backends.
-  saveSettings: (s: Settings) => {
-    // Not in the Go Settings struct yet: keep a local copy so they survive restarts.
-    for (const k of ['emailBackground', 'launchAtLogin', 'checkUpdates'] as const) if (s[k] !== undefined) writeLocal(k, s[k])
-    return call<void>('SaveSettings', s)
-  },
+  saveSettings: (s: Settings) => call<void>('SaveSettings', s),
 
   setOpenRouterKey: (key: string) => call<void>('SetOpenRouterKey', key),
   getAppInfo: () => call<AppInfo>('GetAppInfo'),

@@ -34,16 +34,16 @@ describe('api normalisation (Go nil slices / legacy fields)', () => {
     expect(s.syncDepthDays).toBe(90)
     expect(s.emailBackground).toBe('auto')
     expect(s.checkUpdates).toBe(true)
+    expect(normSettings({ emailBackground: 'light' } as unknown as Settings).emailBackground).toBe('light')
+    expect(normSettings({ emailBackground: 'bogus' } as unknown as Settings).emailBackground).toBe('auto')
   })
 
   it('keeps explicit zeros and falls back to locally stored prefs for older backends', () => {
     writeLocal('readingPane', 'off')
-    writeLocal('emailBackground', 'light')
     const s = normSettings({ radius: 0, aiDailyBudgetUsd: 0, syncDepthDays: 0, labels: [] } as unknown as Settings)
     expect(s.radius).toBe(0)
     expect(s.aiDailyBudgetUsd).toBe(0)
     expect(s.syncDepthDays).toBe(0)
     expect(s.readingPane).toBe('off')
-    expect(s.emailBackground).toBe('light')
   })
 })
