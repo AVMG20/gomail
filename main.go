@@ -32,6 +32,9 @@ func init() {
 	application.RegisterEvent[models.SyncProgress](models.EventSyncProgress)
 	application.RegisterEvent[models.NetworkStatus](models.EventNetworkStatus)
 	application.RegisterEvent[models.SearchUpdated](models.EventSearchUpdated)
+	application.RegisterEvent[models.AIUsage](models.EventAIBudget)
+	application.RegisterEvent[models.NotificationOpen](models.EventNotificationOpen)
+	application.RegisterEvent[models.DatabaseStatus](models.EventDatabaseStatus)
 }
 
 func main() {
@@ -86,7 +89,7 @@ func main() {
 		}
 	})
 
-	notifier.OnNotificationResponse(func(notifications.NotificationResult) { svc.showWindow() })
+	notifier.OnNotificationResponse(svc.onNotification)
 
 	if err := app.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "gomail:", err)

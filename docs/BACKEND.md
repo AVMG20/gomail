@@ -49,6 +49,38 @@ and `search:updated`.
   record an account error, and probes every 30 s. When the network comes
   back it emits `online:true` and syncs everything.
 
+**Provider edge cases.**
+
+- Gmail `history.list` 404 (history too old) falls back to a full resync.
+  Upserts never touch manual labels or AI overrides.
+- Graph delta 410 or `syncStateNotFound` resets that folder's delta link.
+- Every Graph call sends `Prefer: IdType="ImmutableId"`, including each
+  `$batch` sub-request, so message ids survive moves. No id migration is
+  needed: gomail has always stored immutable ids.
+- Retries with exponential backoff apply to 429 and 5xx (honouring
+  `Retry-After`, also on batched sub-requests) and to Google quota 403s
+  (`rateLimitExceeded`, `userRateLimitExceeded`).
+- Large mail:
+  - Gmail messages and drafts over 4 MB go through the media upload
+    endpoint (`/upload/.../messages/send` and `/drafts` with
+    `uploadType=multipart`).
+  - Graph attachments over 3 MB use `createUploadSession` with 3.75 MB
+    chunks; the upload URL gets no bearer token.
+  - Both paths are tested with 10 MB attachments.
+
+**Background backfill.** After the first sync, older mail is fetched page
+by page (100 messages, one page every 3 s, starting 30 s after launch). It
+continues until `syncDepthDays` is covered (30, 90 (the default), 365, or
+0 for all mail) or the server has nothing older.
+
+- Gmail backfills All Mail; Outlook backfills Inbox, Archive, Sent and
+  custom folders.
+- Each page is its own short transaction.
+- `backfillPaused` pauses it. Progress survives restarts, because it
+  derives from the oldest cached message per folder.
+- It emits `sync:progress` with phase `backfill` (days covered out of
+  `syncDepthDays`), and `messages:changed` at most every 10 s.
+
 **Older mail.** `ListMessages` sets `hasMoreRemote` on the last local page
 when the server folder holds more mail than is cached. `LoadOlder(query)`
 then fetches the next 50 messages per folder in the view and emits
@@ -108,6 +140,21 @@ for previews. Attachment bytes are cached in `<data dir>/attachments`: the
 cache is LRU, bounded at 500 MB, and cleared per account when the account is
 removed.
 
+**AI cost control.**
+
+- Every Decisions and chat call records `usage.cost` in `ai_usage`. Chat
+  requests ask OpenRouter for usage reporting.
+- `GetAIUsage()` returns today's and this month's spend and request
+  counts, plus `aiDailyBudgetUsd` (default $1, 0 = unlimited).
+- When the budget is reached, automatic labeling pauses and emits
+  `ai:budget` once a day. It resumes the next day.
+- Manual and bulk labeling still run. `EstimateClassify` reports
+  `todayUsd`, `exceedsBudget` and `unchanged` so the UI can warn first.
+- A message is not sent to the classifier again while its fingerprint is
+  unchanged. The fingerprint combines the model, the instructions, the
+  label definitions and the message identity. Unchanged messages return
+  `skipped: true` with their stored scores, at no cost.
+
 **Unsubscribe.** `List-Unsubscribe` and `List-Unsubscribe-Post` are parsed
 into `Message.unsubscribe`. `Unsubscribe(id)` tries these in order:
 
@@ -131,6 +178,34 @@ failure.
   needs the full `https://mail.google.com/` scope, which gomail doesn't
   request, so it returns an explanation instead. Gmail purges Trash itself
   after 30 days.
+
+**Notifications.** A single message shows the sender and subject.
+Several show "5 new messages · <account>" with the senders. Clicking one
+shows and focuses the window and emits `notification:open {messageId,
+accountId}`.
+
+**Robustness.**
+
+- Every goroutine recovers and logs panics.
+- The log is size-rotated at 5 MB, keeping 3 old files.
+- Shutdown waits up to 5 s for in-flight write transactions.
+- 15 s after start, `PRAGMA quick_check` runs. If it fails:
+  - a marker is written and `database:status {ok:false}` is emitted;
+  - on the next launch the database is rebuilt: the damaged file is kept
+    as `gomail.db.corrupt-<time>`, accounts, signatures and settings are
+    salvaged, and mail syncs again (tokens live in the keyring).
+- A database that fails to open as corrupt is rebuilt the same way, right
+  away.
+- Every 6 h, `PRAGMA optimize` runs. New databases use
+  `auto_vacuum=INCREMENTAL`; old ones are vacuumed once when more than a
+  quarter of the file is free.
+
+**Startup.** Opening the database (migrations, settings) takes about 3 ms
+with 50k messages. Syncing starts only after the UI's first `ListMessages`
+(or after 3 s). The integrity check runs at 15 s, backfill at 30 s, and
+the model list is only fetched when it is needed. From a cold start, the
+first-paint calls (accounts, folders, label counts and the first
+conversation page) take about 25 ms with 50k messages.
 
 **Tray.** The tray icon shows the unread count (macOS label, tooltip
 elsewhere). Its menu has Open gomail, Check mail and Quit.
@@ -341,11 +416,11 @@ Benchmarks on the reference box, a 4-vCPU Xeon:
 
 | Operation | Time |
 |---|---|
-| Storing 5,000 synced messages | 1.6 s |
-| Initial sync of a 5,000-message demo account, end to end | 2.0 s |
-| `ListMessages` on a 50k inbox, conversation view | ~40 ms on the first page |
-| `ListMessages` on a 50k inbox, conversation view, later pages | ~5 ms (the total is cached until the next write) |
-| `ListMessages` on a 50k inbox, message view | 6 ms |
+| Storing 5,000 synced messages | 1.9 s |
+| Initial sync of a 5,000-message demo account, end to end | 2.2 s |
+| `ListMessages` on a 50k inbox, conversation view | 7 ms (maintained `folder_threads` counters) |
+| `ListMessages` on a 50k inbox, message view | 3 ms |
+| Cold start to the first page with 50k messages | 25 ms (open: 3 ms) |
 | `GetLabelCounts` on 50k messages | 5 ms (denormalized and index-only) |
 | Search on 50k messages | 8–25 ms per query |
 | List plus counts on a 5k account | 13 ms |

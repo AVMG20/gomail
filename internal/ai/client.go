@@ -30,6 +30,8 @@ type Client struct {
 	http *http.Client
 	// Sleep replaces backoff sleeping (tests).
 	Sleep func(context.Context, time.Duration) error
+	// OnUsage, if set, is called after every billed call with its cost.
+	OnUsage func(u Usage)
 
 	models *modelCache
 }
@@ -93,4 +95,19 @@ func friendly(err error) error {
 		return errors.New("OpenRouter is rate limiting requests; please try again in a moment")
 	}
 	return err
+}
+
+// Usage is the metered cost of one OpenRouter call.
+type Usage struct {
+	Kind         string // "decision" | "chat"
+	Model        string
+	Cost         float64 // USD
+	InputTokens  int
+	OutputTokens int
+}
+
+func (c *Client) report(u Usage) {
+	if c.OnUsage != nil {
+		c.OnUsage(u)
+	}
 }

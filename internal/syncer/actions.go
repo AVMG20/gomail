@@ -12,6 +12,7 @@ import (
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
+	"github.com/AVMG20/gomail/internal/safe"
 	"github.com/AVMG20/gomail/internal/store"
 )
 
@@ -71,7 +72,7 @@ func (e *Engine) perAccount(groups map[string][]models.MessageSummary, what stri
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(e.ctx, 2*time.Minute)
 			defer cancel()
-			if err := push(ctx, acct, ms); err != nil {
+			if err := safe.Call(what, func() error { return push(ctx, acct, ms) }); err != nil {
 				slog.Warn("action failed", "action", what, "account", acct, "err", err)
 				revert(acct, ms)
 				a, _ := e.cfg.Store.Account(acct)
@@ -288,6 +289,7 @@ func (e *Engine) PushLabel(ids []string, labelName string, add bool) {
 		e.wg.Add(1)
 		go func(acct string, ms []models.MessageSummary) {
 			defer e.wg.Done()
+			defer safe.Recover("push label")
 			ctx, cancel := context.WithTimeout(e.ctx, 2*time.Minute)
 			defer cancel()
 			p, err := e.cfg.Provider(acct)

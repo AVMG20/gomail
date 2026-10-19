@@ -13,12 +13,15 @@ declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "accounts:changed": models$0.AccountEvent;
+            "ai:budget": models$0.AIUsage;
             "classify:finished": models$0.ClassifyProgress;
             "classify:progress": models$0.ClassifyProgress;
+            "database:status": models$0.DatabaseStatus;
             "labels:changed": models$0.AccountEvent;
             "mail:new": models$0.NewMailEvent;
             "messages:changed": models$0.AccountEvent;
             "network:status": models$0.NetworkStatus;
+            "notification:open": models$0.NotificationOpen;
             "search:updated": models$0.SearchUpdated;
             "sync:finished": models$0.SyncEvent;
             "sync:progress": models$0.SyncProgress;

@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,9 +41,10 @@ type job struct {
 type autoRun struct{ cancel context.CancelFunc }
 
 type jobManager struct {
-	mu      sync.Mutex
-	current *job
-	others  map[string]*autoRun // automatic labeling per account
+	mu        sync.Mutex
+	current   *job
+	others    map[string]*autoRun // automatic labeling per account
+	budgetDay string              // day the budget event was last emitted
 }
 
 func (j *jobManager) init() { j.others = map[string]*autoRun{} }
@@ -137,9 +140,37 @@ func (s *Service) checkAIReady() error {
 	return nil
 }
 
-// classifyOne scores and applies labels for one message.
+// labelsetHash fingerprints everything that influences classification
+// besides the message: model, instructions and label definitions.
+func (s *Service) labelsetHash() string {
+	st := s.Settings()
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00", st.ClassifierModel, st.ClassifyInstructions)
+	defs := s.labelDefs()
+	sort.Slice(defs, func(i, j int) bool { return defs[i].ID < defs[j].ID })
+	for _, d := range defs {
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00", d.ID, d.Name, d.Description)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// aiHash fingerprints a message for the classifier: label set + the
+// message's identity (mail is immutable; the body arriving later doesn't
+// trigger a re-run).
+func aiHash(labelset string, in store.ClassifyInput) string {
+	h := sha256.Sum256([]byte(in.Subject + "\x00" + strings.ToLower(in.From.Email) + "\x00" + in.Date.UTC().Format(time.RFC3339Nano)))
+	return labelset + ":" + hex.EncodeToString(h[:])[:12]
+}
+
+// classifyOne scores and applies labels for one message. Messages already
+// classified with the current label set are skipped (no cost).
 func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) models.ClassificationResult {
 	res := models.ClassificationResult{MessageID: in.ID, Added: []string{}, Removed: []string{}, Scores: map[string]float64{}}
+	hash := aiHash(s.labelsetHash(), in)
+	if in.AIHash == hash && in.AIScores != nil {
+		res.Scores, res.Skipped = in.AIScores, true
+		return res
+	}
 	st := s.Settings()
 	body := in.BodyText
 	if strings.TrimSpace(body) == "" {
@@ -154,7 +185,7 @@ func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) model
 		return res
 	}
 	res.Scores = scores.Scores
-	added, removed, err := s.store.ApplyAIScores(in.ID, scores.Scores, s.policy())
+	added, removed, err := s.store.ApplyAIScores(in.ID, scores.Scores, s.policy(), hash)
 	if err != nil {
 		res.Error = err.Error()
 		return res
@@ -213,6 +244,10 @@ func (s *Service) runClassification(ctx context.Context, jobID string, ids []str
 			stats.mu.Unlock()
 			results[i] = r
 			return nil
+		case jobID == autoJobID && s.budgetReached():
+			s.announceBudget()
+			cancel()
+			return nil
 		default:
 			r = s.classifyOne(ctx, inputs[0])
 		}
@@ -220,7 +255,9 @@ func (s *Service) runClassification(ctx context.Context, jobID string, ids []str
 		stats.mu.Lock()
 		stats.p.Done++
 		stats.p.Cost += r.Cost
-		if r.Error != "" {
+		if r.Skipped {
+			stats.p.Skipped++
+		} else if r.Error != "" {
 			stats.p.Failed++
 		} else if len(r.Added)+len(r.Removed) > 0 {
 			stats.p.Labeled++
@@ -365,25 +402,29 @@ func (s *Service) CancelClassify(jobID string) error {
 // EstimateClassify estimates the size and cost of ClassifyQuery.
 func (s *Service) EstimateClassify(q models.ListQuery, onlyUnlabeled, includeAllFolders bool) (models.ClassifyEstimate, error) {
 	q.Cursor = ""
-	count, chars, err := s.store.EstimateInput(q, s.bulkOptions(onlyUnlabeled, includeAllFolders), ai.MaxBodyChars)
+	count, unchanged, chars, err := s.store.EstimateInput(q, s.bulkOptions(onlyUnlabeled, includeAllFolders), ai.MaxBodyChars, s.labelsetHash()+":")
 	if err != nil {
 		return models.ClassifyEstimate{}, err
 	}
-	est := models.ClassifyEstimate{Count: count}
-	if count == 0 {
+	est := models.ClassifyEstimate{Count: count, Unchanged: unchanged}
+	usage, _ := s.AIUsage()
+	est.TodayUSD = usage.TodayUSD
+	todo := count - unchanged
+	if todo <= 0 {
 		est.PriceKnown = true
 		return est, nil
 	}
 	st := s.Settings()
-	perMsg, reqs := ai.EstimateTokens(int(chars/int64(count)), s.labelDefs(), st.ClassifyInstructions)
-	est.Requests = reqs * count
-	est.EstimatedTokens = perMsg * count
+	perMsg, reqs := ai.EstimateTokens(int(chars/int64(todo)), s.labelDefs(), st.ClassifyInstructions)
+	est.Requests = reqs * todo
+	est.EstimatedTokens = perMsg * todo
 	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
 	defer cancel()
 	if m, ok := s.ai.Model(ctx, st.ClassifierModel); ok && !m.PriceUnknown {
 		est.PriceKnown = true
 		est.EstimatedCostUSD = float64(est.EstimatedTokens) * m.PromptPrice / 1e6
 	}
+	est.ExceedsBudget = usage.DailyBudgetUSD > 0 && usage.TodayUSD+est.EstimatedCostUSD > usage.DailyBudgetUSD
 	return est, nil
 }
 
@@ -391,6 +432,10 @@ func (s *Service) EstimateClassify(q models.ListQuery, onlyUnlabeled, includeAll
 func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 	st := s.Settings()
 	if !st.AutoClassify || s.checkAIReady() != nil {
+		return
+	}
+	if s.budgetReached() {
+		s.announceBudget()
 		return
 	}
 	inputs, err := s.store.ClassifyInputs(ids)
@@ -452,4 +497,42 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 		_, final := s.runClassification(ctx, autoJobID, todo, true)
 		s.emit(models.EventClassifyFinished, final)
 	})
+}
+
+// ---- usage & budget ----
+
+func (s *Service) recordUsage(u ai.Usage) {
+	if err := s.store.RecordAIUsage(u.Kind, u.Model, u.Cost, u.InputTokens, u.OutputTokens); err != nil {
+		slog.Warn("recording AI usage", "err", err)
+	}
+}
+
+// AIUsage returns today's and this month's recorded spending.
+func (s *Service) AIUsage() (models.AIUsage, error) {
+	u, err := s.store.AIUsage(time.Now())
+	if err != nil {
+		return u, err
+	}
+	u.DailyBudgetUSD = s.Settings().AIDailyBudgetUSD
+	u.BudgetReached = u.DailyBudgetUSD > 0 && u.TodayUSD >= u.DailyBudgetUSD
+	return u, nil
+}
+
+func (s *Service) budgetReached() bool {
+	u, err := s.AIUsage()
+	return err == nil && u.BudgetReached
+}
+
+// announceBudget emits ai:budget once per day.
+func (s *Service) announceBudget() {
+	day := time.Now().Format("2006-01-02")
+	s.jobs.mu.Lock()
+	first := s.jobs.budgetDay != day
+	s.jobs.budgetDay = day
+	s.jobs.mu.Unlock()
+	if first {
+		u, _ := s.AIUsage()
+		slog.Info("AI daily budget reached; automatic labeling paused until tomorrow", "spent", u.TodayUSD, "budget", u.DailyBudgetUSD)
+		s.emit(models.EventAIBudget, u)
+	}
 }

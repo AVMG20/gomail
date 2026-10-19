@@ -90,3 +90,32 @@ func TestErrorMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestGoogleQuota403IsRetried(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) <= 2 {
+			w.WriteHeader(403)
+			w.Write([]byte(`{"error":{"code":403,"message":"User-rate limit exceeded.","errors":[{"domain":"usageLimits","reason":"userRateLimitExceeded"}],"status":"PERMISSION_DENIED"}}`))
+			return
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if err := c.JSON(context.Background(), "GET", "/", nil, nil); err != nil || calls != 3 {
+		t.Fatalf("%v calls=%d", err, calls)
+	}
+	// A real permission error is not retried.
+	calls = 0
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(403)
+		w.Write([]byte(`{"error":{"code":403,"message":"Insufficient Permission","errors":[{"reason":"insufficientPermissions"}]}}`))
+	}))
+	defer srv2.Close()
+	c.BaseURL = srv2.URL
+	if err := c.JSON(context.Background(), "GET", "/", nil, nil); err == nil || calls != 1 {
+		t.Fatalf("%v calls=%d", err, calls)
+	}
+}

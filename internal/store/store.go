@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,7 @@ type Store struct {
 	// gen increments on every committed write transaction; it invalidates
 	// cached list totals (infinite scroll re-asks for the same count).
 	gen        atomic.Int64
+	writes     sync.WaitGroup // in-flight write transactions
 	countMu    sync.Mutex
 	countCache map[string]countEntry
 }
@@ -91,7 +93,9 @@ func (s *Store) summaryCols() string {
 // Use ":memory:" for an ephemeral database (tests).
 func Open(path string) (*Store, error) {
 	q := url.Values{}
-	for _, p := range []string{"journal_mode(WAL)", "busy_timeout(10000)", "foreign_keys(1)", "synchronous(NORMAL)", "temp_store(MEMORY)"} {
+	// auto_vacuum only takes effect on a new database (before the first
+	// table); existing files are switched by Maintain's one-off VACUUM.
+	for _, p := range []string{"auto_vacuum(INCREMENTAL)", "journal_mode(WAL)", "busy_timeout(10000)", "foreign_keys(1)", "synchronous(NORMAL)", "temp_store(MEMORY)"} {
 		q.Add("_pragma", p)
 	}
 	q.Set("_txlock", "immediate")
@@ -111,17 +115,32 @@ func Open(path string) (*Store, error) {
 	}
 	if err := db.Ping(); err != nil {
 		db.Close()
+		if IsCorrupt(err) {
+			return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		}
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	s := &Store{db: db}
+
 	if err := s.migrate(context.Background()); err != nil {
 		db.Close()
+		if IsCorrupt(err) {
+			return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		}
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	return s, nil
 }
 
+// Close waits (up to 5 s) for in-flight write transactions, then closes.
 func (s *Store) Close() error {
+	done := make(chan struct{})
+	go func() { s.writes.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		slog.Warn("closing the database with writes still in flight")
+	}
 	_, _ = s.db.Exec(`PRAGMA optimize`)
 	return s.db.Close()
 }
@@ -175,6 +194,8 @@ func mustJSON(v any) string {
 
 // tx runs f in a transaction.
 func (s *Store) tx(ctx context.Context, f func(*sql.Tx) error) error {
+	s.writes.Add(1)
+	defer s.writes.Done()
 	t, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

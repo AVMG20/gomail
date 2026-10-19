@@ -15,6 +15,7 @@ import (
 	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/core"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/safe"
 )
 
 // MailService is the Wails service bound to the frontend. Every exported
@@ -33,8 +34,9 @@ type MailService struct {
 
 	trayMu      sync.Mutex
 	trayTimer   *time.Timer
-	trayVisible bool // Settings.showInTray
-	closeToTray bool // Settings.closeToTray
+	notified    map[string]models.NotificationOpen // notification id -> target
+	trayVisible bool                               // Settings.showInTray
+	closeToTray bool                               // Settings.closeToTray
 	logCloser   interface{ Close() error }
 }
 
@@ -143,16 +145,43 @@ func (u desktopUI) SaveFile(defaultName string) (string, error) {
 }
 
 // Notify shows a desktop notification (errors are only logged).
-func (u desktopUI) Notify(title, body string) {
+func (u desktopUI) Notify(title, body string, open models.NotificationOpen) {
 	m := u.m
 	if m.notifier == nil {
 		return
 	}
+	id := fmt.Sprintf("gomail-%d", time.Now().UnixNano())
+	m.trayMu.Lock()
+	if m.notified == nil || len(m.notified) > 100 {
+		m.notified = map[string]models.NotificationOpen{}
+	}
+	m.notified[id] = open
+	m.trayMu.Unlock()
 	err := m.notifier.SendNotification(notifications.NotificationOptions{
-		ID: fmt.Sprintf("gomail-%d", time.Now().UnixNano()), Title: title, Body: body,
+		ID: id, Title: title, Body: body,
+		Data: map[string]any{"messageId": open.MessageID, "accountId": open.AccountID},
 	})
 	if err != nil {
 		slog.Debug("notification failed", "err", err)
+	}
+}
+
+// onNotification opens the app at the message of a clicked notification.
+func (m *MailService) onNotification(r notifications.NotificationResult) {
+	defer safe.Recover("notification click")
+	if r.Error != nil {
+		return
+	}
+	m.trayMu.Lock()
+	open, ok := m.notified[r.Response.ID]
+	m.trayMu.Unlock()
+	if !ok {
+		open.MessageID, _ = r.Response.UserInfo["messageId"].(string)
+		open.AccountID, _ = r.Response.UserInfo["accountId"].(string)
+	}
+	m.showWindow()
+	if open.MessageID != "" && m.app != nil {
+		m.app.Event.Emit(models.EventNotificationOpen, open)
 	}
 }
 
@@ -206,6 +235,7 @@ func (m *MailService) scheduleTrayUpdate() {
 		return
 	}
 	m.trayTimer = time.AfterFunc(700*time.Millisecond, func() {
+		defer safe.Recover("tray update")
 		m.trayMu.Lock()
 		m.trayTimer = nil
 		m.trayMu.Unlock()
@@ -621,6 +651,16 @@ func (m *MailService) RefreshAIModels() ([]models.AIModel, error) {
 		return nil, err
 	}
 	return s.ListAIModels(true)
+}
+
+// GetAIUsage returns OpenRouter spending recorded today and this month,
+// and whether the daily budget paused automatic labeling.
+func (m *MailService) GetAIUsage() (models.AIUsage, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.AIUsage{}, err
+	}
+	return s.AIUsage()
 }
 
 // ClassifyMessages labels the given messages (max 200) and returns the

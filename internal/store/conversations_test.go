@@ -136,3 +136,56 @@ func TestHasMoreRemote(t *testing.T) {
 		t.Fatal("search views never report more remote")
 	}
 }
+
+// TestConversationCountersStayConsistent checks the trigger-maintained
+// folder_threads counters against a full recount after many operations.
+func TestConversationCountersStayConsistent(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	var ms []mail.Message
+	for i := 0; i < 60; i++ {
+		m := threadMsg(fmt.Sprint("r", i), fmt.Sprint("T", i/4), i, "X", "INBOX", "ALL")
+		m.Unread = i%3 == 0
+		if i%10 == 0 {
+			m.ThreadID = ""
+		}
+		ms = append(ms, m)
+	}
+	s.ApplySync("a1", mail.SyncResult{Upserts: ms}, nil)
+	check := func(step string) {
+		t.Helper()
+		folders, _ := s.Folders("a1")
+		for _, f := range folders {
+			if f.Kind == models.FolderStarred {
+				continue
+			}
+			for _, unread := range []bool{false, true} {
+				q := models.ListQuery{FolderID: f.ID, UnreadOnly: unread}
+				fast, ok, err := s.fastConversationCount(q, ListOptions{Conversations: true})
+				slow, err2 := s.slowConversationCount(q)
+				if err != nil || err2 != nil || !ok || fast != slow {
+					t.Fatalf("%s: folder %s unread=%v fast=%d slow=%d (%v %v)", step, f.Name, unread, fast, slow, err, err2)
+				}
+			}
+		}
+	}
+	check("initial")
+	ids := []string{MessageID("a1", "r1"), MessageID("a1", "r2"), MessageID("a1", "r3"), MessageID("a1", "r30")}
+	s.SetUnread(ids, true)
+	check("unread")
+	s.SetUnread(ids[:2], false)
+	check("read")
+	spam, _ := s.FolderByKind("a1", models.FolderSpam)
+	s.SetMessageFolders(map[string][]string{ids[0]: {spam.ID}, ids[3]: {}})
+	check("move")
+	ms[5].ThreadID = "T99" // re-threaded by the provider
+	ms[6].Unread = !ms[6].Unread
+	s.ApplySync("a1", mail.SyncResult{Upserts: ms[5:7], Deleted: []string{"r7", "r8"}, Removed: map[string][]string{"INBOX": {"r9"}}}, nil)
+	check("resync")
+	s.DeleteAccount("a1")
+	var left int
+	s.db.QueryRow(`SELECT count(*) FROM folder_threads`).Scan(&left)
+	if left != 0 {
+		t.Fatalf("%d counters left after deleting the account", left)
+	}
+}

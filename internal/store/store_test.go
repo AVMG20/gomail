@@ -209,7 +209,7 @@ func TestLabels(t *testing.T) {
 
 	// AI: low P(finance) removes the provider label and records an override.
 	pol := AIPolicy{AddThreshold: 0.5, RemoveThreshold: 0.15, CorrectProvider: true}
-	added, removed, err := s.ApplyAIScores(id1, map[string]float64{"finance": 0.05, "work": 0.9}, pol)
+	added, removed, err := s.ApplyAIScores(id1, map[string]float64{"finance": 0.05, "work": 0.9}, pol, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,11 +234,11 @@ func TestLabels(t *testing.T) {
 		t.Fatalf("labels after re-add %v", m.Labels)
 	}
 	// Re-classification replaces AI labels but never manual ones.
-	added, removed, _ = s.ApplyAIScores(id1, map[string]float64{"work": 0.2}, pol)
+	added, removed, _ = s.ApplyAIScores(id1, map[string]float64{"work": 0.2}, pol, "")
 	if len(added) != 0 || fmt.Sprint(removed) != "[work]" {
 		t.Fatalf("reclassify %v %v", added, removed)
 	}
-	_, removed, _ = s.ApplyAIScores(id2, map[string]float64{"personal": 0.0}, pol)
+	_, removed, _ = s.ApplyAIScores(id2, map[string]float64{"personal": 0.0}, pol, "")
 	if len(removed) != 0 {
 		t.Fatal("manual label removed by AI")
 	}
@@ -282,5 +282,30 @@ func TestDeleteAccountCascades(t *testing.T) {
 	res, err := s.Search(models.SearchQuery{Query: "one"})
 	if err != nil || len(res) != 1 {
 		t.Fatalf("search after delete: %v %d", err, len(res))
+	}
+}
+
+// TestFullResyncKeepsLabels mirrors Gmail's history 404 fallback: a full
+// (Initial) round re-upserts messages; manual labels and AI overrides of
+// provider labels must survive.
+func TestFullResyncKeepsLabels(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	m := msg(1, "Invoice", "Acme", "INBOX", "ALL")
+	m.Labels = []string{"Finance"}
+	ids := map[string]string{"finance": "finance"}
+	s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{m}, State: map[string]string{"historyId": "5"}}, ids)
+	id := MessageID("a1", m.RemoteID)
+	s.AddLabels([]string{id}, "work")
+	s.ApplyAIScores(id, map[string]float64{"finance": 0.01}, AIPolicy{AddThreshold: 0.5, RemoveThreshold: 0.15, CorrectProvider: true}, "h")
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{m}, State: map[string]string{"historyId": "99"}, Initial: true}, ids); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.Message(id)
+	if fmt.Sprint(got.Labels) != "[work]" {
+		t.Fatalf("labels after full resync: %v", got.Labels)
+	}
+	if st, _ := s.SyncState("a1"); st["historyId"] != "99" {
+		t.Fatal(st)
 	}
 }

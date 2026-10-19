@@ -48,6 +48,13 @@ export const SEED_SETTINGS: Settings = {
   notifications: true,
   showInTray: true,
   undoSendSeconds: 5,
+  markReadMode: 'immediate',
+  readingPane: 'right',
+  zoom: 1,
+  conversationView: true,
+  closeToTray: false,
+  aiDailyBudgetUsd: 1,
+  syncDepthDays: 90,
   primaryColor: '#2563eb',
   radius: 0.625,
   grammarSystemPrompt: DEFAULT_GRAMMAR_PROMPT,
@@ -408,7 +415,7 @@ const SENT: Tpl[] = [
 ]
 T.push(...SENT)
 
-T.push({ acc: 'acc_work', from: me.acc_work, to: [P.priya], subject: 'Draft: notes for leadership sync', folder: 'drafts', read: true, text: 'Points to raise:\n- staffing for offline sync\n- reporting templates scope' })
+T.push({ acc: 'acc_work', from: me.acc_work, to: [P.priya], subject: 'Notes for leadership sync', folder: 'drafts', read: true, text: 'Points to raise:\n- staffing for offline sync\n- reporting templates scope' })
 T.push({ acc: 'acc_personal', from: P.verge, subject: 'Archived: your subscription is confirmed', folder: 'archive', read: true, cat: 'newsletters', text: 'Thanks for subscribing to The Verge newsletters.' })
 T.push({ acc: 'acc_personal', from: { name: 'Old Promo', email: 'promo@shop.example' }, subject: 'Last chance: 40% off everything', folder: 'trash', read: true, cat: 'newsletters', text: 'Sale ends tonight.' })
 
@@ -463,6 +470,7 @@ export function buildMessage(t: Tpl, date: number, threadId?: string, overrides:
         : { labelId, source: 'manual', confidence: 1 }),
     cc: t.cc ?? [], bcc: [], replyTo: [], bodyHtml: t.html ?? '', bodyText: t.text ?? '', attachments: atts,
     messageId: `<${id}@mock.gomail>`, inReplyTo: '', references: '', hasRemoteContent: /src=["']https?:/i.test(t.html ?? ''),
+    isDraft: folder === 'drafts',
     unsubscribe: t.cat === 'newsletters' ? { url: `https://example.com/unsubscribe?m=${id}`, mailto: '', oneClick: true } : null,
     ...overrides,
   }

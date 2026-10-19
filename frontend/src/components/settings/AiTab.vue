@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { api, errorMessage } from '@/lib/api'
+import { api, errorMessage, hasMethod } from '@/lib/api'
+import type { AIUsage } from '@/lib/types'
 import { formatUSD } from '@/lib/format'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
@@ -27,9 +28,11 @@ const savingKey = ref(false)
 const testing = ref(false)
 const testOk = ref<boolean | null>(null)
 
-onMounted(() => {
+const usage = ref<AIUsage | null>(null)
+onMounted(async () => {
   void settings.loadDefaults()
   if (settings.aiReady) void settings.loadModels()
+  if (hasMethod('GetAIUsage')) usage.value = await api.getAIUsage().catch(() => null)
 })
 
 async function saveKey() {
@@ -92,6 +95,21 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
             Test
           </Button>
           <Button v-if="s.openRouterKeySet" variant="ghost" size="sm" class="text-muted-foreground" @click="removeKey">Remove</Button>
+        </div>
+      </SettingRow>
+    </SettingSection>
+
+    <SettingSection v-if="s.openRouterKeySet" title="Usage & budget">
+      <div v-if="usage" class="grid grid-cols-2 gap-3 py-3.5 sm:grid-cols-4">
+        <div v-for="c in [{ k: 'Today', v: formatUSD(usage.todayUsd) }, { k: 'This month', v: formatUSD(usage.monthUsd) }, { k: 'Requests today', v: usage.requestsToday.toLocaleString() }, { k: 'Requests this month', v: usage.requestsMonth.toLocaleString() }]" :key="c.k" class="bg-muted/50 rounded-lg px-3 py-2.5">
+          <div class="text-muted-foreground text-[11px]">{{ c.k }}</div>
+          <div class="mt-0.5 text-base font-semibold tabular-nums">{{ c.v }}</div>
+        </div>
+      </div>
+      <SettingRow title="Daily budget" description="Auto-labeling pauses for the day when AI spend reaches this. 0 = no limit.">
+        <div class="flex items-center gap-1.5">
+          <span class="text-muted-foreground text-sm">$</span>
+          <Input type="number" min="0" step="0.25" class="h-8 w-24 text-right tabular-nums" :model-value="s.aiDailyBudgetUsd ?? 1" aria-label="Daily AI budget in US dollars" @update:model-value="(v) => settings.update({ aiDailyBudgetUsd: Math.max(0, Number(v) || 0) }, 600)" />
         </div>
       </SettingRow>
     </SettingSection>

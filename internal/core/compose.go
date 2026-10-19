@@ -14,6 +14,7 @@ import (
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/mailmime"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/safe"
 	"github.com/AVMG20/gomail/internal/store"
 	"github.com/AVMG20/gomail/internal/syncer"
 )
@@ -275,7 +276,10 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 		o := out
 		e.pending = &o
 		if e.timer == nil {
-			e.timer = time.AfterFunc(wait, func() { s.flushDraft(key) })
+			e.timer = time.AfterFunc(wait, func() {
+				defer safe.Recover("draft autosave")
+				s.flushDraft(key)
+			})
 		}
 		s.drafts.mu.Unlock()
 		return key, nil

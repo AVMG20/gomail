@@ -224,6 +224,65 @@ INSERT INTO contacts(email, name, count, last_seen)
 	ON CONFLICT(email) DO UPDATE SET count = count + excluded.count, last_seen = max(last_seen, excluded.last_seen),
 		name = CASE WHEN name = '' THEN excluded.name ELSE name END;
 `,
+	// 4: maintained conversation counters, AI usage, AI re-run hashes
+	`
+CREATE TABLE folder_threads (
+	folder_id  TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+	thread_key TEXT NOT NULL,
+	msgs       INTEGER NOT NULL DEFAULT 0, -- messages of the thread in the folder
+	unread     INTEGER NOT NULL DEFAULT 0, -- of which unread
+	PRIMARY KEY(folder_id, thread_key)
+) WITHOUT ROWID;
+CREATE INDEX folder_threads_unread ON folder_threads(folder_id, unread);
+INSERT INTO folder_threads(folder_id, thread_key, msgs, unread)
+	SELECT mf.folder_id, m.thread_key, count(*), sum(m.unread)
+	FROM message_folders mf JOIN messages m ON m.id = mf.message_id GROUP BY mf.folder_id, m.thread_key;
+
+CREATE TRIGGER folder_threads_add AFTER INSERT ON message_folders BEGIN
+	INSERT INTO folder_threads(folder_id, thread_key, msgs, unread)
+		SELECT new.folder_id, m.thread_key, 1, m.unread FROM messages m WHERE m.id = new.message_id
+		ON CONFLICT(folder_id, thread_key) DO UPDATE SET msgs = msgs + 1, unread = unread + excluded.unread;
+END;
+CREATE TRIGGER folder_threads_remove AFTER DELETE ON message_folders BEGIN
+	UPDATE folder_threads SET msgs = msgs - 1,
+		unread = unread - coalesce((SELECT m.unread FROM messages m WHERE m.id = old.message_id), 0)
+	WHERE folder_id = old.folder_id AND thread_key = (SELECT m.thread_key FROM messages m WHERE m.id = old.message_id);
+	DELETE FROM folder_threads WHERE folder_id = old.folder_id AND msgs <= 0;
+END;
+-- Remove memberships while the message row still exists, so the counters
+-- above can see its thread and unread state.
+CREATE TRIGGER messages_before_delete BEFORE DELETE ON messages BEGIN
+	DELETE FROM message_folders WHERE message_id = old.id;
+END;
+CREATE TRIGGER folder_threads_unread AFTER UPDATE OF unread ON messages WHEN old.unread != new.unread BEGIN
+	UPDATE folder_threads SET unread = unread + (new.unread - old.unread)
+	WHERE thread_key = new.thread_key AND folder_id IN (SELECT folder_id FROM message_folders WHERE message_id = new.id);
+END;
+CREATE TRIGGER folder_threads_rethread AFTER UPDATE OF thread_id ON messages WHEN old.thread_id != new.thread_id BEGIN
+	UPDATE folder_threads SET msgs = msgs - 1, unread = unread - old.unread
+	WHERE thread_key = (CASE WHEN old.thread_id = '' THEN old.id ELSE old.thread_id END)
+		AND folder_id IN (SELECT folder_id FROM message_folders WHERE message_id = new.id);
+	DELETE FROM folder_threads WHERE msgs <= 0 AND thread_key = (CASE WHEN old.thread_id = '' THEN old.id ELSE old.thread_id END);
+	INSERT INTO folder_threads(folder_id, thread_key, msgs, unread)
+		SELECT mf.folder_id, new.thread_key, 1, new.unread FROM message_folders mf WHERE mf.message_id = new.id
+		ON CONFLICT(folder_id, thread_key) DO UPDATE SET msgs = msgs + 1, unread = unread + excluded.unread;
+END;
+
+CREATE TABLE ai_usage (
+	at            INTEGER NOT NULL, -- unix ms
+	kind          TEXT NOT NULL,    -- "decision" | "chat"
+	model         TEXT NOT NULL DEFAULT '',
+	cost          REAL NOT NULL DEFAULT 0,
+	input_tokens  INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX ai_usage_at ON ai_usage(at);
+
+CREATE INDEX messages_account_starred ON messages(account_id, starred, unread);
+
+ALTER TABLE messages ADD COLUMN ai_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN ai_scores TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

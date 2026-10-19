@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toggle } from '@/components/ui/toggle'
+import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
 import { useAccountsStore } from '@/stores/accounts'
@@ -230,12 +231,10 @@ function toggleHeaderCheck() {
 }
 
 // ---- context menu: one lazily loaded menu for the whole list, opened at the cursor
-const ctx = ref<{ id: string; x: number; y: number; key: number } | null>(null)
+const ctxId = ref<string | null>(null)
 function onContext(e: MouseEvent) {
   const row = (e.target as HTMLElement).closest('[data-id]') as HTMLElement | null
-  e.preventDefault()
-  if (!row?.dataset.id) return
-  ctx.value = { id: row.dataset.id, x: e.clientX, y: e.clientY, key: Date.now() }
+  ctxId.value = row?.dataset.id ?? null
 }
 
 // ---- header bits
@@ -367,6 +366,8 @@ const emptyState = computed(() => {
     </div>
 
     <!-- List -->
+    <ContextMenu @update:open="(o: boolean) => !o && (ctxId = null)">
+      <ContextMenuTrigger as-child>
         <div
           ref="scroller"
           class="thin-scroll @container relative min-h-0 flex-1 overflow-y-auto outline-none"
@@ -455,6 +456,8 @@ const emptyState = computed(() => {
           </div>
           </template>
         </div>
-    <RowContextMenu v-if="ctx" :key="ctx.key" :x="ctx.x" :y="ctx.y" :message-id="ctx.id" @close="ctx = null" />
+      </ContextMenuTrigger>
+      <RowContextMenu v-if="ctxId" :key="ctxId" :message-id="ctxId" />
+    </ContextMenu>
   </section>
 </template>

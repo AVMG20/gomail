@@ -74,6 +74,7 @@ func (c *Client) Decide(ctx context.Context, req DecisionRequest) (*DecisionResp
 	if err := api.JSON(ctx, http.MethodPost, "alpha/decisions", req, &resp); err != nil {
 		return nil, friendly(err)
 	}
+	c.report(Usage{Kind: "decision", Model: req.Model, Cost: resp.Usage.Cost, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens})
 	for name := range req.Questions {
 		if _, ok := resp.Answers[name]; !ok {
 			return nil, fmt.Errorf("the classifier did not answer %q", name)

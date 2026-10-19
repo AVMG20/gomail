@@ -47,6 +47,26 @@ export function useBackendEvents() {
     }),
     api.on('accounts:changed', () => void reloadAccounts()),
     api.on('labels:changed', () => refreshLabels()),
+    api.on('network:status', (p) => {
+      if (!p) return
+      const was = accounts.online
+      accounts.online = p.online
+      if (was && !p.online) toast('You’re offline', { description: 'Changes are saved and will sync when you reconnect.' })
+      if (!was && p.online) accounts.refreshCounts()
+    }),
+    api.on('search:updated', (p) => {
+      // Server-side results arrived: refresh the list search and any open palette query.
+      if (mail.search && (!p?.query || p.query.trim() === mail.search.trim())) void mail.softRefresh()
+      window.dispatchEvent(new CustomEvent('gomail:search-updated', { detail: p }))
+    }),
+    api.on('notification:open', (p) => {
+      if (!p?.messageId) return
+      if (p.accountId && p.accountId !== mail.mailbox.accountId) mail.switchAccount(p.accountId)
+      setTimeout(() => mail.open(p.messageId), 250)
+    }),
+    api.on('ai:budget', (p) => {
+      if (p?.paused) toast('AI labeling paused for today', { description: 'The daily AI budget was reached. Change it in Settings → AI.' })
+    }),
     api.on('sync:progress', (p) => {
       if (!p?.accountId) return
       accounts.setProgress(p)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Environment variables understood by gomail.
@@ -53,18 +54,86 @@ func DemoMode() bool {
 	return false
 }
 
-const maxLogSize = 5 << 20
+// Log rotation: gomail.log is capped at maxLogSize; older logs are kept
+// as gomail.log.1 .. gomail.log.<keepLogs>.
+const (
+	maxLogSize = 5 << 20
+	keepLogs   = 3
+)
+
+// rotatingFile is an io.Writer that rotates the log by size.
+type rotatingFile struct {
+	mu   sync.Mutex
+	path string
+	f    *os.File
+	size int64
+}
+
+func openRotating(path string) (*rotatingFile, error) {
+	r := &rotatingFile{path: path}
+	if fi, err := os.Stat(path); err == nil && fi.Size() >= maxLogSize {
+		rotateFiles(path)
+	}
+	return r, r.open()
+}
+
+func (r *rotatingFile) open() error {
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	fi, _ := f.Stat()
+	r.f, r.size = f, 0
+	if fi != nil {
+		r.size = fi.Size()
+	}
+	return nil
+}
+
+func rotateFiles(path string) {
+	_ = os.Remove(fmt.Sprintf("%s.%d", path, keepLogs))
+	for i := keepLogs - 1; i >= 1; i-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+	}
+	_ = os.Rename(path, path+".1")
+}
+
+func (r *rotatingFile) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.f == nil {
+		return len(p), nil
+	}
+	if r.size+int64(len(p)) > maxLogSize {
+		r.f.Close()
+		rotateFiles(r.path)
+		if err := r.open(); err != nil {
+			r.f = nil
+			return len(p), nil
+		}
+	}
+	n, err := r.f.Write(p)
+	r.size += int64(n)
+	return n, err
+}
+
+func (r *rotatingFile) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.f == nil {
+		return nil
+	}
+	err := r.f.Close()
+	r.f = nil
+	return err
+}
 
 // SetupLogging installs a slog default logger writing to gomail.log in dir
-// and to stderr. The previous log is rotated to gomail.log.1 when it grows
-// beyond 5 MB. It returns the log path and a closer for the file.
+// (size-rotated, 3 old files kept) and to stderr. It returns the log path
+// and a closer for the file.
 func SetupLogging(dir string) (string, io.Closer, error) {
 	path := filepath.Join(dir, "gomail.log")
-	if fi, err := os.Stat(path); err == nil && fi.Size() > maxLogSize {
-		_ = os.Remove(path + ".1")
-		_ = os.Rename(path, path+".1")
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := openRotating(path)
 	if err != nil {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel()})))
 		return "", nil, err

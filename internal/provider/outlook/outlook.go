@@ -94,10 +94,12 @@ func (c *Client) batch(ctx context.Context, reqs []batchReq) (map[string]batchRe
 		var wait time.Duration
 		for _, chunk := range provider.Chunk(pending, batchSize) {
 			for i := range chunk {
+				if chunk[i].Headers == nil {
+					chunk[i].Headers = map[string]string{}
+				}
+				// Headers of the $batch request don't apply to sub-requests.
+				chunk[i].Headers["Prefer"] = `IdType="ImmutableId"`
 				if chunk[i].Body != nil {
-					if chunk[i].Headers == nil {
-						chunk[i].Headers = map[string]string{}
-					}
 					chunk[i].Headers["Content-Type"] = "application/json"
 				}
 			}

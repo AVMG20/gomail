@@ -39,6 +39,7 @@ func Accounts() []models.Account {
 type message struct {
 	meta mail.Message
 	raw  []byte
+	old  bool // only on the "server": returned by ListOlder, not by the initial sync
 }
 
 // Provider is an in-memory provider.Provider.
@@ -60,6 +61,9 @@ type Provider struct {
 	// Latency simulates network delay per call.
 	Latency time.Duration
 	size    int
+	// Older is the number of old messages (31+ days) only reachable via
+	// ListOlder; set before New's seeding through NewWithOlder.
+	Older int
 }
 
 type change struct {
@@ -69,11 +73,19 @@ type change struct {
 }
 
 // New creates a demo provider for an account from Accounts().
-func New(acct models.Account) *Provider { return NewSized(acct, 52) }
+func New(acct models.Account) *Provider { return NewWithOlder(acct, 52, 40) }
+
+// NewWithOlder creates a demo provider with n recent messages and older
+// ones that are only fetched by backfill / LoadOlder.
+func NewWithOlder(acct models.Account, n, older int) *Provider {
+	return newProvider(acct, n, older)
+}
 
 // NewSized creates a demo provider with about n generated messages (plus
 // threads, sent mail and drafts); used by benchmarks.
-func NewSized(acct models.Account, n int) *Provider {
+func NewSized(acct models.Account, n int) *Provider { return newProvider(acct, n, 0) }
+
+func newProvider(acct models.Account, n, older int) *Provider {
 	seed := uint64(1)
 	if acct.Provider == models.ProviderOutlook {
 		seed = 2
@@ -87,7 +99,7 @@ func NewSized(acct models.Account, n int) *Provider {
 		NewMailChance: 0.35,
 		Latency:       150 * time.Millisecond,
 	}
-	p.size = n
+	p.size, p.Older = n, older
 	p.setupFolders()
 	p.seed(time.Now())
 	return p
@@ -205,6 +217,21 @@ func (p *Provider) seed(now time.Time) {
 			nid := p.add(rt, to, date.Add(time.Duration(i+1)*47*time.Minute), folderSet, i%2 == 1 && unread, false, prev)
 			prev = p.msgs[nid]
 		}
+	}
+	// Older mail that only the "server" has (for LoadOlder / backfill).
+	for i := 0; i < p.Older; i++ {
+		t := templates[i%len(templates)]
+		if t.folder != "" || t.replies != nil {
+			continue
+		}
+		t.subject = variantSubject(t.subject, 2+i/len(templates))
+		date := now.AddDate(0, 0, -31-i*3)
+		folder := models.FolderInbox
+		if i%2 == 1 {
+			folder = models.FolderArchive
+		}
+		id := p.add(t, p.me, date, p.folderSet(folder), false, false, nil)
+		p.msgs[id].old = true
 	}
 	// Sent, drafts and trash.
 	for i, t := range sentTemplates {
@@ -371,8 +398,10 @@ func (p *Provider) Sync(ctx context.Context, req provider.SyncRequest) (mail.Syn
 	ver, err := strconv.Atoi(verStr)
 	if inst != p.instance || err != nil {
 		res := mail.SyncResult{Initial: true}
-		for id := range p.msgs {
-			res.Upserts = append(res.Upserts, p.snapshot(id))
+		for id, m := range p.msgs {
+			if !m.old {
+				res.Upserts = append(res.Upserts, p.snapshot(id))
+			}
 		}
 		req.Report("fetching", len(res.Upserts), len(res.Upserts))
 		sort.Slice(res.Upserts, func(i, j int) bool { return res.Upserts[i].Date.After(res.Upserts[j].Date) })
@@ -653,7 +682,22 @@ func (p *Provider) DraftID(_ context.Context, messageRemoteID string) (string, e
 
 // ListOlder: the demo mailbox is fully synced up front.
 func (p *Provider) ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error) {
-	return nil, p.sleep(ctx)
+	if err := p.sleep(ctx); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []mail.Message
+	for id, m := range p.msgs {
+		if contains(m.meta.FolderRemoteIDs, folder.RemoteID) && (before.IsZero() || m.meta.Date.Before(before)) {
+			out = append(out, p.snapshot(id))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date.After(out[j].Date) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // Search matches all terms against subject, sender and snippet.

@@ -41,6 +41,7 @@ func (s *Service) Folders(accountID string) ([]models.Folder, error) {
 // ListMessages returns one page of the message list (conversations when
 // Settings.conversationView is on).
 func (s *Service) ListMessages(q models.ListQuery) (models.MessagePage, error) {
+	defer s.markFirstQuery()
 	page, err := s.store.ListMessages(q, store.ListOptions{Conversations: s.Settings().ConversationView})
 	if err == nil && strings.TrimSpace(q.Search) != "" && len(page.Messages) < remoteSearchBelow {
 		s.remoteSearch(q.Search, q.AccountID)

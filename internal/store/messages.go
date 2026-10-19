@@ -254,11 +254,22 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				}
 			}
 		}
-		// Messages that are in no known folder any more are gone from
-		// everything we sync.
-		if _, err := tx.Exec(`DELETE FROM messages WHERE account_id = ? AND NOT EXISTS
-			(SELECT 1 FROM message_folders mf WHERE mf.message_id = messages.id)`, accountID); err != nil {
-			return err
+		// Touched messages that are in no known folder any more are gone
+		// from everything we sync.
+		touched := make([]string, 0, len(r.Upserts))
+		for _, m := range r.Upserts {
+			touched = append(touched, MessageID(accountID, m.RemoteID))
+		}
+		for _, rids := range r.Removed {
+			for _, rid := range rids {
+				touched = append(touched, MessageID(accountID, rid))
+			}
+		}
+		for _, chunk := range chunks(touched, 400) {
+			if _, err := tx.Exec(`DELETE FROM messages WHERE id IN (`+placeholders(len(chunk))+`) AND NOT EXISTS
+				(SELECT 1 FROM message_folders mf WHERE mf.message_id = messages.id)`, anySlice(chunk)...); err != nil {
+				return err
+			}
 		}
 		if len(res.New) > 0 {
 			// Orphan cleanup may have removed some "new" ids again.
@@ -274,7 +285,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		if err := saveSyncState(tx, accountID, r.State); err != nil {
 			return err
 		}
-		if err := refreshJunk(tx, accountID, now); err != nil {
+		if err := refreshJunk(tx, touched, now); err != nil {
 			return err
 		}
 		if err := recountStarred(tx, accountID); err != nil {
@@ -400,26 +411,29 @@ const junkID = "junk"
 const inSpam = `(%s & 16) != 0`
 
 // refreshJunk gives every message in a Spam/Junk folder the system "junk"
-// label and removes it from messages that left spam.
-func refreshJunk(tx *sql.Tx, accountID string, now int64) error {
-	stmts := []string{
-		`DELETE FROM message_labels WHERE label_id = 'junk' AND source = 'system' AND message_id IN
-			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.folder_kinds") + `)`,
-		`DELETE FROM label_overrides WHERE label_id = 'junk' AND message_id IN
-			(SELECT m.id FROM messages m WHERE m.account_id = ? AND NOT ` + fmt.Sprintf(inSpam, "m.folder_kinds") + `)`,
-		`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
-			SELECT m.id, 'junk', 'system', 1, ? FROM messages m WHERE m.account_id = ? AND ` + fmt.Sprintf(inSpam, "m.folder_kinds") + `
+// label and removes it from messages that left spam. It only looks at the
+// given messages, so syncs don't scan the whole mailbox.
+func refreshJunk(tx *sql.Tx, ids []string, now int64) error {
+	for _, chunk := range chunks(ids, 400) {
+		in := placeholders(len(chunk))
+		args := anySlice(chunk)
+		if _, err := tx.Exec(`DELETE FROM message_labels WHERE label_id = 'junk' AND source = 'system' AND message_id IN
+			(SELECT m.id FROM messages m WHERE m.id IN (`+in+`) AND NOT `+fmt.Sprintf(inSpam, "m.folder_kinds")+`)`, args...); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM label_overrides WHERE label_id = 'junk' AND message_id IN
+			(SELECT m.id FROM messages m WHERE m.id IN (`+in+`) AND NOT `+fmt.Sprintf(inSpam, "m.folder_kinds")+`)`, args...); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
+			SELECT m.id, 'junk', 'system', 1, ? FROM messages m WHERE m.id IN (`+in+`) AND `+fmt.Sprintf(inSpam, "m.folder_kinds")+`
 			AND NOT EXISTS (SELECT 1 FROM label_overrides o WHERE o.message_id = m.id AND o.label_id = 'junk')
 			ON CONFLICT(message_id, label_id) DO UPDATE SET source = 'system', confidence = 1 WHERE source = 'ai'`,
+			append([]any{now}, args...)...); err != nil {
+			return err
+		}
 	}
-	if _, err := tx.Exec(stmts[0], accountID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(stmts[1], accountID); err != nil {
-		return err
-	}
-	_, err := tx.Exec(stmts[2], now, accountID)
-	return err
+	return nil
 }
 
 // Summaries returns summaries for the given ids (missing ids are skipped),
@@ -686,7 +700,7 @@ func (s *Store) MessageFolders(ids []string) (map[string][]string, error) {
 // folder totals/unread counters by the difference.
 func (s *Store) SetMessageFolders(sets map[string][]string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
-		accounts := map[string]bool{}
+		var moved []string
 		for id, folders := range sets {
 			var unread int
 			var acct string
@@ -737,15 +751,9 @@ func (s *Store) SetMessageFolders(sets map[string][]string) error {
 			if err := recomputeKinds(tx, id, ""); err != nil {
 				return err
 			}
-			accounts[acct] = true
+			moved = append(moved, id)
 		}
-		now := time.Now().UnixMilli()
-		for a := range accounts {
-			if err := refreshJunk(tx, a, now); err != nil {
-				return err
-			}
-		}
-		return nil
+		return refreshJunk(tx, moved, time.Now().UnixMilli())
 	})
 }
 
@@ -810,7 +818,10 @@ type AIPolicy struct {
 //
 // Labels missing from scores are left alone. It returns the added and
 // removed label ids.
-func (s *Store) ApplyAIScores(msgID string, scores map[string]float64, p AIPolicy) (added, removed []string, err error) {
+//
+// hash fingerprints the message content and label definitions; together
+// with the scores it is stored so unchanged messages aren't re-classified.
+func (s *Store) ApplyAIScores(msgID string, scores map[string]float64, p AIPolicy, hash string) (added, removed []string, err error) {
 	added, removed = []string{}, []string{}
 	err = s.tx(context.Background(), func(tx *sql.Tx) error {
 		rows, err := tx.Query(`SELECT label_id, source FROM message_labels WHERE message_id = ?`, msgID)
@@ -867,7 +878,7 @@ func (s *Store) ApplyAIScores(msgID string, scores map[string]float64, p AIPolic
 				}
 			}
 		}
-		_, err = tx.Exec(`UPDATE messages SET classified_at = ? WHERE id = ?`, now, msgID)
+		_, err = tx.Exec(`UPDATE messages SET classified_at = ?, ai_hash = ?, ai_scores = ? WHERE id = ?`, now, hash, mustJSON(scores), msgID)
 		return err
 	})
 	return added, removed, err
@@ -931,6 +942,8 @@ type ClassifyInput struct {
 	HasAttachments bool
 	FolderKinds    []string
 	ClassifiedAt   time.Time
+	AIHash         string             // fingerprint of the last AI run
+	AIScores       map[string]float64 // scores of the last AI run
 }
 
 // ClassifyInputs loads classifier inputs for the given ids.
@@ -938,7 +951,7 @@ func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 	var out []ClassifyInput
 	for _, chunk := range chunks(ids, 500) {
 		rows, err := s.db.Query(`SELECT m.id, m.from_name, m.from_email, m.to_json, m.subject, m.snippet, coalesce(m.body_text, ''), m.date,
-			m.has_attachments, m.classified_at,
+			m.has_attachments, m.classified_at, m.ai_hash, m.ai_scores,
 			coalesce((SELECT group_concat(f.kind) FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = m.id), '')
 			FROM messages m WHERE m.id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
 		if err != nil {
@@ -950,13 +963,17 @@ func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 			var date int64
 			var att int
 			var classified int64
-			var kinds string
-			if err := rows.Scan(&c.ID, &c.From.Name, &c.From.Email, &to, &c.Subject, &c.Snippet, &c.BodyText, &date, &att, &classified, &kinds); err != nil {
+			var kinds, scores string
+			if err := rows.Scan(&c.ID, &c.From.Name, &c.From.Email, &to, &c.Subject, &c.Snippet, &c.BodyText, &date, &att, &classified,
+				&c.AIHash, &scores, &kinds); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			c.To, c.Date, c.HasAttachments = decodeAddrs(to), fromMillis(date), att == 1
 			c.ClassifiedAt = fromMillis(classified)
+			if scores != "" {
+				_ = json.Unmarshal([]byte(scores), &c.AIScores)
+			}
 			if kinds != "" {
 				c.FolderKinds = strings.Split(kinds, ",")
 			}
@@ -994,4 +1011,22 @@ func chunks(ss []string, n int) [][]string {
 		out = append(out, ss)
 	}
 	return out
+}
+
+// RecordAIUsage stores one OpenRouter call.
+func (s *Store) RecordAIUsage(kind, model string, cost float64, in, out int) error {
+	_, err := s.db.Exec(`INSERT INTO ai_usage(at, kind, model, cost, input_tokens, output_tokens) VALUES(?,?,?,?,?,?)`,
+		time.Now().UnixMilli(), kind, model, cost, in, out)
+	return err
+}
+
+// AIUsage sums recorded spending for today and this month (local time).
+func (s *Store) AIUsage(now time.Time) (models.AIUsage, error) {
+	var u models.AIUsage
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	err := s.db.QueryRow(`SELECT coalesce(sum(CASE WHEN at >= ? THEN cost END), 0), coalesce(sum(CASE WHEN at >= ? THEN 1 END), 0),
+		coalesce(sum(cost), 0), count(*) FROM ai_usage WHERE at >= ?`, day.UnixMilli(), day.UnixMilli(), month.UnixMilli()).
+		Scan(&u.TodayUSD, &u.RequestsToday, &u.MonthUSD, &u.RequestsMonth)
+	return u, err
 }

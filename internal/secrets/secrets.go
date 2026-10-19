@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/AVMG20/gomail/internal/safe"
 )
 
 // ErrNotFound is returned when no secret exists for a key.
@@ -58,7 +60,11 @@ func withTimeout[T any](f func() (T, error)) (T, error) {
 		err error
 	}
 	ch := make(chan res, 1)
-	go func() { v, err := f(); ch <- res{v, err} }()
+	go func() {
+		defer safe.Recover("keyring")
+		v, err := f()
+		ch <- res{v, err}
+	}()
 	select {
 	case r := <-ch:
 		return r.v, r.err

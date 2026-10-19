@@ -392,6 +392,17 @@ class MockBackend {
     })
   }
 
+  private participants(m: Message): string[] {
+    const own = this.accounts.find((a) => a.id === m.accountId)?.email
+    const list = [...this.messages.values()].filter((x) => x.threadId === m.threadId && x.accountId === m.accountId).sort((a, b) => (a.date < b.date ? -1 : 1))
+    const names: string[] = []
+    for (const x of list) {
+      const n = x.from.email === own ? 'me' : (x.from.name || x.from.email).split(' ')[0]
+      if (!names.includes(n)) names.push(n)
+    }
+    return names
+  }
+
   private threadSizes: { version: number; map: Map<string, number> } | null = null
   private threadSize(m: Message): number {
     if (!this.threadSizes || this.threadSizes.version !== this.version) {
@@ -420,6 +431,12 @@ class MockBackend {
     }
     this.changed(q.accountId)
     return added
+  }
+
+  private usage = { todayUsd: 0.0123, monthUsd: 0.4187, requestsToday: 42, requestsMonth: 1310 }
+  async GetAIUsage() {
+    await latency(30, 80)
+    return { ...this.usage }
   }
 
   async UpdateAccountSignature(id: string, html: string): Promise<void> {
@@ -505,7 +522,7 @@ class MockBackend {
     if (!acc) return id
     const msgId = this.drafts.get(id)
     if (msgId) this.messages.delete(msgId)
-    const m = buildMessage({ acc: acc.id, from: { name: 'Alex Morgan', email: acc.email }, to: req.to, subject: req.subject || '(no subject)', html: req.bodyHtml, text: req.bodyText, folder: 'drafts', read: true }, Date.now())
+    const m = buildMessage({ acc: acc.id, from: { name: 'Alex Morgan', email: acc.email }, to: req.to, subject: req.subject || '(no subject)', html: req.bodyHtml, text: req.bodyText, folder: 'drafts', read: true }, Date.now(), undefined, { isDraft: true })
     this.messages.set(m.id, m)
     this.drafts.set(id, m.id)
     this.changed(acc.id)
@@ -522,7 +539,7 @@ class MockBackend {
 
   /** Thread-level actions apply to every message of the conversation. */
   private withThreads(ids: string[]): string[] {
-    const threads = new Set(ids.map((id) => this.messages.get(id)).filter(Boolean).map((m) => `${m!.accountId}:${m!.threadId}`))
+    const threads = new Set(this.expandIds(ids).map((id) => this.messages.get(id)).filter(Boolean).map((m) => `${m!.accountId}:${m!.threadId}`))
     return [...this.messages.values()].filter((m) => threads.has(`${m.accountId}:${m.threadId}`)).map((m) => m.id)
   }
 
@@ -557,7 +574,7 @@ class MockBackend {
     const kind = q.folderId ? this.kindOf(q.folderId) : q.folderKind
     const remote = (q.accountId ? [q.accountId] : this.accounts.map((a) => a.id)).some((id) => (this.remoteOlder.get(id) ?? 0) > 0)
     return {
-      messages: page.map((m) => ({ ...this.summary(m), threadCount: conv ? this.threadSize(m) : 1 })),
+      messages: page.map((m) => ({ ...this.summary(m), threadCount: conv ? this.threadSize(m) : 1, conversationId: conv ? `c:${m.threadId}` : '', participants: conv ? this.participants(m) : null })),
       nextCursor: more && last ? btoa(`${last.date}|${last.id}`) : '',
       total: all.length,
       hasMoreRemote: !more && kind === 'inbox' && !q.search && remote,
@@ -580,10 +597,22 @@ class MockBackend {
     return clone(thread).map((x) => this.visibleLabels(x))
   }
 
+  /** "c:<threadId>" conversation ids expand to the thread's messages (like the Go backend). */
+  private expandIds(ids: string[]): string[] {
+    const out: string[] = []
+    for (const id of ids) {
+      if (id.startsWith('c:')) {
+        const tid = id.slice(2)
+        for (const m of this.messages.values()) if (m.threadId === tid) out.push(m.id)
+      } else out.push(id)
+    }
+    return out
+  }
+
   private mutate(ids: string[], fn: (m: Message) => void) {
     this.version++
     const accs = new Set<string>()
-    for (const id of ids) {
+    for (const id of this.expandIds(ids)) {
       const m = this.messages.get(id)
       if (m) {
         fn(m)
@@ -636,6 +665,11 @@ class MockBackend {
       att: req.attachments.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: Math.round(a.dataBase64.length * 0.75) })),
     }, Date.now(), orig && req.mode !== 'forward' ? orig.threadId : undefined)
     this.messages.set(m.id, m)
+    if (req.draftId) {
+      const dm = this.drafts.get(req.draftId)
+      if (dm) this.messages.delete(dm)
+      this.drafts.delete(req.draftId)
+    }
     this.changed(acc.id)
   }
 

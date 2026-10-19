@@ -54,8 +54,19 @@ type Error struct {
 	Service    string
 	Status     int
 	Code       string
+	Reason     string // Google errors[].reason, e.g. "userRateLimitExceeded"
 	Message    string
 	RetryAfter time.Duration
+}
+
+// retryableReasons are quota errors Google reports as HTTP 403.
+var retryableReasons = map[string]bool{
+	"rateLimitExceeded": true, "userRateLimitExceeded": true, "backendError": true, "concurrentLimitExceeded": true,
+}
+
+// Retryable reports whether the error is a transient quota/rate error.
+func (e *Error) Retryable() bool {
+	return retryableReasons[e.Reason] || (e.Status == http.StatusForbidden && strings.EqualFold(e.Code, "ApplicationThrottled"))
 }
 
 func (e *Error) Error() string {
@@ -75,6 +86,9 @@ func (e *Error) Error() string {
 	case http.StatusNotFound:
 		return fmt.Sprintf("%s: not found (%s)", svc, msg)
 	case http.StatusTooManyRequests:
+		return fmt.Sprintf("%s is rate limiting requests, please try again shortly", svc)
+	}
+	if e.Retryable() {
 		return fmt.Sprintf("%s is rate limiting requests, please try again shortly", svc)
 	}
 	if e.Status >= 500 {
@@ -187,7 +201,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, error) {
 			c.Tokens.Invalidate()
 			continue
 		}
-		if retryable(resp.StatusCode) && attempt < maxRetries {
+		if (retryable(resp.StatusCode) || apiErr.Retryable()) && attempt < maxRetries {
 			d := backoff(attempt, apiErr.RetryAfter)
 			slog.Debug("retrying request", "service", c.service(), "status", resp.StatusCode, "wait", d)
 			if serr := sleep(ctx, d); serr != nil {
@@ -238,11 +252,17 @@ func readError(resp *http.Response, service string) *Error {
 			Code    any    `json:"code"`
 			Status  string `json:"status"`
 			Message string `json:"message"`
+			Errors  []struct {
+				Reason string `json:"reason"`
+			} `json:"errors"`
 		}
 		var str string
 		switch {
 		case json.Unmarshal(env.Error, &obj) == nil && (obj.Message != "" || obj.Code != nil):
 			e.Message = obj.Message
+			if len(obj.Errors) > 0 {
+				e.Reason = obj.Errors[0].Reason
+			}
 			if s, ok := obj.Code.(string); ok {
 				e.Code = s
 			} else if obj.Status != "" {

@@ -74,6 +74,8 @@ func DefaultSettings() models.Settings {
 		MarkReadMode:             "immediate",
 		ReadingPane:              "right",
 		Zoom:                     1,
+		SyncDepthDays:            90,
+		AIDailyBudgetUSD:         1,
 		ShowInTray:               true,
 		Labels:                   DefaultLabels(),
 		PrimaryColor:             DefaultPrimaryColor,
@@ -112,6 +114,14 @@ func Normalize(s *models.Settings) {
 	case "right", "off":
 	default:
 		s.ReadingPane = "right"
+	}
+	switch s.SyncDepthDays {
+	case 0, 30, 90, 365:
+	default:
+		s.SyncDepthDays = 90
+	}
+	if s.AIDailyBudgetUSD < 0 {
+		s.AIDailyBudgetUSD = 1
 	}
 	if s.Zoom < 0.5 || s.Zoom > 2 {
 		s.Zoom = 1

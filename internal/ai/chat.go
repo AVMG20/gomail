@@ -41,6 +41,7 @@ func (c *Client) Chat(ctx context.Context, model, system, user string, temperatu
 		"model":       model,
 		"messages":    []chatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
 		"temperature": temperature,
+		"usage":       map[string]bool{"include": true}, // ask OpenRouter to report the cost
 	}
 	var resp struct {
 		Choices []struct {
@@ -52,10 +53,16 @@ func (c *Client) Chat(ctx context.Context, model, system, user string, temperatu
 		Error *struct {
 			Message string `json:"message"`
 		} `json:"error"`
+		Usage struct {
+			PromptTokens     int     `json:"prompt_tokens"`
+			CompletionTokens int     `json:"completion_tokens"`
+			Cost             float64 `json:"cost"`
+		} `json:"usage"`
 	}
 	if err := api.JSON(ctx, http.MethodPost, "v1/chat/completions", req, &resp); err != nil {
 		return "", friendly(err)
 	}
+	c.report(Usage{Kind: "chat", Model: model, Cost: resp.Usage.Cost, InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens})
 	if resp.Error != nil && resp.Error.Message != "" {
 		return "", errors.New("OpenRouter: " + resp.Error.Message)
 	}

@@ -336,7 +336,7 @@ export const useMailStore = defineStore('mail', () => {
     const m = byId.value.get(id)
     if (!m?.unread) return
     patchLocal([id], { unread: false })
-    api.markRead([id], true).catch(() => patchLocal([id], { unread: true }))
+    api.markRead(actionIds([id]), true).catch(() => patchLocal([id], { unread: true }))
     accounts.refreshCounts()
   }
 
@@ -400,6 +400,11 @@ export const useMailStore = defineStore('mail', () => {
     return [...selection.value]
   }
 
+  /** Backend ids for actions: conversation ids ("c:…") act on the whole thread. */
+  function actionIds(ids: string[]): string[] {
+    return [...new Set(ids.map((id) => byId.value.get(id)?.conversationId || id))]
+  }
+
   // ------------------------------------------------------------ local patches
   function patchLocal(ids: string[], patch: Partial<MessageSummary> | ((m: MessageSummary) => Partial<MessageSummary>)) {
     const set = new Set(ids)
@@ -456,7 +461,7 @@ export const useMailStore = defineStore('mail', () => {
     for (const m of items) {
       const f = originFolder(m)
       if (!f) continue
-      groups.set(f, [...(groups.get(f) ?? []), m.id])
+      groups.set(f, [...(groups.get(f) ?? []), m.conversationId || m.id])
     }
     await Promise.all([...groups].map(([f, ids]) => api.moveToFolder(ids, f)))
   }
@@ -467,11 +472,12 @@ export const useMailStore = defineStore('mail', () => {
 
   async function archive(ids: string[]) {
     if (!ids.length) return
+    const backendIds = actionIds(ids) // before the rows leave the list
     const items = snapshot(ids)
     const removes = mailbox.value.kind !== 'archive'
     if (removes) removeLocal(ids)
     try {
-      await api.archive(ids)
+      await api.archive(backendIds)
       announce(`${plural(ids.length, 'conversation')} archived`)
       toast(`${ids.length === 1 ? 'Conversation' : plural(ids.length, 'conversation')} archived`, {
         action: {
@@ -492,11 +498,12 @@ export const useMailStore = defineStore('mail', () => {
 
   async function trash(ids: string[]) {
     if (!ids.length) return
+    const backendIds = actionIds(ids) // before the rows leave the list
     const items = snapshot(ids)
     const removes = mailbox.value.kind !== 'trash'
     if (removes) removeLocal(ids)
     try {
-      await api.trash(ids)
+      await api.trash(backendIds)
       announce(`${plural(ids.length, 'conversation')} moved to Trash`)
       toast(`${ids.length === 1 ? 'Moved' : plural(ids.length, 'message') + ' moved'} to Trash`, {
         action: {
@@ -520,7 +527,7 @@ export const useMailStore = defineStore('mail', () => {
     const before = snapshot(ids).map((m) => [m.id, m.unread] as const)
     patchLocal(ids, { unread: !read })
     try {
-      await api.markRead(ids, read)
+      await api.markRead(actionIds(ids), read)
       if (ids.length > 1 || !openId.value || ids[0] !== openId.value) announce(`${plural(ids.length, 'message')} marked as ${read ? 'read' : 'unread'}`)
     } catch (e) {
       for (const [id, unread] of before) patchLocal([id], { unread })
@@ -533,7 +540,7 @@ export const useMailStore = defineStore('mail', () => {
     if (!ids.length) return
     patchLocal(ids, { starred })
     try {
-      await api.setStarred(ids, starred)
+      await api.setStarred(actionIds(ids), starred)
       announce(`${plural(ids.length, 'message')} ${starred ? 'starred' : 'unstarred'}`)
     } catch (e) {
       patchLocal(ids, { starred: !starred })
@@ -549,7 +556,7 @@ export const useMailStore = defineStore('mail', () => {
       labelDetails: [...(m.labelDetails ?? []).filter((d) => d.labelId !== labelId), { labelId, source: 'manual', confidence: 1 }],
     }))
     try {
-      await api.addLabel(ids, labelId)
+      await api.addLabel(actionIds(ids), labelId)
       if (!quiet && ids.length > 1) toast(`Label “${settings.labelMap.get(labelId)?.name ?? labelId}” added to ${plural(ids.length, 'message')}`)
     } catch (e) {
       toast.error('Could not add label', { description: errorMessage(e) })
@@ -565,7 +572,7 @@ export const useMailStore = defineStore('mail', () => {
       labelDetails: (m.labelDetails ?? []).filter((d) => d.labelId !== labelId),
     }))
     try {
-      await api.removeLabel(ids, labelId)
+      await api.removeLabel(actionIds(ids), labelId)
       if (!quiet && ids.length > 1) toast(`Label removed from ${plural(ids.length, 'message')}`)
     } catch (e) {
       toast.error('Could not remove label', { description: errorMessage(e) })
@@ -615,7 +622,7 @@ export const useMailStore = defineStore('mail', () => {
     labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleUnlabeledFilter, clearLabelFilter,
-    open, move, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
+    actionIds, open, move, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     archive, trash, setRead, setStarred, addLabel, removeLabel, loadThread, invalidateThread, suggestAddresses,
   }
 })

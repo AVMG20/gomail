@@ -28,6 +28,26 @@ export interface AIModel {
     "kind": string;
 }
 
+/**
+ * AIUsage summarizes OpenRouter spending recorded by gomail (local time).
+ */
+export interface AIUsage {
+    "todayUsd": number;
+    "monthUsd": number;
+    "requestsToday": number;
+    "requestsMonth": number;
+
+    /**
+     * 0 = unlimited
+     */
+    "dailyBudgetUsd": number;
+
+    /**
+     * automatic labeling is paused until tomorrow
+     */
+    "budgetReached": boolean;
+}
+
 export interface Account {
     "id": string;
     "provider": string;
@@ -117,6 +137,11 @@ export interface ClassificationResult {
      * per-message failure, "" on success
      */
     "error": string;
+
+    /**
+     * unchanged since the last AI run: scores are the stored ones, no cost
+     */
+    "skipped": boolean;
 }
 
 /**
@@ -140,6 +165,21 @@ export interface ClassifyEstimate {
      * false when OpenRouter lists no price for the classifier model
      */
     "priceKnown": boolean;
+
+    /**
+     * messages that would be skipped (already labeled with the current labels)
+     */
+    "unchanged": number;
+
+    /**
+     * spent today
+     */
+    "todayUsd": number;
+
+    /**
+     * today's spend + estimate is over the daily budget (allowed, but warn)
+     */
+    "exceedsBudget": boolean;
 }
 
 /**
@@ -209,6 +249,14 @@ export interface Contact {
     "email": string;
     "count": number;
     "lastSeen": string;
+}
+
+/**
+ * DatabaseStatus reports database health.
+ */
+export interface DatabaseStatus {
+    "ok": boolean;
+    "message": string;
 }
 
 /**
@@ -463,6 +511,19 @@ export interface NewMailEvent {
     "accountId": string;
     "count": number;
     "latest": MessageSummary;
+
+    /**
+     * distinct sender names, newest first
+     */
+    "senders": string[] | null;
+}
+
+/**
+ * NotificationOpen asks the UI to show a message.
+ */
+export interface NotificationOpen {
+    "messageId": string;
+    "accountId": string;
 }
 
 export interface OutgoingAttachment {
@@ -594,6 +655,21 @@ export interface Settings {
      * UI zoom factor (default 1.0, 0.5..2)
      */
     "zoom": number;
+
+    /**
+     * background backfill depth: 30, 90 (default), 365 or 0 = all mail
+     */
+    "syncDepthDays": number;
+
+    /**
+     * pause the background backfill
+     */
+    "backfillPaused": boolean;
+
+    /**
+     * automatic labeling pauses when reached (default 1.00, 0 = unlimited)
+     */
+    "aiDailyBudgetUsd": number;
     "googleClientId": string;
     "googleClientSecret": string;
     "microsoftClientId": string;

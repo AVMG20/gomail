@@ -355,9 +355,18 @@ func TestServerSearchAndLoadOlder(t *testing.T) {
 		t.Fatal("server result not cached")
 	}
 	q := models.ListQuery{AccountID: demo.OutlookAccountID, FolderKind: models.FolderInbox, Limit: 200}
+	if p, _ := s.ListMessages(q); !p.HasMoreRemote {
+		t.Fatal("expected older mail on the server")
+	}
 	n, err := s.LoadOlder(q)
-	if err != nil || n != 0 {
+	if err != nil || n == 0 {
 		t.Fatal(n, err)
+	}
+	for i := 0; n > 0 && i < 10; i++ {
+		n, err = s.LoadOlder(q)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	p, _ := s.ListMessages(q)
 	if p.HasMoreRemote {
@@ -441,5 +450,63 @@ func TestRemoteContentBlocking(t *testing.T) {
 	s.SaveSettings(st)
 	if m, _ := s.Message(m.ID); m.RemoteContentBlocked {
 		t.Fatal("blocked although showRemoteImages is on")
+	}
+}
+
+func TestProgressiveBackfill(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	inbox, _ := s.store.FolderByKind(demo.OutlookAccountID, models.FolderInbox)
+	before, _ := s.store.LocalFolderCount(inbox.ID)
+	st := s.GetSettings()
+	st.SyncDepthDays = 30
+	s.SaveSettings(st)
+	steps := 0
+	for s.engine.BackfillStep(context.Background()) {
+		steps++
+		if steps > 50 {
+			t.Fatal("backfill does not stop at the depth")
+		}
+	}
+	mid, _ := s.store.LocalFolderCount(inbox.ID)
+	st.SyncDepthDays = 0 // all mail
+	s.SaveSettings(st)
+	for s.engine.BackfillStep(context.Background()) {
+		steps++
+		if steps > 100 {
+			t.Fatal("backfill never finishes")
+		}
+	}
+	after, _ := s.store.LocalFolderCount(inbox.ID)
+	if after < mid || mid <= before {
+		t.Fatalf("backfill counts before=%d depth30=%d all=%d", before, mid, after)
+	}
+	oldest, _ := s.store.OldestInFolder(inbox.ID)
+	if time.Since(oldest) < 60*24*time.Hour {
+		t.Fatalf("oldest only %v", oldest)
+	}
+	if ev, ok := e.ui.last(models.EventSyncProgress).(models.SyncProgress); !ok || ev.Phase != "backfill" {
+		t.Fatalf("progress %+v", ev)
+	}
+	// Paused: nothing happens.
+	st.BackfillPaused = true
+	s.SaveSettings(st)
+	if s.engine.BackfillStep(context.Background()) {
+		t.Fatal("backfill ran while paused")
+	}
+	// Older mail must not be announced as new.
+	if ev, ok := e.ui.last(models.EventNewMail).(models.NewMailEvent); ok {
+		t.Fatalf("backfill announced new mail %+v", ev)
+	}
+}
+
+func TestNotificationText(t *testing.T) {
+	one := models.NewMailEvent{Count: 1, Latest: models.MessageSummary{From: models.Address{Name: "Priya"}, Subject: "Roadmap"}}
+	if ti, b := NotificationText(one, "Work"); ti != "Priya" || b != "Roadmap" {
+		t.Fatal(ti, b)
+	}
+	many := models.NewMailEvent{Count: 5, Latest: one.Latest, Senders: []string{"Priya", "Daniel", "Sofia", "Mom"}}
+	if ti, b := NotificationText(many, "Work"); ti != "5 new messages · Work" || b != "Priya, Daniel and 2 others" {
+		t.Fatal(ti, b)
 	}
 }

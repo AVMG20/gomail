@@ -2,7 +2,7 @@
 import { computed, ref, shallowRef, watch } from 'vue'
 import {
   ArchiveIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MoreHorizontalIcon, ReplyAllIcon, SparklesIcon, StarIcon,
-  Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon,
+  Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon, PencilIcon,
 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -93,7 +93,7 @@ async function loadImages(threadId: string) {
   remoteAllowed.value = new Set([...remoteAllowed.value, threadId])
   if (!hasMethod('GetMessageWithRemoteContent')) return
   try {
-    const updated = await Promise.all(thread.value.map((m) => (m.hasRemoteContent ? api.getMessageWithRemoteContent(m.id) : Promise.resolve(m))))
+    const updated = await Promise.all(thread.value.map((m) => (m.remoteContentBlocked || m.hasRemoteContent ? api.getMessageWithRemoteContent(m.id) : Promise.resolve(m))))
     thread.value = updated
   } catch (e) {
     toast.error('Couldn’t load images', { description: errorMessage(e) })
@@ -138,15 +138,21 @@ async function moveTo(folderId: string) {
   const m = current.value
   if (!m) return
   const name = accounts.folderMap.get(folderId)?.name ?? 'folder'
+  const backendIds = mail.actionIds([m.id])
   mail.removeLocal([m.id])
   try {
-    await api.moveToFolder([m.id], folderId)
+    await api.moveToFolder(backendIds, folderId)
     toast(`Moved to ${name}`)
   } catch (e) {
     toast.error('Move failed', { description: errorMessage(e) })
     void mail.softRefresh()
   }
   accounts.refreshCounts()
+}
+
+const isDraft = computed(() => !!newest.value?.isDraft || newest.value?.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts'))
+function editDraft() {
+  if (newest.value) compose.editDraft(newest.value)
 }
 
 const labelingNow = computed(() => !!current.value && ai.labeling.has(current.value.id))
@@ -193,6 +199,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
           </Button>
         </Tip>
         <div class="flex-1" />
+        <Button v-if="isDraft" size="sm" class="mr-1 gap-1.5" @click="editDraft"><PencilIcon /> Edit draft</Button>
         <Tip label="Reply" shortcut="r"><Button variant="ghost" size="icon-sm" aria-label="Reply" @click="respond('reply')"><CornerUpLeftIcon /></Button></Tip>
         <Tip label="Reply all" shortcut="a"><Button variant="ghost" size="icon-sm" aria-label="Reply all" @click="respond('replyAll')"><ReplyAllIcon /></Button></Tip>
         <Tip label="Forward" shortcut="f"><Button variant="ghost" size="icon-sm" aria-label="Forward" @click="respond('forward')"><ForwardIcon /></Button></Tip>

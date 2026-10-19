@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AVMG20/gomail/internal/mail"
+	"github.com/AVMG20/gomail/internal/safe"
 )
 
 // Profile is the signed-in user.
@@ -131,7 +132,7 @@ func Parallel[T any](ctx context.Context, n int, items []T, fn func(context.Cont
 		go func(it T) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := fn(ctx, it); err != nil {
+			if err := safe.Call("provider worker", func() error { return fn(ctx, it) }); err != nil {
 				once.Do(func() { firstErr = err; cancel() })
 			}
 		}(it)

@@ -32,6 +32,9 @@ const emit = defineEmits<{
 const who = computed(() => {
   const m = props.message
   if (props.sentView && m.to.length) return `To: ${m.to.map((a) => displayName(a)).join(', ')}`
+  // Conversations: "Priya, me, Jonas" like most mail apps.
+  const p = m.participants
+  if (p && p.length > 1) return p.length > 3 ? `${p[0]} … ${p.slice(-2).join(', ')}` : p.join(', ')
   return displayName(m.from)
 })
 

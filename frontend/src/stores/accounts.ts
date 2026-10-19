@@ -16,6 +16,8 @@ export const useAccountsStore = defineStore('accounts', () => {
   const syncing = ref<Set<string>>(new Set())
   /** Latest sync:progress per account (cleared when the sync finishes). */
   const progress = ref<Record<string, SyncProgress>>({})
+  /** network:status from the backend (true until told otherwise). */
+  const online = ref(true)
 
   const accountMap = computed(() => new Map(accounts.value.map((a) => [a.id, a])))
   const anySyncing = computed(() => syncing.value.size > 0 || accounts.value.some((a) => a.syncing))
@@ -120,7 +122,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   }
 
   return {
-    accounts, folders, labelCounts, labelScope, loaded, syncing, progress, setProgress, accountMap, anySyncing, folderMap,
+    accounts, folders, labelCounts, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
     load, saveSignature, loadFolders, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })

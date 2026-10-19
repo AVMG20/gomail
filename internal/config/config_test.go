@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -53,5 +55,33 @@ func TestDataDirOverride(t *testing.T) {
 	got, _ = DataDir()
 	if got != filepath.Join(dir, "demo") {
 		t.Fatal(got)
+	}
+}
+
+func TestLogRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gomail.log")
+	r, err := openRotating(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := make([]byte, 1<<20)
+	for i := range line {
+		line[i] = 'x'
+	}
+	for i := 0; i < 26; i++ { // 26 MB -> several rotations
+		r.Write(line)
+	}
+	r.Close()
+	for i := 1; i <= keepLogs; i++ {
+		if _, err := os.Stat(fmt.Sprintf("%s.%d", path, i)); err != nil {
+			t.Fatalf("missing %s.%d", path, i)
+		}
+	}
+	if _, err := os.Stat(fmt.Sprintf("%s.%d", path, keepLogs+1)); err == nil {
+		t.Fatal("too many old logs kept")
+	}
+	if fi, _ := os.Stat(path); fi.Size() > maxLogSize {
+		t.Fatalf("log too big: %d", fi.Size())
 	}
 }

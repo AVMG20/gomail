@@ -55,6 +55,16 @@ async function setConversation(v: boolean) {
         </Select>
       </SettingRow>
     </SettingSection>
+    <SettingSection title="Storage">
+      <SettingRow title="Keep mail offline for" description="How far back gomail downloads mail. Older mail stays on the server and loads on demand.">
+        <Select :model-value="String(settings.settings.syncDepthDays ?? 90)" @update:model-value="(v) => settings.update({ syncDepthDays: Number(v) })">
+          <SelectTrigger class="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="d in [30, 90, 365, 0]" :key="d" :value="String(d)">{{ d === 0 ? 'Everything' : d === 365 ? '1 year' : `${d} days` }}</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+    </SettingSection>
     <SettingSection title="Notifications">
       <SettingRow title="Desktop notifications for new mail" description="Show a system notification when new mail arrives.">
         <Switch :model-value="settings.settings.notifications" @update:model-value="(v: boolean) => settings.update({ notifications: v })" />

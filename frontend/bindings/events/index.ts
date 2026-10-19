@@ -14,6 +14,11 @@ import "../github.com/wailsapp/wails/v3/internal/eventcreate.js";
 export const AccountsChanged = "accounts:changed";
 
 /**
+ * Name of the custom event "ai:budget".
+ */
+export const AiBudget = "ai:budget";
+
+/**
  * Name of the custom event "classify:finished".
  */
 export const ClassifyFinished = "classify:finished";
@@ -22,6 +27,11 @@ export const ClassifyFinished = "classify:finished";
  * Name of the custom event "classify:progress".
  */
 export const ClassifyProgress = "classify:progress";
+
+/**
+ * Name of the custom event "database:status".
+ */
+export const DatabaseStatus = "database:status";
 
 /**
  * Name of the custom event "labels:changed".
@@ -42,6 +52,11 @@ export const MessagesChanged = "messages:changed";
  * Name of the custom event "network:status".
  */
 export const NetworkStatus = "network:status";
+
+/**
+ * Name of the custom event "notification:open".
+ */
+export const NotificationOpen = "notification:open";
 
 /**
  * Name of the custom event "search:updated".

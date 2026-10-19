@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,12 +34,40 @@ type fakeGmail struct {
 	draftBodies []map[string]any
 	draftSent   bool
 	olderQ      string
+	uploads     []upload
+}
+
+type upload struct {
+	path string
+	meta map[string]any
+	raw  []byte
 }
 
 func (f *fakeGmail) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok" {
 			w.WriteHeader(401)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/upload/gmail/v1/users/me/") {
+			if r.URL.Query().Get("uploadType") != "multipart" {
+				t.Errorf("upload type %q", r.URL.Query().Get("uploadType"))
+			}
+			mt, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if mt != "multipart/related" {
+				t.Errorf("content type %s", mt)
+			}
+			mr := multipart.NewReader(r.Body, params["boundary"])
+			meta, _ := mr.NextPart()
+			var m map[string]any
+			json.NewDecoder(meta).Decode(&m)
+			rawPart, _ := mr.NextPart()
+			raw, _ := io.ReadAll(rawPart)
+			f.mu.Lock()
+			f.uploads = append(f.uploads, upload{path: strings.TrimPrefix(r.URL.Path, "/upload/gmail/v1/users/me/"), meta: m, raw: raw})
+			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"id": "big1"})
 			return
 		}
 		p := strings.TrimPrefix(r.URL.Path, "/gmail/v1/users/me/")
@@ -330,5 +361,35 @@ func TestDraftsOlderAndSearchString(t *testing.T) {
 	qs := SearchString(mail.SearchQuery{Terms: []string{"invoice", "q4 plan"}, From: []string{"acme"}, Unread: &yes, HasAttachment: true, After: before})
 	if qs != `invoice "q4 plan" from:acme is:unread has:attachment after:1790000000` {
 		t.Fatal(qs)
+	}
+}
+
+func TestLargeMessagesUseUploadEndpoint(t *testing.T) {
+	c, f := newTest(t)
+	big := make([]byte, 10<<20)
+	for i := range big {
+		big[i] = byte(i * 7)
+	}
+	out := mail.Outgoing{From: models.Address{Email: "me@gmail.com"}, To: []models.Address{{Email: "x@y.z"}}, Subject: "Big", Text: "see attached",
+		Mode: "reply", Original: &mail.Message{RemoteID: "m1", ThreadID: "t1", MessageID: "<abc@example.de>"},
+		Attachments: []mail.OutgoingAttachment{{Filename: "big.bin", MimeType: "application/octet-stream", Data: big}}}
+	if err := c.Send(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SaveDraft(context.Background(), out, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.uploads) != 2 || f.uploads[0].path != "messages/send" || f.uploads[1].path != "drafts" {
+		t.Fatalf("uploads %+v", len(f.uploads))
+	}
+	if f.uploads[0].meta["threadId"] != "t1" || f.uploads[1].meta["message"].(map[string]any)["threadId"] != "t1" {
+		t.Fatalf("metadata %v / %v", f.uploads[0].meta, f.uploads[1].meta)
+	}
+	p, err := mailmime.Parse(f.uploads[0].raw)
+	if err != nil || len(p.Attachments) != 1 || len(p.Attachments[0].Data) != len(big) || p.Attachments[0].Data[12345] != big[12345] {
+		t.Fatalf("attachment roundtrip failed: %v", err)
+	}
+	if len(f.sent) != 0 {
+		t.Fatal("large message went through the JSON endpoint")
 	}
 }

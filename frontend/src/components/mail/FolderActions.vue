@@ -23,7 +23,6 @@ const confirmEmpty = ref(false)
 const busy = ref(false)
 
 const kind = computed(() => mail.mailbox.kind)
-const emptiable = computed(() => (kind.value === 'trash' || kind.value === 'spam') && hasMethod('EmptyFolder'))
 const folderName = computed(() => (kind.value === 'spam' ? 'Junk' : 'Trash'))
 
 /** The concrete folder ids behind the current view (one per account in the unified view). */
@@ -31,12 +30,19 @@ const folderIds = computed(() => {
   if (mail.mailbox.folderId) return [mail.mailbox.folderId]
   return accounts.accounts.map((a) => accounts.folderOf(a.id, kind.value)?.id).filter((x): x is string => !!x)
 })
+// Gmail's Trash can't be emptied with gomail's API scope (it empties itself after 30 days).
+const emptyTargets = computed(() => folderIds.value.filter((id) => {
+  const f = accounts.folderMap.get(id)
+  const provider = f ? accounts.accountMap.get(f.accountId)?.provider : ''
+  return !(kind.value === 'trash' && provider === 'gmail')
+}))
+const emptiable = computed(() => (kind.value === 'trash' || kind.value === 'spam') && hasMethod('EmptyFolder') && emptyTargets.value.length > 0)
 const unread = computed(() => folderIds.value.reduce((n, id) => n + (accounts.folderMap.get(id)?.unread ?? 0), 0))
 
 async function emptyFolder() {
   busy.value = true
   try {
-    await Promise.all(folderIds.value.map((id) => api.emptyFolder(id)))
+    await Promise.all(emptyTargets.value.map((id) => api.emptyFolder(id)))
     mail.messages = []
     mail.total = 0
     toast(`${folderName.value} emptied`)

@@ -28,7 +28,10 @@ async function unsubscribe() {
   try {
     if (hasMethod('Unsubscribe')) {
       const r = await api.unsubscribe(props.message.id)
-      if (r.method === 'url') toast('Opened the unsubscribe page in your browser')
+      if (r.method === 'url') {
+        if (r.url || u.url) await api.openExternal(r.url || u.url)
+        toast('Opened the unsubscribe page in your browser')
+      }
       else toast.success(`Unsubscribed from ${displayName(props.message.from)}`, { description: r.method === 'mailto' ? 'An unsubscribe email was sent.' : 'It can take a few days for mail to stop.' })
     } else if (u.url) {
       await api.openExternal(u.url)

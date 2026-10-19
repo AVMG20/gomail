@@ -1,12 +1,14 @@
 <script setup lang="ts">
-// Lazily loaded row context menu, opened at the cursor via a 1x1 trigger.
-import { computed, nextTick, onMounted, ref } from 'vue'
+// Lazily loaded content of the list's right-click menu (the ContextMenu root and
+// trigger live in MessageList so real contextmenu events open it; WebKitGTK
+// ignores synthetic ones).
+import { computed } from 'vue'
 import {
   ArchiveIcon, FolderInputIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MailOpenIcon, ReplyAllIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon,
 } from '@lucide/vue'
 import {
-  ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut,
-  ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger,
+  ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut,
+  ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger,
 } from '@/components/ui/context-menu'
 import { useAiStore } from '@/stores/ai'
 import { useComposeStore } from '@/stores/compose'
@@ -17,21 +19,15 @@ import { api, errorMessage } from '@/lib/api'
 import { toast } from 'vue-sonner'
 import { FOLDER_ICONS } from './folderIcons'
 
-const props = defineProps<{ x: number; y: number; messageId: string }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{ messageId: string }>()
 const mail = useMailStore()
 const settings = useSettingsStore()
 const compose = useComposeStore()
 const ai = useAiStore()
-const anchor = ref<HTMLElement | null>(null)
 
 const ctxMsg = computed(() => mail.byId.get(props.messageId) ?? null)
 const ctxIds = computed(() => (mail.selection.has(props.messageId) ? [...mail.selection] : [props.messageId]))
 
-onMounted(async () => {
-  await nextTick()
-  anchor.value?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: props.x, clientY: props.y }))
-})
 
 async function respond(mode: 'reply' | 'replyAll' | 'forward') {
   const thread = await mail.loadThread(props.messageId)
@@ -47,10 +43,11 @@ const moveTargets = computed(() => {
 })
 async function moveTo(folderId: string) {
   const ids = ctxIds.value
+  const backendIds = mail.actionIds(ids)
   const name = accounts.folderMap.get(folderId)?.name ?? 'folder'
   mail.removeLocal(ids)
   try {
-    await api.moveToFolder(ids, folderId)
+    await api.moveToFolder(backendIds, folderId)
     toast(`Moved to ${name}`)
   } catch (e) {
     toast.error('Move failed', { description: errorMessage(e) })
@@ -68,10 +65,6 @@ function toggleCtxLabel(labelId: string) {
 </script>
 
 <template>
-  <ContextMenu @update:open="(o: boolean) => !o && emit('close')">
-    <ContextMenuTrigger as-child>
-      <div ref="anchor" class="pointer-events-none fixed size-px" :style="{ left: `${x}px`, top: `${y}px` }" />
-    </ContextMenuTrigger>
     <ContextMenuContent v-if="ctxMsg" class="w-56" @close-auto-focus="(e: Event) => e.preventDefault()">
     <ContextMenuItem @click="mail.open(messageId)"><MailOpenIcon /> Open <ContextMenuShortcut>↵</ContextMenuShortcut></ContextMenuItem>
     <ContextMenuSeparator />
@@ -109,5 +102,4 @@ function toggleCtxLabel(labelId: string) {
     </ContextMenuSub>
     <ContextMenuItem :disabled="!settings.aiReady" @click="ai.labelMessages(ctxIds)"><SparklesIcon class="text-violet-500" /> Label with AI</ContextMenuItem>
     </ContextMenuContent>
-  </ContextMenu>
 </template>

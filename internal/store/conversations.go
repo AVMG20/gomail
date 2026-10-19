@@ -59,8 +59,16 @@ func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.Messag
 	if opt.Conversations {
 		countExpr = `count(DISTINCT m.account_id || char(0) || m.thread_key)`
 	}
-	if page.Total, err = s.cachedCount(`SELECT `+countExpr+` FROM messages m`+w.sql(), w.args); err != nil {
+	fast, ok, err := s.fastConversationCount(q, opt)
+	switch {
+	case err != nil:
 		return page, err
+	case ok:
+		page.Total = fast
+	default:
+		if page.Total, err = s.cachedCount(`SELECT `+countExpr+` FROM messages m`+w.sql(), w.args); err != nil {
+			return page, err
+		}
 	}
 	if opt.Conversations {
 		latestInThread(w)
@@ -399,4 +407,54 @@ func (s *Store) hasMoreRemote(q models.ListQuery) bool {
 		}
 	}
 	return false
+}
+
+// fastConversationCount answers the conversation total of plain folder
+// views from the trigger-maintained folder_threads counters.
+func (s *Store) fastConversationCount(q models.ListQuery, opt ListOptions) (int, bool, error) {
+	if !opt.Conversations || q.Search != "" || len(q.Labels) > 0 || q.Unlabeled {
+		return 0, false, nil
+	}
+	var folders []string
+	switch {
+	case q.FolderID != "":
+		f, err := s.Folder(q.FolderID)
+		if err != nil || f.Kind == models.FolderStarred {
+			return 0, false, nil
+		}
+		folders = []string{f.ID}
+	case q.FolderKind != "" && q.FolderKind != models.FolderStarred && q.FolderKind != models.FolderCustom:
+		all, err := s.Folders(q.AccountID)
+		if err != nil {
+			return 0, false, err
+		}
+		for _, f := range all {
+			if f.Kind == q.FolderKind {
+				folders = append(folders, f.ID)
+			}
+		}
+		if len(folders) == 0 {
+			return 0, true, nil
+		}
+	default:
+		return 0, false, nil
+	}
+	query := `SELECT count(*) FROM folder_threads WHERE folder_id IN (` + placeholders(len(folders)) + `)`
+	if q.UnreadOnly {
+		query += ` AND unread > 0`
+	}
+	var n int
+	err := s.db.QueryRow(query, anySlice(folders)...).Scan(&n)
+	return n, err == nil, err
+}
+
+// slowConversationCount is the reference count (tests).
+func (s *Store) slowConversationCount(q models.ListQuery) (int, error) {
+	w, err := s.buildFilter(q, FilterOptions{})
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = s.db.QueryRow(`SELECT count(DISTINCT m.account_id || char(0) || m.thread_key) FROM messages m`+w.sql(), w.args...).Scan(&n)
+	return n, err
 }

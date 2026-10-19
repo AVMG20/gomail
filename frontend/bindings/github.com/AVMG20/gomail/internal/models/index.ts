@@ -3,6 +3,7 @@
 
 export type {
     AIModel,
+    AIUsage,
     Account,
     AccountEvent,
     Address,
@@ -15,6 +16,7 @@ export type {
     ClassifyProgress,
     ComposeRequest,
     Contact,
+    DatabaseStatus,
     DefaultPrompts,
     Folder,
     Label,
@@ -26,6 +28,7 @@ export type {
     MessageSummary,
     NetworkStatus,
     NewMailEvent,
+    NotificationOpen,
     OutgoingAttachment,
     SearchQuery,
     SearchResult,

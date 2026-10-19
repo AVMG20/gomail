@@ -89,6 +89,14 @@ export function EstimateClassify(q: models$0.ListQuery, onlyUnlabeled: boolean, 
 }
 
 /**
+ * GetAIUsage returns OpenRouter spending recorded today and this month,
+ * and whether the daily budget paused automatic labeling.
+ */
+export function GetAIUsage(): $CancellablePromise<models$0.AIUsage> {
+    return $Call.ByID(4176250811);
+}
+
+/**
  * GetAccounts lists the configured accounts.
  */
 export function GetAccounts(): $CancellablePromise<models$0.Account[] | null> {

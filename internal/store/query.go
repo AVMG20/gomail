@@ -221,17 +221,20 @@ func (s *Store) ResolveIDs(q models.ListQuery, opt FilterOptions, max int) ([]st
 	return ids, rows.Err()
 }
 
-// EstimateInput counts messages matching q and the number of characters the
-// classifier would send for them (body capped at bodyCap characters).
-func (s *Store) EstimateInput(q models.ListQuery, opt FilterOptions, bodyCap int) (count int, chars int64, err error) {
+// EstimateInput counts messages matching q, how many already carry an AI
+// hash starting with unchangedPrefix (would be skipped), and the characters
+// the classifier would send for the others (body capped at bodyCap).
+func (s *Store) EstimateInput(q models.ListQuery, opt FilterOptions, bodyCap int, unchangedPrefix string) (count, unchanged int, chars int64, err error) {
 	w, err := s.buildFilter(q, opt)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	err = s.db.QueryRow(`SELECT count(*), coalesce(sum(length(m.subject) + length(m.from_name) + length(m.from_email) + length(m.to_json) +
-		CASE WHEN m.body_text IS NOT NULL AND length(m.body_text) > 0 THEN min(length(m.body_text), ?) ELSE length(m.snippet) END), 0)
-		FROM messages m`+w.sql(), append([]any{bodyCap}, w.args...)...).Scan(&count, &chars)
-	return count, chars, err
+	like := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(unchangedPrefix) + "%"
+	err = s.db.QueryRow(`SELECT count(*), coalesce(sum(CASE WHEN m.ai_hash LIKE ? ESCAPE '\' THEN 1 ELSE 0 END), 0),
+		coalesce(sum(CASE WHEN m.ai_hash LIKE ? ESCAPE '\' THEN 0 ELSE length(m.subject) + length(m.from_name) + length(m.from_email) + length(m.to_json) +
+		CASE WHEN m.body_text IS NOT NULL AND length(m.body_text) > 0 THEN min(length(m.body_text), ?) ELSE length(m.snippet) END END), 0)
+		FROM messages m`+w.sql(), append([]any{like, like, bodyCap}, w.args...)...).Scan(&count, &unchanged, &chars)
+	return count, unchanged, chars, err
 }
 
 // now is replaceable in tests.

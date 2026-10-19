@@ -128,7 +128,7 @@ const srcdoc = computed(() => {
 <meta name="color-scheme" content="light">
 <style>
   html,body{margin:0;padding:0;background:#fff;color:#1f2328}
-  body{padding:20px 22px;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Ubuntu,Roboto,"Helvetica Neue",Arial,sans-serif;word-wrap:break-word;overflow-wrap:anywhere;overflow-y:hidden}
+  body{padding:20px 22px;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Ubuntu,Roboto,"Helvetica Neue",Arial,sans-serif;word-wrap:break-word;overflow-wrap:anywhere;overflow:hidden}
   img{max-width:100%;height:auto}
   img[data-blocked]{background:#f1f3f5;min-height:48px;min-width:24px;border-radius:4px}
   table{max-width:100%}
@@ -161,10 +161,22 @@ const textHtml = computed(() => {
 
 let ro: ResizeObserver | null = null
 
+let fitScale = 1
 function measure() {
   const doc = frame.value?.contentDocument
-  if (!doc?.body) return
-  const h = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight)
+  if (!doc?.body || !frame.value) return
+  // Fit wide newsletters to the pane (like Apple Mail) instead of scrolling sideways.
+  const avail = frame.value.clientWidth
+  const root = doc.documentElement as HTMLElement & { style: CSSStyleDeclaration & { zoom: string } }
+  const natural = Math.ceil(doc.body.scrollWidth * fitScale)
+  if (avail > 0 && natural > avail + 2) {
+    fitScale = Math.max(0.55, avail / natural)
+    root.style.zoom = String(fitScale)
+  } else if (fitScale < 1 && natural * (1 / fitScale) <= avail) {
+    fitScale = 1
+    root.style.zoom = ''
+  }
+  const h = Math.ceil(Math.max(root.scrollHeight, doc.body.scrollHeight) * (root.style.zoom ? fitScale : 1))
   if (h && Math.abs(h - height.value) > 1) height.value = h
 }
 
@@ -210,14 +222,17 @@ function onTextClick(e: MouseEvent) {
   handleLink(a.getAttribute('href') ?? '')
 }
 
-watch(srcdoc, () => (height.value = 80))
+watch(srcdoc, () => {
+  height.value = 80
+  fitScale = 1
+})
 onBeforeUnmount(() => ro?.disconnect())
 </script>
 
 <template>
   <div>
     <div
-      v-if="isHtml && (blockedCount > 0 || message.hasRemoteContent) && !allowRemote"
+      v-if="isHtml && (blockedCount > 0 || message.remoteContentBlocked || (message.remoteContentBlocked === undefined && message.hasRemoteContent)) && !allowRemote"
       class="bg-muted/60 text-muted-foreground mb-3 flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
     >
       <ImageOffIcon class="size-3.5 shrink-0" />

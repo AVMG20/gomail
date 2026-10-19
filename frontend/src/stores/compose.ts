@@ -172,6 +172,16 @@ export const useComposeStore = defineStore('compose', () => {
     })
   }
 
+  /** Continue editing a draft from the Drafts folder. */
+  function editDraft(m: Message) {
+    const existing = drafts.value.find((d) => d.remoteId === m.id)
+    if (existing) return focus(existing.id)
+    create({
+      mode: 'new', accountId: m.accountId, to: m.to, cc: m.cc, bcc: m.bcc, showCc: m.cc.length + m.bcc.length > 0,
+      subject: m.subject === '(no subject)' ? '' : m.subject, html: m.bodyHtml || textToHtml(m.bodyText), remoteId: m.id,
+    })
+  }
+
   function close(id: string) {
     drafts.value = drafts.value.filter((d) => d.id !== id)
   }
@@ -215,14 +225,15 @@ export const useComposeStore = defineStore('compose', () => {
       accountId: d.accountId, to: d.to, cc: d.cc, bcc: d.bcc, subject: d.subject,
       bodyHtml: d.html, bodyText: htmlToText(d.html), replyToId: d.replyToId, mode: d.mode,
       attachments: d.attachments.map(({ filename, mimeType, dataBase64 }) => ({ filename, mimeType, dataBase64 })),
+      draftId: d.remoteId ?? '',
     }
   }
 
   async function deliver(d: Draft) {
     const t = remoteTimers.get(d.id)
     if (t) clearTimeout(t)
+    // The backend removes the server draft (draftId) once the message is sent.
     await api.sendMessage(toRequest(d))
-    if (d.remoteId && hasMethod('DeleteDraft')) void api.deleteDraft(d.remoteId).catch(() => {})
   }
 
   async function send(id: string, delaySeconds = 0) {
@@ -284,5 +295,5 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  return { drafts, compose, respond, close, discard, saveAndClose, focus, send, undoSend }
+  return { drafts, compose, respond, editDraft, close, discard, saveAndClose, focus, send, undoSend }
 })

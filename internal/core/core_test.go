@@ -42,7 +42,7 @@ func (f *fakeUI) OpenURL(u string) error {
 }
 func (f *fakeUI) SaveFile(string) (string, error) { return f.savePath, nil }
 func (f *fakeUI) ApplySettings(models.Settings)   {}
-func (f *fakeUI) Notify(title, body string) {
+func (f *fakeUI) Notify(title, body string, _ models.NotificationOpen) {
 	f.mu.Lock()
 	f.notified = append(f.notified, title)
 	f.mu.Unlock()
@@ -426,7 +426,7 @@ func TestClassification(t *testing.T) {
 	}
 
 	est, err := s.EstimateClassify(models.ListQuery{AccountID: demo.GmailAccountID}, false, false)
-	if err != nil || est.Count == 0 || est.Requests != est.Count || !est.PriceKnown || est.EstimatedCostUSD <= 0 {
+	if err != nil || est.Count == 0 || est.Unchanged != 1 || est.Requests != est.Count-1 || !est.PriceKnown || est.EstimatedCostUSD <= 0 {
 		t.Fatalf("estimate %+v %v", est, err)
 	}
 	job, err := s.ClassifyQuery(models.ListQuery{AccountID: demo.GmailAccountID}, false, false)
@@ -460,6 +460,33 @@ func TestClassification(t *testing.T) {
 	}
 	if err := s.CancelClassify("nope"); err == nil {
 		t.Fatal("cancel unknown job")
+	}
+	// Unchanged messages are not sent again.
+	again, err := s.ClassifyMessages([]string{id})
+	if err != nil || !again[0].Skipped || again[0].Cost != 0 || again[0].Scores["finance"] != 0.9 {
+		t.Fatalf("re-run %+v %v", again, err)
+	}
+	// Editing a label definition invalidates the fingerprint.
+	st := s.GetSettings()
+	st.Labels[0].Description += " (edited)"
+	s.SaveSettings(st)
+	again, _ = s.ClassifyMessages([]string{id})
+	if again[0].Skipped {
+		t.Fatal("label change did not trigger re-classification")
+	}
+	usage, err := s.AIUsage()
+	if err != nil || usage.TodayUSD <= 0 || usage.RequestsToday < job.Total || usage.MonthUSD < usage.TodayUSD || usage.DailyBudgetUSD != 1 {
+		t.Fatalf("usage %+v %v", usage, err)
+	}
+	// Budget reached: automatic labeling pauses with an event.
+	st = s.GetSettings()
+	st.AIDailyBudgetUSD = 0.0001
+	st.AutoClassify = true
+	s.SaveSettings(st)
+	e.demos[demo.GmailAccountID].Deliver("Invoice for budget test", "billing@acme.example")
+	s.SyncNow(demo.GmailAccountID)
+	if ev, ok := e.ui.last(models.EventAIBudget).(models.AIUsage); !ok || !ev.BudgetReached {
+		t.Fatalf("no budget event: %+v", ev)
 	}
 }
 

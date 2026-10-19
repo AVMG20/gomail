@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, h, ref } from 'vue'
 import {
-  ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon,
+  WifiOffIcon, ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon,
 } from '@lucide/vue'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { relativeTime } from '@/lib/format'
@@ -217,8 +217,14 @@ function formatCount(n: number) {
       <div class="bg-sidebar-accent h-1 overflow-hidden rounded-full"><div class="h-full rounded-full transition-[width] duration-300" :style="{ width: `${progress.pct}%`, background: 'var(--account)' }" /></div>
     </div>
     <div class="border-sidebar-border flex items-center gap-2 border-t px-3 py-2">
-      <span class="size-1.5 shrink-0 rounded-full" :class="syncing ? 'animate-pulse bg-amber-500' : syncText.startsWith('Sync error') ? 'bg-destructive' : 'bg-emerald-500'" />
-      <span class="text-muted-foreground min-w-0 flex-1 truncate text-xs" :title="syncText">{{ syncText }}</span>
+      <template v-if="!accounts.online">
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400" role="status"><WifiOffIcon class="size-3" /> Offline</span>
+        <span class="flex-1" />
+      </template>
+      <template v-else>
+        <span class="size-1.5 shrink-0 rounded-full" :class="syncing ? 'animate-pulse bg-amber-500' : syncText.startsWith('Sync error') ? 'bg-destructive' : 'bg-emerald-500'" />
+        <span class="text-muted-foreground min-w-0 flex-1 truncate text-xs" :title="syncText">{{ syncText }}</span>
+      </template>
       <button
         type="button"
         class="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-md"

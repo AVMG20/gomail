@@ -244,6 +244,9 @@ type Settings struct {
 	MarkReadMode        string  `json:"markReadMode"`     // "immediate" | "delay" | "manual" (default "immediate")
 	ReadingPane         string  `json:"readingPane"`      // "right" | "off" (default "right")
 	Zoom                float64 `json:"zoom"`             // UI zoom factor (default 1.0, 0.5..2)
+	SyncDepthDays       int     `json:"syncDepthDays"`    // background backfill depth: 30, 90 (default), 365 or 0 = all mail
+	BackfillPaused      bool    `json:"backfillPaused"`   // pause the background backfill
+	AIDailyBudgetUSD    float64 `json:"aiDailyBudgetUsd"` // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
 
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`
@@ -265,6 +268,16 @@ type Settings struct {
 	GrammarSystemPrompt      string  `json:"grammarSystemPrompt"`      // "" = built-in default (see GetDefaultPrompts)
 }
 
+// AIUsage summarizes OpenRouter spending recorded by gomail (local time).
+type AIUsage struct {
+	TodayUSD       float64 `json:"todayUsd"`
+	MonthUSD       float64 `json:"monthUsd"`
+	RequestsToday  int     `json:"requestsToday"`
+	RequestsMonth  int     `json:"requestsMonth"`
+	DailyBudgetUSD float64 `json:"dailyBudgetUsd"` // 0 = unlimited
+	BudgetReached  bool    `json:"budgetReached"`  // automatic labeling is paused until tomorrow
+}
+
 // ClassifyJob identifies a background AI labeling job.
 type ClassifyJob struct {
 	JobID string `json:"jobId"`
@@ -277,7 +290,10 @@ type ClassifyEstimate struct {
 	Requests         int     `json:"requests"`        // Decisions API calls (labels are sent in chunks of 20)
 	EstimatedTokens  int     `json:"estimatedTokens"` // input tokens (~chars/4)
 	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
-	PriceKnown       bool    `json:"priceKnown"` // false when OpenRouter lists no price for the classifier model
+	PriceKnown       bool    `json:"priceKnown"`    // false when OpenRouter lists no price for the classifier model
+	Unchanged        int     `json:"unchanged"`     // messages that would be skipped (already labeled with the current labels)
+	TodayUSD         float64 `json:"todayUsd"`      // spent today
+	ExceedsBudget    bool    `json:"exceedsBudget"` // today's spend + estimate is over the daily budget (allowed, but warn)
 }
 
 // LabelCount is the number of messages carrying a label.
@@ -321,8 +337,9 @@ type ClassificationResult struct {
 	Added     []string           `json:"added"`
 	Removed   []string           `json:"removed"`
 	Scores    map[string]float64 `json:"scores"`
-	Cost      float64            `json:"cost"`  // USD
-	Error     string             `json:"error"` // per-message failure, "" on success
+	Cost      float64            `json:"cost"`    // USD
+	Error     string             `json:"error"`   // per-message failure, "" on success
+	Skipped   bool               `json:"skipped"` // unchanged since the last AI run: scores are the stored ones, no cost
 }
 
 // Event names emitted to the frontend.
@@ -338,7 +355,22 @@ const (
 	EventSyncProgress     = "sync:progress"     // SyncProgress (first sync of an account)
 	EventNetworkStatus    = "network:status"    // NetworkStatus
 	EventSearchUpdated    = "search:updated"    // SearchUpdated: server search cached more results; re-run the query
+	EventAIBudget         = "ai:budget"         // AIUsage: the daily budget was reached (automatic labeling paused)
+	EventNotificationOpen = "notification:open" // NotificationOpen: the user clicked a new-mail notification
+	EventDatabaseStatus   = "database:status"   // DatabaseStatus: integrity problems / repair
 )
+
+// NotificationOpen asks the UI to show a message.
+type NotificationOpen struct {
+	MessageID string `json:"messageId"`
+	AccountID string `json:"accountId"`
+}
+
+// DatabaseStatus reports database health.
+type DatabaseStatus struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
 
 // SyncProgress reports the progress of an account's initial sync.
 type SyncProgress struct {
@@ -377,6 +409,7 @@ type NewMailEvent struct {
 	AccountID string         `json:"accountId"`
 	Count     int            `json:"count"`
 	Latest    MessageSummary `json:"latest"`
+	Senders   []string       `json:"senders"` // distinct sender names, newest first
 }
 
 // ClassifyProgress is the payload of classify:progress / classify:finished.

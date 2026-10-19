@@ -21,6 +21,7 @@ import (
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
+	"github.com/AVMG20/gomail/internal/safe"
 	"github.com/AVMG20/gomail/internal/store"
 )
 
@@ -44,7 +45,10 @@ type Config struct {
 	OnNewMessages func(accountID string, ids []string, initial bool)
 	// Online probes connectivity; nil means "assume online".
 	Online func(ctx context.Context) bool
-	Limits provider.Limits
+	// Backfill returns the backfill depth in days (0 = all) and whether it
+	// is paused; nil disables background backfill.
+	Backfill func() (depthDays int, paused bool)
+	Limits   provider.Limits
 }
 
 // Backoff bounds for repeated sync failures.
@@ -73,6 +77,7 @@ type Engine struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	wake     chan struct{}
+	backfill backfillState
 }
 
 // New creates an engine; call Start to begin periodic syncing.
@@ -137,6 +142,7 @@ func (e *Engine) Start() {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
+		defer safe.Recover("sync loop")
 		tick := time.NewTicker(tickEvery)
 		defer tick.Stop()
 		e.syncDue(true)
@@ -151,6 +157,7 @@ func (e *Engine) Start() {
 			}
 		}
 	}()
+	e.startBackfill()
 }
 
 // Wake re-evaluates due syncs (e.g. after the interval setting changed).
@@ -225,6 +232,7 @@ func (e *Engine) syncDue(all bool) {
 			e.wg.Add(1)
 			go func() {
 				defer e.wg.Done()
+				defer safe.Recover("sync " + id)
 				_ = e.syncAccount(e.ctx, id)
 			}()
 		}
@@ -246,6 +254,7 @@ func (e *Engine) SyncNow(ctx context.Context, accountID string) error {
 			wg.Add(1)
 			go func(a models.Account) {
 				defer wg.Done()
+				defer safe.Recover("sync now")
 				if err := e.SyncNow(ctx, a.ID); err != nil {
 					mu.Lock()
 					errs = append(errs, err.Error())
@@ -273,7 +282,7 @@ func (e *Engine) SyncNow(ctx context.Context, accountID string) error {
 	defer e.wg.Done()
 	ctx, cancel := mergeCancel(ctx, e.ctx)
 	defer cancel()
-	return e.syncAccount(ctx, accountID)
+	return safe.Call("sync "+accountID, func() error { return e.syncAccount(ctx, accountID) })
 }
 
 func dedupe(errs []string) string {
@@ -502,6 +511,10 @@ func (e *Engine) labelIDs(accountID string, labels []mail.Label, msgs []mail.Mes
 // search results) without announcing them as new mail. It returns how many
 // were not cached before.
 func (e *Engine) Ingest(accountID string, msgs []mail.Message) (int, error) {
+	return e.ingest(accountID, msgs, false)
+}
+
+func (e *Engine) ingest(accountID string, msgs []mail.Message, quiet bool) (int, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
@@ -510,7 +523,7 @@ func (e *Engine) Ingest(accountID string, msgs []mail.Message) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if len(applied.New) > 0 {
+	if len(applied.New) > 0 && !quiet {
 		e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
 	}
 	return len(applied.New), nil
@@ -536,7 +549,19 @@ func (e *Engine) announce(accountID string, ids []string) {
 		return
 	}
 	sort.Slice(fresh, func(i, j int) bool { return fresh[i].Date.After(fresh[j].Date) })
-	e.cfg.Emit.Emit(models.EventNewMail, models.NewMailEvent{AccountID: accountID, Count: len(fresh), Latest: fresh[0]})
+	senders := []string{}
+	seen := map[string]bool{}
+	for _, m := range fresh {
+		n := m.From.Name
+		if n == "" {
+			n = m.From.Email
+		}
+		if !seen[n] {
+			seen[n] = true
+			senders = append(senders, n)
+		}
+	}
+	e.cfg.Emit.Emit(models.EventNewMail, models.NewMailEvent{AccountID: accountID, Count: len(fresh), Latest: fresh[0], Senders: senders})
 }
 
 func contains(ss []string, s string) bool {

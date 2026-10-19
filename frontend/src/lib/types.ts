@@ -40,6 +40,14 @@ export interface Contact {
   name: string
   email: string
   count: number
+  lastSeen?: string
+}
+
+export interface AIUsage {
+  todayUsd: number
+  monthUsd: number
+  requestsToday: number
+  requestsMonth: number
 }
 
 export interface Folder {
@@ -72,6 +80,10 @@ export interface MessageSummary {
   labelDetails?: MessageLabel[]
   /** Messages in the conversation (conversation view, backend pass 2). */
   threadCount?: number
+  /** "c:<id>" in conversation view: pass instead of message ids to act on the whole thread. */
+  conversationId?: string
+  /** Sender names, oldest first; "me" for the account itself. */
+  participants?: string[] | null
 }
 
 export interface UnsubscribeInfo {
@@ -120,7 +132,10 @@ export interface Message extends MessageSummary {
   inReplyTo: string
   references: string
   hasRemoteContent?: boolean
+  /** Remote images/CSS were stripped (offer "Load images"). */
+  remoteContentBlocked?: boolean
   unsubscribe?: UnsubscribeInfo | null
+  isDraft?: boolean
 }
 
 export interface ListQuery {
@@ -164,6 +179,8 @@ export interface ComposeRequest {
   replyToId: string
   mode: ComposeMode
   attachments: OutgoingAttachment[]
+  /** Draft handle from SaveDraft; the backend removes the draft once sent. */
+  draftId?: string
 }
 
 export type LabelSource = 'user' | 'provider' | 'system'
@@ -220,6 +237,10 @@ export interface Settings {
   readingPane?: 'right' | 'off'
   /** UI zoom factor 0.9–1.25. */
   zoom?: number
+  /** Daily AI spend cap in USD (0 = unlimited). Next backend pass. */
+  aiDailyBudgetUsd?: number
+  /** How far back to sync (days; 0 = everything). Next backend pass. */
+  syncDepthDays?: number
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
   primaryColor: string
@@ -326,6 +347,10 @@ export const Events = {
   ClassifyFinished: 'classify:finished',
   LabelsChanged: 'labels:changed',
   SyncProgress: 'sync:progress',
+  NetworkStatus: 'network:status',
+  SearchUpdated: 'search:updated',
+  NotificationOpen: 'notification:open',
+  AiBudget: 'ai:budget',
 } as const
 
 export interface EventPayloads {
@@ -335,6 +360,11 @@ export interface EventPayloads {
   'accounts:changed': { accountId?: string } | undefined
   'labels:changed': { accountId?: string } | undefined
   'sync:progress': SyncProgress
+  'network:status': { online: boolean }
+  'search:updated': { query: string; accountId: string; added: number }
+  'notification:open': { messageId: string; accountId: string }
+  /** Auto-labeling paused because the daily AI budget was reached (next backend pass). */
+  'ai:budget': { paused: boolean; spentUsd?: number; budgetUsd?: number }
   'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }
   'classify:finished': Partial<ClassifyJobProgress>
   'mail:new': { accountId: string; count: number; latest: MessageSummary }

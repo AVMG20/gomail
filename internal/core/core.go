@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/provider/gmail"
 	"github.com/AVMG20/gomail/internal/provider/outlook"
+	"github.com/AVMG20/gomail/internal/safe"
 	"github.com/AVMG20/gomail/internal/secrets"
 	"github.com/AVMG20/gomail/internal/store"
 	"github.com/AVMG20/gomail/internal/syncer"
@@ -36,8 +38,9 @@ type UI interface {
 	OpenURL(url string) error
 	// SaveFile asks for a destination path; "" means cancelled.
 	SaveFile(defaultName string) (string, error)
-	// Notify shows a desktop notification (best effort).
-	Notify(title, body string)
+	// Notify shows a desktop notification (best effort); clicking it should
+	// emit notification:open with open.
+	Notify(title, body string, open models.NotificationOpen)
 	// ApplySettings lets the shell react to settings (tray, close-to-tray).
 	ApplySettings(s models.Settings)
 }
@@ -77,6 +80,10 @@ type Service struct {
 	addMu     sync.Mutex
 	addCancel context.CancelFunc
 
+	repaired   bool
+	firstQuery chan struct{}
+	firstOnce  sync.Once
+
 	jobs     jobManager
 	drafts   draftSaver
 	searches remoteSearches
@@ -96,7 +103,7 @@ func New(opts Options) (*Service, error) {
 	if opts.UI == nil {
 		return nil, errors.New("core: UI is required")
 	}
-	st, err := store.Open(filepath.Join(opts.DataDir, "gomail.db"))
+	st, repaired, err := openStore(opts.DataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +126,7 @@ func New(opts Options) (*Service, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{opts: opts, store: st, secrets: sec, ui: opts.UI, providers: map[string]provider.Provider{}, ctx: ctx, cancel: cancel}
 	s.jobs.init()
+	s.repaired, s.firstQuery = repaired, make(chan struct{})
 	s.drafts.entries = map[string]*draftEntry{}
 	s.searches.recent, s.searches.busy = map[string]time.Time{}, map[string]bool{}
 	s.attCache = newAttCache(filepath.Join(opts.DataDir, "attachments"), defaultAttCacheLimit)
@@ -127,6 +135,7 @@ func New(opts Options) (*Service, error) {
 		return nil, err
 	}
 	s.ai = ai.New(opts.OpenRouterBase, s.openRouterKey, ai.CacheFile(opts.DataDir))
+	s.ai.OnUsage = s.recordUsage
 	s.engine = syncer.New(syncer.Config{
 		Store:         st,
 		Emit:          notifyingEmitter{s},
@@ -137,6 +146,10 @@ func New(opts Options) (*Service, error) {
 		},
 		OnNewMessages: s.onNewMessages,
 		Online:        online,
+		Backfill: func() (int, bool) {
+			st := s.Settings()
+			return st.SyncDepthDays, st.BackfillPaused
+		},
 	})
 	s.ui.ApplySettings(s.Settings())
 	if opts.Demo {
@@ -149,7 +162,91 @@ func New(opts Options) (*Service, error) {
 }
 
 // Start begins background work.
-func (s *Service) Start() { s.engine.Start() }
+//
+// Syncing starts after the UI's first ListMessages (or 3 s), so the first
+// paint never competes with network and database writes; the integrity
+// check and maintenance run later still.
+func (s *Service) Start() {
+	if s.repaired {
+		s.emit(models.EventDatabaseStatus, models.DatabaseStatus{OK: true,
+			Message: "The local mail cache was damaged and has been rebuilt. Your mail is being downloaded again."})
+	}
+	s.goBG(func() {
+		select {
+		case <-s.firstQuery:
+		case <-time.After(startDelay):
+		case <-s.ctx.Done():
+			return
+		}
+		s.engine.Start()
+	})
+	s.goBG(s.maintenanceLoop)
+}
+
+// startDelay bounds how long syncing waits for the first UI query.
+var startDelay = 3 * time.Second
+
+// markFirstQuery releases the deferred start.
+func (s *Service) markFirstQuery() { s.firstOnce.Do(func() { close(s.firstQuery) }) }
+
+const repairMarker = ".repair-database"
+
+// openStore opens the database, rebuilding it when it is damaged or was
+// flagged by a failed integrity check in the previous session.
+func openStore(dir string) (*store.Store, bool, error) {
+	path := filepath.Join(dir, "gomail.db")
+	marker := filepath.Join(dir, repairMarker)
+	repaired := false
+	if _, err := os.Stat(marker); err == nil {
+		if err := store.Recover(path); err != nil {
+			return nil, false, err
+		}
+		_ = os.Remove(marker)
+		repaired = true
+	}
+	st, err := store.Open(path)
+	if store.IsCorrupt(err) {
+		slog.Error("database is damaged, rebuilding", "err", err)
+		if rerr := store.Recover(path); rerr != nil {
+			return nil, false, rerr
+		}
+		repaired = true
+		st, err = store.Open(path)
+	}
+	return st, repaired, err
+}
+
+// Maintenance cadence.
+var (
+	integrityDelay   = 15 * time.Second
+	maintenanceEvery = 6 * time.Hour
+)
+
+func (s *Service) maintenanceLoop() {
+	select {
+	case <-time.After(integrityDelay):
+	case <-s.ctx.Done():
+		return
+	}
+	if err := s.store.QuickCheck(); err != nil {
+		slog.Error("database integrity check failed", "err", err)
+		_ = os.WriteFile(filepath.Join(s.opts.DataDir, repairMarker), []byte(err.Error()), 0o600)
+		s.emit(models.EventDatabaseStatus, models.DatabaseStatus{OK: false,
+			Message: "The local mail cache is damaged. It will be rebuilt the next time gomail starts; your accounts and settings are kept."})
+	}
+	tick := time.NewTicker(maintenanceEvery)
+	defer tick.Stop()
+	for {
+		if err := s.store.Maintain(); err != nil {
+			slog.Warn("database maintenance failed", "err", err)
+		}
+		select {
+		case <-tick.C:
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
 
 // Close stops background work and closes the database.
 func (s *Service) Close() {
@@ -180,6 +277,7 @@ func (s *Service) goBG(f func()) {
 	s.bg.Add(1)
 	go func() {
 		defer s.bg.Done()
+		defer safe.Recover("background task")
 		f()
 	}()
 }
@@ -196,16 +294,8 @@ func (n notifyingEmitter) Emit(event string, data any) {
 	if event != models.EventNewMail || !ok || !n.s.Settings().Notifications {
 		return
 	}
-	from := ev.Latest.From.Name
-	if from == "" {
-		from = ev.Latest.From.Email
-	}
-	title, body := from, ev.Latest.Subject
-	if ev.Count > 1 {
-		title = fmt.Sprintf("%d new messages", ev.Count)
-		body = from + ": " + ev.Latest.Subject
-	}
-	n.s.ui.Notify(title, body)
+	title, body := NotificationText(ev, n.s.accountName(ev.AccountID))
+	n.s.ui.Notify(title, body, models.NotificationOpen{MessageID: ev.Latest.ID, AccountID: ev.AccountID})
 }
 
 // ---- providers ----
@@ -536,3 +626,45 @@ func (s *Service) MarkFolderRead(folderID string) error { return s.engine.MarkFo
 
 // EmptyFolder permanently deletes the contents of Trash or Spam.
 func (s *Service) EmptyFolder(folderID string) error { return s.engine.EmptyFolder(folderID) }
+
+func (s *Service) accountName(id string) string {
+	a, err := s.store.Account(id)
+	if err != nil {
+		return ""
+	}
+	if a.DisplayName != "" {
+		return a.DisplayName
+	}
+	return a.Email
+}
+
+// NotificationText groups new mail: one message shows sender and subject;
+// several show "5 new messages · Work" and the senders.
+func NotificationText(ev models.NewMailEvent, account string) (title, body string) {
+	from := ev.Latest.From.Name
+	if from == "" {
+		from = ev.Latest.From.Email
+	}
+	if ev.Count <= 1 {
+		return from, ev.Latest.Subject
+	}
+	title = fmt.Sprintf("%d new messages", ev.Count)
+	if account != "" {
+		title += " · " + account
+	}
+	senders := ev.Senders
+	if len(senders) == 0 {
+		senders = []string{from}
+	}
+	switch {
+	case len(senders) == 1:
+		body = senders[0] + ": " + ev.Latest.Subject
+	case len(senders) == 2:
+		body = senders[0] + " and " + senders[1]
+	case len(senders) == 3:
+		body = senders[0] + ", " + senders[1] + " and " + senders[2]
+	default:
+		body = fmt.Sprintf("%s, %s and %d others", senders[0], senders[1], len(senders)-2)
+	}
+	return title, body
+}

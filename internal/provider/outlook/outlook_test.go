@@ -3,6 +3,8 @@ package outlook
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,6 +25,9 @@ type fakeGraph struct {
 	patched   map[string]any
 	sentDraft string
 	throttle  bool
+
+	uploadRanges []string
+	uploaded     int
 }
 
 func msgJSON(id, folder string, read bool) map[string]any {
@@ -38,6 +43,19 @@ func msgJSON(id, folder string, read bool) map[string]any {
 
 func (f *fakeGraph) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/upload-session/") {
+			// Pre-authenticated upload URL: no bearer token expected.
+			if r.Header.Get("Authorization") != "" {
+				t.Error("bearer token sent to the upload URL")
+			}
+			body, _ := io.ReadAll(r.Body)
+			f.mu.Lock()
+			f.uploadRanges = append(f.uploadRanges, r.Header.Get("Content-Range"))
+			f.uploaded += len(body)
+			f.mu.Unlock()
+			w.WriteHeader(200)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer tok" {
 			w.WriteHeader(401)
 			return
@@ -62,6 +80,9 @@ func (f *fakeGraph) handler(t *testing.T) http.HandlerFunc {
 			var resps []map[string]any
 			for i, req := range body.Requests {
 				u := req["url"].(string)
+				if h, _ := req["headers"].(map[string]any); h == nil || h["Prefer"] != `IdType="ImmutableId"` {
+					t.Errorf("batch sub-request without ImmutableId: %v", req)
+				}
 				resp := map[string]any{"id": req["id"], "status": 200, "body": map[string]any{}}
 				switch {
 				case throttle && i == 0:
@@ -141,6 +162,8 @@ func (f *fakeGraph) handler(t *testing.T) http.HandlerFunc {
 			f.patched = body
 			f.mu.Unlock()
 			write(map[string]any{})
+		case p == "/me/messages/draft1/attachments/createUploadSession":
+			write(map[string]string{"uploadUrl": f.url + "/upload-session/1"})
 		case p == "/me/messages/draft1/attachments":
 			write(map[string]any{})
 		case p == "/me/messages/draft1/send":
@@ -283,5 +306,26 @@ func TestKQLAndOlder(t *testing.T) {
 	}
 	if msgs, _ := c.ListOlder(context.Background(), mail.Folder{RemoteID: Flagged, Kind: models.FolderStarred}, time.Now(), 10); msgs != nil {
 		t.Fatal("flagged has no server folder")
+	}
+}
+
+func TestLargeAttachmentUploadSession(t *testing.T) {
+	c, f := newTest(t)
+	big := make([]byte, 10<<20)
+	for i := range big {
+		big[i] = byte(i)
+	}
+	err := c.Send(context.Background(), mail.Outgoing{To: []models.Address{{Email: "a@b.c"}}, Subject: "Big", HTML: "<p>x</p>",
+		Mode: "reply", Original: &mail.Message{RemoteID: "A"}, Attachments: []mail.OutgoingAttachment{{Filename: "big.bin", Data: big}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.uploaded != len(big) || f.sentDraft != "draft1" {
+		t.Fatalf("uploaded %d of %d, sent %q", f.uploaded, len(big), f.sentDraft)
+	}
+	const chunk = 320 * 1024 * 12
+	if len(f.uploadRanges) != 3 || f.uploadRanges[0] != fmt.Sprintf("bytes 0-%d/%d", chunk-1, len(big)) ||
+		f.uploadRanges[2] != fmt.Sprintf("bytes %d-%d/%d", 2*chunk, len(big)-1, len(big)) {
+		t.Fatalf("ranges %v", f.uploadRanges)
 	}
 }
