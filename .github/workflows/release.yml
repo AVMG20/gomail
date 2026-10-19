@@ -1,0 +1,123 @@
+name: Release
+
+# Builds the desktop app for Linux, macOS and Windows and attaches the
+# binaries to the GitHub release. Publish a release (e.g. tag v1.0.0) to run
+# it, or start it manually with an existing tag.
+#
+# Optional repository secrets bake default OAuth client IDs into the build so
+# end users don't have to create their own:
+#   GOMAIL_GOOGLE_CLIENT_ID, GOMAIL_GOOGLE_CLIENT_SECRET, GOMAIL_MICROSOFT_CLIENT_ID
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and upload to (e.g. v1.0.0)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  WAILS_VERSION: v2.17.0
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            os: ubuntu-24.04
+            platform: linux/amd64
+          - name: macos-universal
+            os: macos-latest
+            platform: darwin/universal
+          - name: windows-amd64
+            os: windows-latest
+            platform: windows/amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      - name: Compute build flags
+        id: flags
+        shell: bash
+        env:
+          GOOGLE_ID: ${{ secrets.GOMAIL_GOOGLE_CLIENT_ID }}
+          GOOGLE_SECRET: ${{ secrets.GOMAIL_GOOGLE_CLIENT_SECRET }}
+          MS_ID: ${{ secrets.GOMAIL_MICROSOFT_CLIENT_ID }}
+        run: |
+          version="${TAG#v}"
+          pkg="github.com/AVMG20/gomail/internal/auth"
+          ldflags="-s -w -X main.version=${version}"
+          [ -n "$GOOGLE_ID" ] && ldflags="$ldflags -X ${pkg}.DefaultGoogleClientID=${GOOGLE_ID}"
+          [ -n "$GOOGLE_SECRET" ] && ldflags="$ldflags -X ${pkg}.DefaultGoogleClientSecret=${GOOGLE_SECRET}"
+          [ -n "$MS_ID" ] && ldflags="$ldflags -X ${pkg}.DefaultMicrosoftClientID=${MS_ID}"
+          echo "ldflags=$ldflags" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: wails build -clean -platform ${{ matrix.platform }} -tags webkit2_41 -ldflags "${{ steps.flags.outputs.ldflags }}"
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: wails build -clean -platform ${{ matrix.platform }} -ldflags "${{ steps.flags.outputs.ldflags }}"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: wails build -clean -platform ${{ matrix.platform }} -nsis -webview2 embed -ldflags "${{ steps.flags.outputs.ldflags }}"
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          mkdir -p dist
+          name="gomail-${{ steps.flags.outputs.version }}-${{ matrix.name }}"
+          case "${{ runner.os }}" in
+            Linux)
+              tar -C build/bin -czf "dist/${name}.tar.gz" gomail
+              ;;
+            macOS)
+              ditto -c -k --keepParent build/bin/gomail.app "dist/${name}.zip"
+              hdiutil create -volname gomail -srcfolder build/bin/gomail.app -ov -format UDZO "dist/${name}.dmg"
+              ;;
+            Windows)
+              cp build/bin/gomail.exe "dist/${name}-portable.exe"
+              cp build/bin/*installer.exe "dist/${name}-installer.exe"
+              ;;
+          esac
+          ls -la dist
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
