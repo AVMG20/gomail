@@ -60,7 +60,8 @@ func (m *MailService) ServiceStartup(ctx context.Context, _ application.ServiceO
 	if err == nil {
 		m.logCloser = closer
 	}
-	m.info = models.AppInfo{Version: version, DataDir: dir, LogFile: logFile, Platform: runtime.GOOS + "/" + runtime.GOARCH, Demo: config.DemoMode()}
+	m.info = models.AppInfo{Version: version, DataDir: dir, LogFile: logFile, Platform: runtime.GOOS + "/" + runtime.GOARCH,
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Demo: config.DemoMode()}
 	slog.Info("gomail starting", "version", version, "dataDir", dir, "demo", m.info.Demo)
 	svc, err := core.New(core.Options{DataDir: dir, LogFile: logFile, Version: version, Demo: m.info.Demo, UI: desktopUI{m}})
 	if err != nil {
@@ -621,6 +622,7 @@ func (m *MailService) GetAppInfo() models.AppInfo {
 	if info.Platform == "" {
 		info.Platform = runtime.GOOS + "/" + runtime.GOARCH
 	}
+	info.OS, info.Arch = runtime.GOOS, runtime.GOARCH
 	return info
 }
 

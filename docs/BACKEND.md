@@ -147,7 +147,8 @@ removed.
 - `GetAIUsage()` returns today's and this month's spend and request
   counts, plus `aiDailyBudgetUsd` (default $1, 0 = unlimited).
 - When the budget is reached, automatic labeling pauses and emits
-  `ai:budget` once a day. It resumes the next day.
+  `ai:budget {paused:true, todayUsd, budgetUsd}` once a day. It resumes
+  the next day (or after the budget is raised) and emits `paused:false`.
 - Manual and bulk labeling still run. `EstimateClassify` reports
   `todayUsd`, `exceedsBudget` and `unchanged` so the UI can warn first.
 - A message is not sent to the classifier again while its fingerprint is
@@ -315,6 +316,16 @@ The directory contains:
 OAuth refresh tokens and the OpenRouter key go into the OS keyring
 (Keychain, Credential Manager or Secret Service). They fall back to the
 encrypted file when no keyring is available or a value is too large for it.
+
+**Webview storage.** The webview's localStorage and cache live under
+`<data dir>/webview`, so profiles don't share them:
+
+- Windows: `WebviewUserDataPath`.
+- Linux: WebKitGTK follows `XDG_DATA_HOME` and `XDG_CACHE_HOME`. These are
+  only redirected for custom profiles (`GOMAIL_DATA_DIR` or demo), so GTK
+  itself isn't affected for normal users.
+- macOS: WKWebView storage is per bundle id and can't be redirected, so
+  profiles share it there.
 
 ## Environment variables
 

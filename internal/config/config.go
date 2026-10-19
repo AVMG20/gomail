@@ -45,6 +45,12 @@ func DataDir() (string, error) {
 	return dir, nil
 }
 
+// CustomProfile reports whether a non-default data directory is in use
+// (GOMAIL_DATA_DIR or demo mode).
+func CustomProfile() bool {
+	return strings.TrimSpace(os.Getenv(EnvDataDir)) != "" || DemoMode()
+}
+
 // DemoMode reports whether GOMAIL_DEMO is set to a truthy value.
 func DemoMode() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvDemo))) {

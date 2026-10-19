@@ -152,6 +152,14 @@ export function htmlToText(html: string): string {
   return (doc.body.textContent ?? '').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+/** True when the HTML has visible text (optionally ignoring the signature block). */
+export function htmlHasText(html: string, ignoreSignature = false): boolean {
+  if (!html) return false
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  if (ignoreSignature) doc.querySelectorAll('[data-signature]').forEach((el) => el.remove())
+  return !!(doc.body.textContent ?? '').trim() || !!doc.body.querySelector('img')
+}
+
 export function textToHtml(text: string): string {
   return text
     .split(/\n{2,}/)

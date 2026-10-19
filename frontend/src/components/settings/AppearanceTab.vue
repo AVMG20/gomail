@@ -83,9 +83,22 @@ const radiusLabel = computed(() => (s.value.radius === 0 ? 'Square' : s.value.ra
             v-for="d in ['comfortable', 'compact']"
             :key="d"
             type="button"
+            :aria-pressed="s.density === d"
             :class="['rounded-md px-3 py-1 text-xs font-medium capitalize transition-colors', s.density === d ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground']"
             @click="settings.update({ density: d })"
           >{{ d }}</button>
+        </div>
+      </SettingRow>
+      <SettingRow title="Email background" description="In dark mode, Auto shows plain and simple emails in dark colors. Designed emails always keep a light background.">
+        <div class="bg-muted inline-flex rounded-lg p-0.5">
+          <button
+            v-for="o in [{ v: 'auto', l: 'Auto' }, { v: 'light', l: 'Always light' }]"
+            :key="o.v"
+            type="button"
+            :aria-pressed="(s.emailBackground ?? 'auto') === o.v"
+            :class="['rounded-md px-3 py-1 text-xs font-medium whitespace-nowrap transition-colors', (s.emailBackground ?? 'auto') === o.v ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground']"
+            @click="settings.update({ emailBackground: o.v as 'auto' | 'light' })"
+          >{{ o.l }}</button>
         </div>
       </SettingRow>
     </SettingSection>

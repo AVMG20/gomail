@@ -10,6 +10,7 @@ import AiTab from './AiTab.vue'
 import AppearanceTab from './AppearanceTab.vue'
 import GeneralTab from './GeneralTab.vue'
 import LabelsTab from './LabelsTab.vue'
+import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
 
 const ui = useUiStore()
 const settings = useSettingsStore()
@@ -54,7 +55,7 @@ const current = computed(() => tabs.find((t) => t.id === ui.settingsTab) ?? tabs
           <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted rounded-md p-1.5" aria-label="Close settings" @click="ui.settingsOpen = false"><XIcon class="size-4" /></button>
         </header>
         <div class="thin-scroll min-h-0 flex-1 overflow-y-auto px-8 pt-2 pb-10" @scroll.passive="(e: Event) => (scrolled = (e.target as HTMLElement).scrollTop > 4)">
-          <KeepAlive><component :is="current.comp" :key="current.id" /></KeepAlive>
+          <ErrorBoundary name="settings page" :reset-key="current.id"><KeepAlive><component :is="current.comp" :key="current.id" /></KeepAlive></ErrorBoundary>
         </div>
       </div>
     </DialogContent>

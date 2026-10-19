@@ -316,6 +316,8 @@ type AppInfo struct {
 	DataDir  string `json:"dataDir"`
 	LogFile  string `json:"logFile"`
 	Platform string `json:"platform"` // GOOS/GOARCH
+	OS       string `json:"os"`       // runtime.GOOS: "darwin" | "windows" | "linux"
+	Arch     string `json:"arch"`     // runtime.GOARCH
 	Demo     bool   `json:"demo"`
 }
 
@@ -355,10 +357,17 @@ const (
 	EventSyncProgress     = "sync:progress"     // SyncProgress (first sync of an account)
 	EventNetworkStatus    = "network:status"    // NetworkStatus
 	EventSearchUpdated    = "search:updated"    // SearchUpdated: server search cached more results; re-run the query
-	EventAIBudget         = "ai:budget"         // AIUsage: the daily budget was reached (automatic labeling paused)
+	EventAIBudget         = "ai:budget"         // AIBudgetEvent: automatic labeling paused (budget reached) or resumed
 	EventNotificationOpen = "notification:open" // NotificationOpen: the user clicked a new-mail notification
 	EventDatabaseStatus   = "database:status"   // DatabaseStatus: integrity problems / repair
 )
+
+// AIBudgetEvent reports the daily AI budget state.
+type AIBudgetEvent struct {
+	Paused    bool    `json:"paused"`
+	TodayUSD  float64 `json:"todayUsd"`
+	BudgetUSD float64 `json:"budgetUsd"`
+}
 
 // NotificationOpen asks the UI to show a message.
 type NotificationOpen struct {

@@ -94,7 +94,7 @@ function formatCount(n: number) {
 <template>
   <aside class="bg-sidebar text-sidebar-foreground border-sidebar-border flex h-full w-full flex-col border-r" aria-label="Folders">
     <!-- Header -->
-    <div class="relative px-3 pt-3 pb-2">
+    <div data-drag class="relative px-3 pt-[calc(var(--titlebar)+0.75rem)] pb-2">
       <div class="absolute inset-x-0 top-0 h-0.5" :style="{ background: account ? 'var(--account)' : 'transparent', opacity: 0.85 }" />
       <AccountMenu v-if="account" :account="account" @label-all="labelAllWithAi" />
       <div v-else class="flex items-center gap-2.5 px-2 py-1.5">

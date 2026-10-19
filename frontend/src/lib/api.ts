@@ -34,10 +34,23 @@ function register(mod: Record<string, unknown>) {
 
 /** Load the Wails runtime + bindings (no-op in the browser mock). Call before mounting. */
 export async function initBackend(): Promise<void> {
+  // Browser preview of the macOS chrome: ?chrome=mac
+  if (new URLSearchParams(location.search).get('chrome') === 'mac') setWindowChrome('mac')
   if (!isWails()) return
   const [rt, ...mods] = await Promise.all([import('@wailsio/runtime'), ...Object.values(bindingLoaders).map((load) => load())])
   runtime = rt
   mods.forEach(register)
+  try {
+    if (rt.System.IsMac()) setWindowChrome('mac')
+  } catch {
+    /* environment not injected yet: settings store falls back to GetAppInfo().platform */
+  }
+}
+
+/** "mac" = hidden inset title bar (traffic lights over the content, header drag regions). Windows/Linux keep native frames. */
+export function setWindowChrome(kind: 'mac' | 'native') {
+  if (kind === 'mac') document.documentElement.dataset.chrome = 'mac'
+  else delete document.documentElement.dataset.chrome
 }
 
 let mode: 'wails' | 'mock' | null = null
@@ -204,6 +217,7 @@ function normSettings(s: Settings): Settings {
     markReadMode: s.markReadMode ?? readLocal('markReadMode', 'immediate'),
     readingPane: s.readingPane ?? readLocal('readingPane', 'right'),
     zoom: s.zoom || readLocal('zoom', 1),
+    emailBackground: s.emailBackground ?? readLocal('emailBackground', 'auto'),
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,
     syncDepthDays: s.syncDepthDays ?? 90,
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
@@ -318,7 +332,11 @@ export const api = {
   getSettings: async () => normSettings(await call<Settings>('GetSettings')),
   // Reading/sending preferences now live in the backend's Settings; the
   // readLocal() fallbacks in normSettings only cover older backends.
-  saveSettings: (s: Settings) => call<void>('SaveSettings', s),
+  saveSettings: (s: Settings) => {
+    // Not in the Go Settings struct yet: keep a local copy so it survives restarts.
+    if (s.emailBackground) writeLocal('emailBackground', s.emailBackground)
+    return call<void>('SaveSettings', s)
+  },
 
   setOpenRouterKey: (key: string) => call<void>('SetOpenRouterKey', key),
   getAppInfo: () => call<AppInfo>('GetAppInfo'),

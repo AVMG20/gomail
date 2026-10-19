@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { api, errorMessage, hasMethod } from '@/lib/api'
+import { api, errorMessage, hasMethod, isWails, setWindowChrome } from '@/lib/api'
 import { applyTheme, themeFromSettings } from '@/lib/theme'
 import type { AIModel, AppInfo, DefaultPrompts, Label, Settings } from '@/lib/types'
 
@@ -52,6 +52,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function loadAppInfo() {
     try {
       appInfo.value = await api.getAppInfo()
+      if (isWails() && appInfo.value?.platform?.startsWith('darwin')) setWindowChrome('mac')
     } catch {
       appInfo.value = null
     }

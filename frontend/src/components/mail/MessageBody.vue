@@ -11,14 +11,22 @@ import DOMPurify from 'dompurify'
 import { ImageOffIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { shade } from '@/lib/color'
+import { isSimpleHtml } from '@/lib/emailTheme'
 import { linkify, parseAddress } from '@/lib/format'
+import { themeState } from '@/lib/theme'
 import type { Message } from '@/lib/types'
 import { useComposeStore } from '@/stores/compose'
+import { useSettingsStore } from '@/stores/settings'
 
 const props = defineProps<{ message: Message; allowRemote: boolean }>()
 const emit = defineEmits<{ loadImages: [] }>()
 
 const compose = useComposeStore()
+const settings = useSettingsStore()
+/** Dark theme + "Auto" email background: simple mail follows the app theme. */
+const darkAuto = computed(() => themeState.value.dark && (settings.settings?.emailBackground ?? 'auto') !== 'light')
+const forceLight = computed(() => themeState.value.dark && !darkAuto.value)
 const frame = ref<HTMLIFrameElement | null>(null)
 const height = ref(80)
 const blockedCount = ref(0)
@@ -118,14 +126,38 @@ function collapseQuotes(html: string): string {
 
 const isHtml = computed(() => !!props.message.bodyHtml.trim())
 
+const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml, props.allowRemote) : { html: '', blocked: 0 }))
+const simple = computed(() => isHtml.value && isSimpleHtml(sanitized.value.html))
+/** Render this HTML mail with theme colors (no white card). */
+const themed = computed(() => darkAuto.value && simple.value)
+
+function themedCss(): string {
+  const cs = getComputedStyle(document.documentElement)
+  const fg = cs.getPropertyValue('--foreground').trim() || '#f5f5f5'
+  const muted = cs.getPropertyValue('--muted-foreground').trim() || '#a3a3a3'
+  const border = cs.getPropertyValue('--border').trim() || 'rgba(255,255,255,.1)'
+  const muteBg = cs.getPropertyValue('--muted').trim() || '#262626'
+  const link = shade(themeState.value.primary, 0.35)
+  return `html,body{background:transparent;color:${fg}}
+  body{padding:2px 0}
+  body *{color:inherit !important;background-color:transparent !important;border-color:${border} !important}
+  a,a *{color:${link} !important}
+  blockquote{border-left-color:${border} !important;color:${muted} !important}
+  img[data-blocked]{background:${muteBg} !important}
+  details.gm-quote>summary{background:${muteBg} !important;color:${muted} !important}`
+}
+
 const srcdoc = computed(() => {
   if (!isHtml.value) return ''
-  const { html, blocked } = sanitize(props.message.bodyHtml, props.allowRemote)
+  const { html, blocked } = sanitized.value
   blockedCount.value = blocked
+  const dark = themed.value
+  // Track theme/accent so the frame re-renders when they change.
+  void themeState.value
   const img = props.allowRemote ? 'img-src data: cid: https: http:;' : 'img-src data: cid:;'
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${img} style-src 'unsafe-inline'${props.allowRemote ? ' https:' : ''}; font-src data:${props.allowRemote ? ' https:' : ''};">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="${dark ? 'dark' : 'light'}">
 <style>
   html,body{margin:0;padding:0;background:#fff;color:#1f2328}
   body{padding:20px 22px;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Ubuntu,Roboto,"Helvetica Neue",Arial,sans-serif;word-wrap:break-word;overflow-wrap:anywhere;overflow:hidden}
@@ -139,6 +171,7 @@ const srcdoc = computed(() => {
   details.gm-quote>summary{list-style:none;display:inline-block;cursor:pointer;padding:0 8px;border-radius:6px;background:#eef0f3;color:#5f6368;font-size:12px;line-height:18px;letter-spacing:1px;user-select:none}
   details.gm-quote>summary::-webkit-details-marker{display:none}
   details.gm-quote[open]>summary{margin-bottom:8px}
+  ${dark ? themedCss() : ''}
 </style></head><body>${html}</body></html>`
 })
 
@@ -239,7 +272,7 @@ onBeforeUnmount(() => ro?.disconnect())
       <span class="flex-1">Remote images are hidden to protect your privacy.</span>
       <Button variant="ghost" size="xs" class="text-foreground" @click="emit('loadImages')">Load images</Button>
     </div>
-    <div v-if="isHtml" class="overflow-hidden rounded-lg border border-black/5 bg-white dark:border-white/10">
+    <div v-if="isHtml" :class="themed ? '' : 'overflow-hidden rounded-lg border border-black/5 bg-white dark:border-white/10'" :data-email-theme="themed ? 'dark' : 'light'">
       <iframe
         ref="frame"
         :srcdoc="srcdoc"
@@ -252,6 +285,6 @@ onBeforeUnmount(() => ro?.disconnect())
       />
     </div>
     <!-- eslint-disable-next-line vue/no-v-html -- linkify() escapes all text and only emits <a> tags -->
-    <div v-else class="mail-text selectable text-foreground/90" @click="onTextClick" v-html="textHtml" />
+    <div v-else :class="['mail-text selectable', forceLight ? 'gm-light-card rounded-lg border border-white/10 bg-white px-[22px] py-5 text-[#1f2328]' : 'text-foreground/90']" @click="onTextClick" v-html="textHtml" />
   </div>
 </template>

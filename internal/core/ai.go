@@ -438,6 +438,7 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 		s.announceBudget()
 		return
 	}
+	s.announceResume()
 	inputs, err := s.store.ClassifyInputs(ids)
 	if err != nil {
 		return
@@ -533,6 +534,19 @@ func (s *Service) announceBudget() {
 	if first {
 		u, _ := s.AIUsage()
 		slog.Info("AI daily budget reached; automatic labeling paused until tomorrow", "spent", u.TodayUSD, "budget", u.DailyBudgetUSD)
-		s.emit(models.EventAIBudget, u)
+		s.emit(models.EventAIBudget, models.AIBudgetEvent{Paused: true, TodayUSD: u.TodayUSD, BudgetUSD: u.DailyBudgetUSD})
+	}
+}
+
+// announceResume emits ai:budget {paused:false} once automatic labeling
+// runs again after a pause (next day or a raised budget).
+func (s *Service) announceResume() {
+	s.jobs.mu.Lock()
+	was := s.jobs.budgetDay != ""
+	s.jobs.budgetDay = ""
+	s.jobs.mu.Unlock()
+	if was {
+		u, _ := s.AIUsage()
+		s.emit(models.EventAIBudget, models.AIBudgetEvent{Paused: false, TodayUSD: u.TodayUSD, BudgetUSD: u.DailyBudgetUSD})
 	}
 }

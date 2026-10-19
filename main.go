@@ -4,12 +4,15 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"github.com/AVMG20/gomail/internal/appicon"
+	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/models"
 )
 
@@ -32,12 +35,31 @@ func init() {
 	application.RegisterEvent[models.SyncProgress](models.EventSyncProgress)
 	application.RegisterEvent[models.NetworkStatus](models.EventNetworkStatus)
 	application.RegisterEvent[models.SearchUpdated](models.EventSearchUpdated)
-	application.RegisterEvent[models.AIUsage](models.EventAIBudget)
+	application.RegisterEvent[models.AIBudgetEvent](models.EventAIBudget)
 	application.RegisterEvent[models.NotificationOpen](models.EventNotificationOpen)
 	application.RegisterEvent[models.DatabaseStatus](models.EventDatabaseStatus)
 }
 
+// webviewStorage keeps the webview's localStorage/cache inside the data
+// directory so separate profiles (GOMAIL_DATA_DIR, demo) don't share it.
+// Windows: WebView2 user data folder. Linux: WebKitGTK uses XDG_DATA_HOME /
+// XDG_CACHE_HOME, redirected only for custom profiles to avoid side effects
+// on the default one. macOS: WKWebView storage is per bundle id (no option).
+func webviewStorage() string {
+	dir, err := config.DataDir()
+	if err != nil {
+		return ""
+	}
+	wv := filepath.Join(dir, "webview")
+	if runtime.GOOS == "linux" && config.CustomProfile() {
+		_ = os.Setenv("XDG_DATA_HOME", filepath.Join(wv, "data"))
+		_ = os.Setenv("XDG_CACHE_HOME", filepath.Join(wv, "cache"))
+	}
+	return wv
+}
+
 func main() {
+	webviewDir := webviewStorage()
 	notifier := notifications.New()
 	svc := NewMailService(notifier)
 
@@ -49,6 +71,7 @@ func main() {
 		Services: []application.Service{application.NewService(svc)},
 		Assets:   application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		Mac:      application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
+		Windows:  application.WindowsOptions{WebviewUserDataPath: webviewDir},
 	})
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{

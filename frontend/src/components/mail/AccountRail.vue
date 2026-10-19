@@ -22,7 +22,7 @@ function badge(n: number) {
 </script>
 
 <template>
-  <nav class="bg-sidebar border-sidebar-border flex w-14 shrink-0 flex-col items-center gap-1 border-r py-3" aria-label="Accounts">
+  <nav data-drag class="bg-sidebar border-sidebar-border flex w-14 shrink-0 flex-col items-center gap-1 border-r pt-[calc(var(--titlebar)+0.75rem)] pb-3" aria-label="Accounts">
     <Tip v-if="accounts.accounts.length > 1" label="All inboxes" shortcut="mod+shift+0" side="right">
       <button
         type="button"

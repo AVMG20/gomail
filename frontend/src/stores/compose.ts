@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
-import { displayName, escapeHtml, formatAddress, htmlToText, isEmail, longDate, signatureBlock, textToHtml } from '@/lib/format'
+import { displayName, escapeHtml, formatAddress, htmlHasText, htmlToText, isEmail, longDate, signatureBlock, textToHtml } from '@/lib/format'
 import { uid } from '@/lib/platform'
 import type { Address, ComposeMode, Message } from '@/lib/types'
 import { useAccountsStore } from './accounts'
@@ -45,16 +45,20 @@ const MAX_PERSIST_ATTACH = 1_500_000
 
 function loadDrafts(): Draft[] {
   try {
-    const list = JSON.parse(localStorage.getItem(DRAFTS_KEY) || '[]') as Draft[]
-    // Restore minimised; anything that was mid-send becomes a normal draft again.
-    return list.map((d) => ({ ...d, minimized: true, expanded: false, sending: false, queued: false }))
+    const raw = JSON.parse(localStorage.getItem(DRAFTS_KEY) || '[]') as Draft[]
+    // Only drafts that were still open in the dock are stored; empty ones (just a signature) are purged.
+    // They come back minimised; anything that was mid-send becomes a normal draft again.
+    const list = (Array.isArray(raw) ? raw : []).filter((d) => d && Array.isArray(d.to) && draftHasContent(d))
+    if (list.length !== (Array.isArray(raw) ? raw.length : 0)) localStorage.setItem(DRAFTS_KEY, JSON.stringify(list))
+    return list.map((d) => ({ ...d, cc: d.cc ?? [], bcc: d.bcc ?? [], attachments: d.attachments ?? [], minimized: true, expanded: false, sending: false, queued: false }))
   } catch {
     return []
   }
 }
 
-export function draftHasContent(d: Draft): boolean {
-  return !!(d.to.length || d.cc.length || d.bcc.length || d.subject.trim() || htmlToText(d.html).trim() || d.attachments.length)
+/** Recipients, subject, attachments or typed body text (the auto-inserted signature doesn't count). */
+export function draftHasContent(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' | 'html' | 'attachments'>): boolean {
+  return !!(d.to?.length || d.cc?.length || d.bcc?.length || d.subject?.trim() || d.attachments?.length || htmlHasText(d.html ?? '', true))
 }
 
 function prefixSubject(prefix: string, subject: string) {

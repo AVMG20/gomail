@@ -485,7 +485,7 @@ func TestClassification(t *testing.T) {
 	s.SaveSettings(st)
 	e.demos[demo.GmailAccountID].Deliver("Invoice for budget test", "billing@acme.example")
 	s.SyncNow(demo.GmailAccountID)
-	if ev, ok := e.ui.last(models.EventAIBudget).(models.AIUsage); !ok || !ev.BudgetReached {
+	if ev, ok := e.ui.last(models.EventAIBudget).(models.AIBudgetEvent); !ok || !ev.Paused || ev.BudgetUSD != 0.0001 {
 		t.Fatalf("no budget event: %+v", ev)
 	}
 }

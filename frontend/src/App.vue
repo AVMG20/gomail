@@ -17,6 +17,7 @@ import { useComposeStore } from '@/stores/compose'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
+import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
 
 // Heavier, not-always-needed UI is code-split.
 const ReadingPane = defineAsyncComponent(() => import('@/components/mail/ReadingPane.vue'))
@@ -123,7 +124,7 @@ watch(() => mail.mailboxName, (name) => {
         <!-- Reading pane off: full-width list; the message opens in place with a back button. -->
         <div v-if="paneOff" class="min-w-0 flex-1">
           <MessageList v-show="!mail.openId" />
-          <ReadingPane v-if="mail.openId" show-back />
+          <ErrorBoundary v-if="mail.openId" name="reading pane" :reset-key="mail.openId"><ReadingPane show-back /></ErrorBoundary>
         </div>
         <ResizablePanelGroup v-else direction="horizontal" auto-save-id="gomail.panes.v1" class="min-w-0 flex-1">
           <ResizablePanel :default-size="42" :min-size="30" :max-size="65" class="min-w-0">
@@ -131,7 +132,7 @@ watch(() => mail.mailboxName, (name) => {
           </ResizablePanel>
           <ResizableHandle />
           <ResizablePanel :default-size="58" :min-size="35" class="min-w-0">
-            <ReadingPane />
+            <ErrorBoundary name="reading pane" :reset-key="mail.openId ?? ''"><ReadingPane /></ErrorBoundary>
           </ResizablePanel>
         </ResizablePanelGroup>
       </template>

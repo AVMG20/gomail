@@ -159,7 +159,8 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
 </script>
 
 <template>
-  <section class="bg-background flex h-full min-w-0 flex-col" aria-label="Reading pane">
+  <section class="bg-background relative flex h-full min-w-0 flex-col" aria-label="Reading pane">
+    <div v-if="!mail.openId" data-drag class="absolute inset-x-0 top-0 h-[calc(52px+var(--titlebar))]" aria-hidden="true" />
     <!-- Empty -->
     <div v-if="!mail.openId" class="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       <div class="bg-muted/70 flex size-14 items-center justify-center rounded-2xl">
@@ -173,7 +174,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
 
     <template v-else>
       <!-- Toolbar -->
-      <div class="border-border flex h-[52px] shrink-0 items-center gap-0.5 border-b px-3">
+      <div data-drag class="border-border flex h-[calc(52px+var(--titlebar))] shrink-0 items-center gap-0.5 border-b px-3 pt-[var(--titlebar)]">
         <template v-if="showBack">
           <Tip label="Back to list" shortcut="esc"><Button variant="ghost" size="icon-sm" aria-label="Back to list" @click="mail.open(null)"><ArrowLeftIcon /></Button></Tip>
           <div class="bg-border mx-1.5 h-5 w-px" />

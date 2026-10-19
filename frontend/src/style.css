@@ -278,3 +278,20 @@ mark {
 .mail-text details.gm-quote > summary::-webkit-details-marker { display: none; }
 .mail-text details.gm-quote[open] > summary { margin-bottom: 6px; }
 .mail-text details.gm-quote { color: var(--muted-foreground); }
+
+/* Plain-text mail in dark mode: lift the accent for readable links. */
+.dark .mail-text a { color: color-mix(in oklab, var(--primary) 65%, white); }
+/* "Always light" email background in dark mode */
+.mail-text.gm-light-card a { color: #0b57d0; }
+.mail-text.gm-light-card details.gm-quote,
+.mail-text.gm-light-card details.gm-quote > summary { color: #57606a; }
+.mail-text.gm-light-card details.gm-quote > summary { background: #eef0f3; }
+
+/* Window chrome. macOS uses a hidden inset title bar: reserve room for the traffic
+   lights and make the pane headers drag the window (interactive controls opt out). */
+:root { --titlebar: 0px; }
+html[data-chrome='mac'] { --titlebar: 28px; }
+html[data-chrome='mac'] [data-drag] { --wails-draggable: drag; }
+html[data-chrome='mac'] [data-drag] :is(button, a, input, textarea, select, label, summary, [role='button'], [role='tab'], [role='checkbox'], [role='menuitem'], [role='combobox'], [role='listbox'], [role='option'], [contenteditable='true'], [data-no-drag]) {
+  --wails-draggable: no-drag;
+}

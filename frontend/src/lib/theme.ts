@@ -1,3 +1,4 @@
+import { shallowRef } from 'vue'
 import { readableForeground, shade } from './color'
 import type { Settings } from './types'
 
@@ -46,6 +47,9 @@ export function isDarkFor(theme: string): boolean {
 
 let current: ThemeCache | null = null
 
+/** Reactive: the resolved theme is dark, and the current accent (for code that needs literal colors, e.g. email frames). */
+export const themeState = shallowRef({ dark: false, primary: DEFAULT_PRIMARY })
+
 export function applyTheme(t: ThemeCache, persist = true): void {
   current = t
   const root = document.documentElement
@@ -55,6 +59,7 @@ export function applyTheme(t: ThemeCache, persist = true): void {
   root.dataset.density = t.density
   const vars = dark ? t.darkVars : t.vars
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
+  themeState.value = { dark, primary: vars['--primary'] ?? DEFAULT_PRIMARY }
   if (persist) {
     try {
       localStorage.setItem(THEME_CACHE_KEY, JSON.stringify(t))

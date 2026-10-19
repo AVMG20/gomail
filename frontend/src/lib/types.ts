@@ -235,6 +235,8 @@ export interface Settings {
   markReadMode?: 'immediate' | 'delay' | 'manual'
   /** "right" = three panes; "off" = full-width list, message opens in the main area. */
   readingPane?: 'right' | 'off'
+  /** Dark mode: "auto" renders simple emails with theme colors; "light" always uses a light card. Stored locally until the backend has it. */
+  emailBackground?: 'auto' | 'light'
   /** UI zoom factor 0.9–1.25. */
   zoom?: number
   /** Daily AI spend cap in USD (0 = unlimited). Next backend pass. */

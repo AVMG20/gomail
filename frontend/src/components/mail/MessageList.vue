@@ -268,7 +268,7 @@ const emptyState = computed(() => {
 <template>
   <section class="bg-background flex h-full min-w-0 flex-col" aria-label="Messages">
     <!-- Header -->
-    <header class="border-border @container shrink-0 border-b px-3 pt-3 pb-2">
+    <header data-drag class="border-border @container shrink-0 border-b px-3 pt-[calc(var(--titlebar)+0.75rem)] pb-2">
       <div class="flex h-9 items-center gap-1">
         <template v-if="mail.selection.size || mail.selectAllQuery">
           <BulkBar class="flex-1" />
