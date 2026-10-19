@@ -2,7 +2,9 @@ import { onBeforeUnmount } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { toast } from 'vue-sonner'
 import { api } from '@/lib/api'
-import { displayName } from '@/lib/format'
+import { displayName, parseAddressList } from '@/lib/format'
+import type { Address } from '@/lib/types'
+import { useComposeStore } from '@/stores/compose'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
@@ -14,6 +16,8 @@ export function useBackendEvents() {
   const mail = useMailStore()
   const ai = useAiStore()
   const settings = useSettingsStore()
+  const compose = useComposeStore()
+  const addrs = (v: string | Address[] | undefined): Address[] => (Array.isArray(v) ? v : v ? parseAddressList(v) : [])
   const refreshLabels = useDebounceFn(() => {
     void settings.refreshLabels()
     void accounts.loadLabelCounts()
@@ -70,11 +74,26 @@ export function useBackendEvents() {
       if (p.paused) toast('AI labeling paused for today', { description: `The daily AI budget was reached${spent}. Change it in Settings → AI.` })
       else toast('AI labeling resumed')
     }),
+    // mailto: links handed to gomail by the OS.
+    api.on('compose:open', (p) => {
+      if (!p) return
+      compose.composeWith({ to: addrs(p.to), cc: addrs(p.cc), bcc: addrs(p.bcc), subject: p.subject ?? '', body: p.body ?? '' })
+    }),
+    api.on('update:available', (p) => {
+      if (!p?.available) return
+      settings.updateInfo = p
+    }),
     api.on('database:status', (p) => {
       if (p && !p.ok) toast.error('Mail database problem', { description: p.message || 'gomail is repairing its local database.', duration: 10000 })
     }),
     api.on('sync:progress', (p) => {
       if (!p?.accountId) return
+      if (p.phase === 'backfill') {
+        // Background download of older mail: no spinner, cleared when complete.
+        if (p.total && p.done >= p.total) accounts.setProgress(null, p.accountId)
+        else accounts.setProgress(p)
+        return
+      }
       accounts.setProgress(p)
       if (!accounts.syncing.has(p.accountId)) accounts.setSyncing(p.accountId, true)
     }),

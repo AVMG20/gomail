@@ -60,6 +60,10 @@ type Options struct {
 	OpenRouterBase string
 	// Online overrides the connectivity probe (tests).
 	Online func(ctx context.Context) bool
+	// GmailBase and GraphBase override the provider API base URLs (tests
+	// against fake servers). "" = production.
+	GmailBase string
+	GraphBase string
 }
 
 // Service implements the application's use cases.
@@ -181,6 +185,7 @@ func (s *Service) Start() {
 		s.engine.Start()
 	})
 	s.goBG(s.maintenanceLoop)
+	s.goBG(s.updateLoop)
 }
 
 // startDelay bounds how long syncing waits for the first UI query.
@@ -348,18 +353,18 @@ func (s *Service) realProvider(acct models.Account) (provider.Provider, error) {
 		return nil, err
 	}
 	ts := auth.NewTokenSource(cfg, tok, acct.Email, func(t *oauth2.Token) error { return auth.SaveToken(s.secrets, acct.ID, t) })
-	return newProvider(acct.Provider, ts)
+	return s.newProvider(acct.Provider, ts)
 }
 
-func newProvider(kind string, ts interface {
+func (s *Service) newProvider(kind string, ts interface {
 	AccessToken(context.Context) (string, error)
 	Invalidate()
 }) (provider.Provider, error) {
 	switch kind {
 	case models.ProviderGmail:
-		return gmail.New(ts, ""), nil
+		return gmail.New(ts, s.opts.GmailBase), nil
 	case models.ProviderOutlook:
-		return outlook.New(ts, ""), nil
+		return outlook.New(ts, s.opts.GraphBase), nil
 	}
 	return nil, fmt.Errorf("unsupported provider %q", kind)
 }
@@ -432,7 +437,7 @@ func (s *Service) signIn(kind string) (provider.Profile, *oauth2.Token, error) {
 	cfg, _ := auth.Config(kind, creds, "")
 	current := tok
 	ts := auth.NewTokenSource(cfg, tok, "the new account", func(t *oauth2.Token) error { current = t; return nil })
-	p, err := newProvider(kind, ts)
+	p, err := s.newProvider(kind, ts)
 	if err != nil {
 		return provider.Profile{}, nil, err
 	}

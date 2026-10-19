@@ -151,6 +151,17 @@ export const useComposeStore = defineStore('compose', () => {
     return create({ to })
   }
 
+  /** Prefilled new message (mailto: links, compose:open from the backend). */
+  function composeWith(p: { to?: Address[]; cc?: Address[]; bcc?: Address[]; subject?: string; body?: string }) {
+    const accounts = useAccountsStore()
+    const mail = useMailStore()
+    const sig = accounts.accountMap.get(mail.mailbox.accountId || accounts.accounts[0]?.id || '')?.signature ?? ''
+    const body = p.body ? textToHtml(p.body) : '<p></p>'
+    const cc = p.cc ?? []
+    const bcc = p.bcc ?? []
+    return create({ to: p.to ?? [], cc, bcc, showCc: cc.length + bcc.length > 0, subject: p.subject ?? '', html: `${body}${sig ? signatureBlock(sig) : ''}` })
+  }
+
   async function respond(mode: Exclude<ComposeMode, 'new'>, m: Message) {
     const accounts = useAccountsStore()
     const own = accounts.accountMap.get(m.accountId)?.email.toLowerCase() ?? ''
@@ -299,5 +310,5 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  return { drafts, compose, respond, editDraft, close, discard, saveAndClose, focus, send, undoSend }
+  return { drafts, compose, composeWith, respond, editDraft, close, discard, saveAndClose, focus, send, undoSend }
 })

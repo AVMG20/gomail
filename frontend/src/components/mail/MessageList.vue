@@ -410,7 +410,7 @@ const emptyState = computed(() => {
           <!-- Sticky date label (zero-height so it never takes layout space) -->
           <div v-if="sticky" class="pointer-events-none sticky top-0 z-10 h-0">
             <div
-              class="bg-background/90 text-muted-foreground/80 border-border/60 flex items-end border-b px-4 pb-1 pl-12 text-[11px] font-medium tracking-wide uppercase backdrop-blur"
+              class="bg-background/90 text-muted-foreground border-border/60 flex items-end border-b px-4 pb-1 pl-12 text-[11px] font-medium tracking-wide uppercase backdrop-blur"
               :style="{ height: `${HEADER_H}px`, transform: `translateY(${sticky.push}px)` }"
             >{{ sticky.label }}</div>
           </div>
@@ -442,7 +442,7 @@ const emptyState = computed(() => {
                   @star="(st) => mail.setStarred([rows[it.index].key], st)"
                 />
               </template>
-              <div v-else-if="rows[it.index]?.kind === 'header'" class="text-muted-foreground/80 flex h-full items-end px-4 pb-1 pl-12 text-[11px] font-medium tracking-wide uppercase" role="presentation">
+              <div v-else-if="rows[it.index]?.kind === 'header'" class="text-muted-foreground flex h-full items-end px-4 pb-1 pl-12 text-[11px] font-medium tracking-wide uppercase" role="presentation">
                 {{ (rows[it.index] as HeaderRow).label }}
               </div>
               <div v-else-if="rows[it.index]?.kind === 'older'" class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">

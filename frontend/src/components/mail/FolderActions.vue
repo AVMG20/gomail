@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useEventListener } from '@vueuse/core'
 import { MailCheckIcon, MoreHorizontalIcon, SparklesIcon, Trash2Icon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -68,6 +69,14 @@ async function markAllRead() {
   }
   accounts.refreshCounts()
 }
+
+// Command palette entry points ("Mark all as read", "Empty Trash/Junk", "Label this view with AI").
+useEventListener(window, 'gomail:folder-action', (e: Event) => {
+  const what = (e as CustomEvent<string>).detail
+  if (what === 'markAllRead') void markAllRead()
+  else if (what === 'empty' && emptiable.value && mail.total > 0) confirmEmpty.value = true
+  else if (what === 'labelAi' && settings.aiReady) labelFolder()
+})
 
 function labelFolder() {
   ai.requestBulk({ query: { ...mail.query, cursor: '' }, ids: [], title: `${mail.mailboxName}${mail.mailboxAccount ? ` · ${mail.mailboxAccount.displayName}` : ''}` })

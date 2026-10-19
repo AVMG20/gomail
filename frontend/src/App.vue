@@ -75,6 +75,7 @@ onMounted(async () => {
     void import('@/components/mail/RowContextMenu.vue')
     void import('@/components/mail/BulkBar.vue')
   }, 1200)
+  setTimeout(() => void settings.checkForUpdate(), 4000)
 })
 
 watch(() => mail.mailbox.accountId, (id) => void accounts.loadLabelCounts(id))

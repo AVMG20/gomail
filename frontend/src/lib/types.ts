@@ -249,6 +249,10 @@ export interface Settings {
   syncDepthDays?: number
   /** Pause the background download of older mail. */
   backfillPaused?: boolean
+  /** Start gomail when you log in (next backend pass). */
+  launchAtLogin?: boolean
+  /** Check GitHub releases for updates (next backend pass). */
+  checkUpdates?: boolean
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
   primaryColor: string
@@ -277,6 +281,8 @@ export interface ClassificationResult {
   scores: Record<string, number>
   cost: number
   error?: string
+  /** Unchanged since the last AI run: stored scores, no cost. */
+  skipped?: boolean
 }
 
 export interface LabelCount {
@@ -308,6 +314,12 @@ export interface ClassifyEstimate {
   estimatedCostUsd: number
   /** false when OpenRouter lists no price for the classifier model */
   priceKnown: boolean
+  /** Messages that would be skipped (already labeled with the current labels). */
+  unchanged?: number
+  /** Spent today (USD). */
+  todayUsd?: number
+  /** Today's spend + estimate is over the daily budget (allowed, but warn). */
+  exceedsBudget?: boolean
 }
 
 export interface ClassifyJob {
@@ -335,7 +347,18 @@ export interface AppInfo {
   dataDir: string
   logFile: string
   platform: string
+  /** runtime.GOOS / GOARCH (backend pass 3) */
+  os?: string
+  arch?: string
   demo: boolean
+}
+
+export interface UpdateInfo {
+  current: string
+  latest: string
+  url: string
+  notes: string
+  available: boolean
 }
 
 export interface DefaultPrompts {
@@ -360,6 +383,8 @@ export const Events = {
   NotificationOpen: 'notification:open',
   AiBudget: 'ai:budget',
   DatabaseStatus: 'database:status',
+  ComposeOpen: 'compose:open',
+  UpdateAvailable: 'update:available',
 } as const
 
 export interface EventPayloads {
@@ -376,6 +401,10 @@ export interface EventPayloads {
   'ai:budget': { paused: boolean; todayUsd?: number; budgetUsd?: number }
   /** Database health: integrity problems / repair. */
   'database:status': { ok: boolean; message: string }
+  /** mailto: handler: open compose prefilled (next backend pass). */
+  'compose:open': { to?: string | Address[]; cc?: string | Address[]; bcc?: string | Address[]; subject?: string; body?: string }
+  /** A newer release exists (next backend pass). */
+  'update:available': UpdateInfo
   'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }
   'classify:finished': Partial<ClassifyJobProgress>
   'mail:new': { accountId: string; count: number; latest: MessageSummary }

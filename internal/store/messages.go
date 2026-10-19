@@ -93,6 +93,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		// Folder remote id -> local id (skipping "starred", which is
 		// computed from the flag).
 		folderIDs := map[string]string{}
+		folderBits := map[string]int{}
 		sentFolders := map[string]bool{}
 		rows, err := tx.Query(`SELECT id, remote_id, kind FROM folders WHERE account_id = ? AND kind != 'starred'`, accountID)
 		if err != nil {
@@ -105,6 +106,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				return err
 			}
 			folderIDs[rid] = id
+			folderBits[rid] = kindBits[kind]
 			sentFolders[rid] = kind == "sent"
 		}
 		rows.Close()
@@ -123,8 +125,8 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		defer exists.Close()
 		up, err := tx.Prepare(`INSERT INTO messages(id, account_id, remote_id, thread_id, from_name, from_email, to_json, cc_json, bcc_json,
 			reply_to_json, subject, snippet, date, unread, starred, has_attachments, message_id_hdr, in_reply_to, refs, updated_at,
-			unsub_url, unsub_mailto, unsub_one_click)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			unsub_url, unsub_mailto, unsub_one_click, folder_kinds)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id, from_name = excluded.from_name, from_email = excluded.from_email,
 				to_json = excluded.to_json, cc_json = excluded.cc_json, bcc_json = excluded.bcc_json, reply_to_json = excluded.reply_to_json,
 				subject = excluded.subject, snippet = excluded.snippet, date = excluded.date, unread = excluded.unread,
@@ -135,12 +137,18 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				unsub_url = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_url ELSE unsub_url END,
 				unsub_mailto = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_mailto ELSE unsub_mailto END,
 				unsub_one_click = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_one_click ELSE unsub_one_click END,
+				folder_kinds = excluded.folder_kinds,
 				updated_at = excluded.updated_at`)
 		if err != nil {
 			return err
 		}
 		defer up.Close()
-		delMF, err := tx.Prepare(`DELETE FROM message_folders WHERE message_id = ?`)
+		curMF, err := tx.Prepare(`SELECT folder_id FROM message_folders WHERE message_id = ?`)
+		if err != nil {
+			return err
+		}
+		defer curMF.Close()
+		delMF, err := tx.Prepare(`DELETE FROM message_folders WHERE folder_id = ? AND message_id = ?`)
 		if err != nil {
 			return err
 		}
@@ -167,16 +175,51 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		}
 		defer vins.Close()
 		var newWords []string
+		// Contacts and vocabulary are aggregated per batch and written once
+		// per distinct address/word.
+		type contactAgg struct {
+			name   string
+			weight int
+			last   int64
+		}
+		contacts := map[string]*contactAgg{}
+		addContact := func(a models.Address, weight int, date int64) {
+			if a.Email == "" || !strings.Contains(a.Email, "@") {
+				return
+			}
+			key := strings.ToLower(a.Email)
+			c := contacts[key]
+			if c == nil {
+				c = &contactAgg{}
+				contacts[key] = c
+			}
+			c.weight += weight
+			if date >= c.last {
+				c.last = date
+				if a.Name != "" {
+					c.name = a.Name
+				}
+			}
+		}
+		words := map[string]bool{}
 
 		now := time.Now().UnixMilli()
 		for _, m := range r.Upserts {
 			id := MessageID(accountID, m.RemoteID)
 			var one int
 			isNew := errors.Is(exists.QueryRow(id).Scan(&one), sql.ErrNoRows)
+			want := map[string]bool{}
+			bits := 0
+			for _, fr := range m.FolderRemoteIDs {
+				if fid, ok := folderIDs[fr]; ok {
+					want[fid] = true
+					bits |= folderBits[fr]
+				}
+			}
 			if _, err := up.Exec(id, accountID, m.RemoteID, m.ThreadID, m.From.Name, m.From.Email, addrsJSON(m.To), addrsJSON(m.Cc),
 				addrsJSON(m.Bcc), addrsJSON(m.ReplyTo), m.Subject, m.Snippet, toMillis(m.Date), boolInt(m.Unread), boolInt(m.Starred),
 				boolInt(m.HasAttachments), m.MessageID, m.InReplyTo, m.References, now,
-				m.Unsubscribe.URL, m.Unsubscribe.Mailto, boolInt(m.Unsubscribe.OneClick)); err != nil {
+				m.Unsubscribe.URL, m.Unsubscribe.Mailto, boolInt(m.Unsubscribe.OneClick), bits); err != nil {
 				return err
 			}
 			if isNew {
@@ -185,44 +228,42 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				for _, fr := range m.FolderRemoteIDs {
 					sent = sent || sentFolders[fr]
 				}
-				addContact := func(a models.Address, weight int) error {
-					if a.Email == "" || !strings.Contains(a.Email, "@") {
-						return nil
-					}
-					_, err := contact.Exec(strings.ToLower(a.Email), a.Name, weight, toMillis(m.Date))
-					return err
-				}
+				date := toMillis(m.Date)
 				weight := 1
 				if sent {
 					weight = 5
-				} else if err := addContact(m.From, 1); err != nil {
+				} else {
+					addContact(m.From, 1, date)
+				}
+				for _, a := range m.To {
+					addContact(a, weight, date)
+				}
+				for _, a := range m.Cc {
+					addContact(a, weight, date)
+				}
+			} else {
+				// Only apply membership differences (no churn in counters).
+				have, err := queryStrings(curMF, id)
+				if err != nil {
 					return err
 				}
-				for _, a := range append(append([]models.Address{}, m.To...), m.Cc...) {
-					if err := addContact(a, weight); err != nil {
-						return err
+				for fid := range have {
+					if !want[fid] {
+						if _, err := delMF.Exec(fid, id); err != nil {
+							return err
+						}
+					} else {
+						delete(want, fid)
 					}
 				}
 			}
-			if _, err := delMF.Exec(id); err != nil {
-				return err
-			}
-			for _, fr := range m.FolderRemoteIDs {
-				if fid, ok := folderIDs[fr]; ok {
-					if _, err := insMF.Exec(fid, id); err != nil {
-						return err
-					}
+			for fid := range want {
+				if _, err := insMF.Exec(fid, id); err != nil {
+					return err
 				}
-			}
-			if err := kinds.update(id); err != nil {
-				return err
 			}
 			for _, vw := range vocabWords(m) {
-				if r, err := vins.Exec(vw); err != nil {
-					return err
-				} else if n, _ := r.RowsAffected(); n > 0 {
-					newWords = append(newWords, vw)
-				}
+				words[vw] = true
 			}
 			var lids []string
 			for _, name := range m.Labels {
@@ -230,8 +271,30 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 					lids = append(lids, lid)
 				}
 			}
-			if err := pl.set(id, lids, now); err != nil {
+			if isNew {
+				if err := pl.setNew(id, lids, now); err != nil {
+					return err
+				}
+			} else if err := pl.set(id, lids, now); err != nil {
 				return err
+			}
+		}
+		for email, c := range contacts {
+			if _, err := contact.Exec(email, c.name, c.weight, c.last); err != nil {
+				return err
+			}
+		}
+		for w := range words {
+			s.vocabMu.Lock()
+			known := s.vocab != nil && s.vocab.seen[w]
+			s.vocabMu.Unlock()
+			if known {
+				continue
+			}
+			if r, err := vins.Exec(w); err != nil {
+				return err
+			} else if n, _ := r.RowsAffected(); n > 0 {
+				newWords = append(newWords, w)
 			}
 		}
 		for _, rid := range r.Deleted {
@@ -362,6 +425,19 @@ func queryStrings(st *sql.Stmt, args ...any) (map[string]bool, error) {
 		out[v] = true
 	}
 	return out, rows.Err()
+}
+
+// setNew assigns provider labels to a message that has no labels yet.
+func (p *providerLabeler) setNew(msgID string, labelIDs []string, now int64) error {
+	for _, l := range labelIDs {
+		if l == "" || l == junkID {
+			continue
+		}
+		if _, err := p.ins.Exec(msgID, l, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *providerLabeler) set(msgID string, labelIDs []string, now int64) error {

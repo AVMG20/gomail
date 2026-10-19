@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify'
 import {
   ArchiveIcon, CheckIcon, ClockIcon, CornerUpLeftIcon, KeyboardIcon, LayersIcon, MoonIcon, PencilIcon, PlusIcon,
   RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, TagIcon, LoaderIcon, ForwardIcon, CornerDownLeftIcon,
+  MailCheckIcon, MailIcon, MessagesSquareIcon, PanelLeftIcon, PanelRightIcon, ReplyAllIcon, StarIcon, Trash2Icon,
 } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import CmdRoot from '@/components/common/cmd/CmdRoot.vue'
@@ -17,6 +18,7 @@ import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { FOLDER_ICONS } from '@/components/mail/folderIcons'
 import { api } from '@/lib/api'
 import { fuzzyFilter } from '@/lib/fuzzy'
+import { applyCompletion, operatorCompletions, type Completion } from '@/lib/searchQuery'
 import { displayName, listDate } from '@/lib/format'
 import { hasMod, shortcutLabel } from '@/lib/platform'
 import { currentIsDark } from '@/lib/theme'
@@ -115,34 +117,10 @@ function safeHighlight(html: string) {
 }
 
 // ---- operator completions (label:, from:, is:, has:, in:)
-const lastToken = computed(() => {
-  const m = query.value.match(/(\S*)$/)
-  return m ? m[1] : ''
-})
-interface Completion { value: string; label: string; hint?: string; color?: string }
-const completions = computed<Completion[]>(() => {
-  const tok = lastToken.value.toLowerCase()
-  const m = tok.match(/^(label|from|is|has|in):(.*)$/)
-  if (!m) {
-    if (tok.length >= 2) {
-      return ['from:', 'label:', 'is:unread', 'has:attachment', 'in:'].filter((o) => o.startsWith(tok) && o !== tok).map((o) => ({ value: o, label: o }))
-    }
-    return []
-  }
-  const [, op, rest] = m
-  if (op === 'label') {
-    return fuzzyFilter(rest, settings.labels, (l) => l.name, 8).map((l) => ({ value: `label:${l.name.includes(' ') ? `"${l.name}"` : l.name}`, label: l.name, color: l.color }))
-  }
-  if (op === 'from') {
-    const list = [...mail.addressBook.values()]
-    return fuzzyFilter(rest, list, (a) => `${a.name} ${a.email}`, 8).map((a) => ({ value: `from:${a.email}`, label: a.name || a.email, hint: a.name ? a.email : '' }))
-  }
-  const opts: Record<string, string[]> = { is: ['unread', 'read', 'starred'], has: ['attachment'], in: ['inbox', 'sent', 'drafts', 'archive', 'spam', 'trash', 'starred'] }
-  return (opts[op] ?? []).filter((o) => o.startsWith(rest)).map((o) => ({ value: `${op}:${o}`, label: `${op}:${o}` }))
-})
+const completions = computed<Completion[]>(() => operatorCompletions(query.value, { labels: settings.labels, contacts: [...mail.addressBook.values()] }))
 
 function complete(c: Completion) {
-  query.value = query.value.replace(/(\S*)$/, `${c.value} `)
+  query.value = applyCompletion(query.value, c.value)
 }
 
 // ---- local fuzzy sections
@@ -174,15 +152,28 @@ const actions = computed<Action[]>(() => {
     { id: 'theme', title: currentIsDark() ? 'Switch to light theme' : 'Switch to dark theme', icon: MoonIcon, run: () => settings.update({ theme: currentIsDark() ? 'light' : 'dark' }) },
     { id: 'shortcuts', title: 'Keyboard shortcuts', icon: KeyboardIcon, shortcut: '?', run: () => (ui.shortcutsOpen = true) },
     { id: 'add', title: 'Add account', icon: PlusIcon, run: () => (ui.addAccountOpen = true) },
+    { id: 'read-all', title: `Mark all as read in ${mail.mailboxName}`, icon: MailCheckIcon, run: () => folderAction('markAllRead') },
+    { id: 'pane', title: settings.settings?.readingPane === 'off' ? 'Show reading pane' : 'Hide reading pane', icon: PanelRightIcon, run: () => settings.update({ readingPane: settings.settings?.readingPane === 'off' ? 'right' : 'off' }) },
+    { id: 'conv', title: settings.settings?.conversationView === false ? 'Group by conversation' : 'Show individual messages', icon: MessagesSquareIcon, run: () => settings.update({ conversationView: settings.settings?.conversationView === false }) },
+    { id: 'folders', title: 'Toggle folders', icon: PanelLeftIcon, shortcut: 'mod+b', run: () => (ui.folderSidebarOpen = !ui.folderSidebarOpen) },
   ]
+  if (mail.mailbox.kind === 'trash' || mail.mailbox.kind === 'spam') {
+    list.push({ id: 'empty', title: `Empty ${mail.mailbox.kind === 'spam' ? 'Junk' : 'Trash'}…`, icon: Trash2Icon, run: () => folderAction('empty') })
+  }
   if (settings.aiReady) {
     list.push({ id: 'ai-all', title: 'Label all mail with AI…', icon: SparklesIcon, run: () => ai.requestBulk({ query: { accountId: '' }, ids: [], title: 'All mail in all accounts' }) })
+    list.push({ id: 'ai-view', title: `Label ${mail.mailboxName} with AI…`, icon: SparklesIcon, run: () => folderAction('labelAi') })
   }
   if (open) {
     list.unshift(
       { id: 'reply', title: 'Reply', icon: CornerUpLeftIcon, shortcut: 'r', run: () => replyTo(open, 'reply') },
       { id: 'forward', title: 'Forward', icon: ForwardIcon, shortcut: 'f', run: () => replyTo(open, 'forward') },
       { id: 'archive', title: 'Archive conversation', icon: ArchiveIcon, shortcut: 'e', run: () => mail.archive([open.id]) },
+      { id: 'reply-all', title: 'Reply all', icon: ReplyAllIcon, shortcut: 'a', run: () => replyTo(open, 'replyAll') },
+      { id: 'delete', title: 'Delete conversation', icon: Trash2Icon, shortcut: '#', run: () => mail.trash([open.id]) },
+      { id: 'star', title: open.starred ? 'Unstar' : 'Star', icon: StarIcon, shortcut: 's', run: () => mail.setStarred([open.id], !open.starred) },
+      { id: 'unread', title: open.unread ? 'Mark as read' : 'Mark as unread', icon: MailIcon, shortcut: open.unread ? 'shift+i' : 'u', run: () => mail.setRead([open.id], open.unread) },
+      { id: 'label', title: 'Labels…', icon: TagIcon, shortcut: 'l', run: () => setTimeout(() => (ui.labelPopoverOpen = true), 50) },
     )
     if (settings.aiReady) list.splice(3, 0, { id: 'ai-one', title: 'Label this mail with AI', icon: SparklesIcon, run: () => ai.labelMessages([open.id]) })
   }
@@ -191,7 +182,12 @@ const actions = computed<Action[]>(() => {
   return fuzzyFilter(q.value, list, (a) => a.title, 5)
 })
 
-async function replyTo(m: MessageSummary, mode: 'reply' | 'forward') {
+function folderAction(what: 'markAllRead' | 'empty' | 'labelAi') {
+  // Handled by FolderActions in the list header (it owns the confirm dialog).
+  setTimeout(() => window.dispatchEvent(new CustomEvent('gomail:folder-action', { detail: what })), 50)
+}
+
+async function replyTo(m: MessageSummary, mode: 'reply' | 'replyAll' | 'forward') {
   const thread = await mail.loadThread(m.id)
   const full = thread.find((x) => x.id === m.id) ?? thread[thread.length - 1]
   if (full) compose.respond(mode, full)
@@ -333,7 +329,7 @@ const tipKeys = shortcutLabel('mod+enter')
                   <span class="block truncate text-[13px]">{{ r.message.subject || '(no subject)' }}</span>
                   <!-- eslint-disable-next-line vue/no-v-html -- sanitized to <mark> only -->
                   <span class="text-muted-foreground line-clamp-1 text-xs" v-html="safeHighlight(r.highlight)" />
-                  <span v-if="matchHint(r)" class="text-muted-foreground/80 mt-0.5 block text-[10.5px]">{{ matchHint(r) }}</span>
+                  <span v-if="matchHint(r)" class="text-muted-foreground mt-0.5 block text-[10.5px]">{{ matchHint(r) }}</span>
                 </span>
                 <span v-if="r.message.labels.length" class="mt-0.5 flex shrink-0 gap-1">
                   <template v-for="id in r.message.labels.slice(0, 2)" :key="id">

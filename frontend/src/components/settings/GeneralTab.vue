@@ -68,6 +68,14 @@ async function setConversation(v: boolean) {
         <Switch :model-value="!!settings.settings.backfillPaused" aria-label="Pause background download" @update:model-value="(v: boolean) => settings.update({ backfillPaused: v })" />
       </SettingRow>
     </SettingSection>
+    <SettingSection title="Startup & updates">
+      <SettingRow title="Open gomail when you log in" description="Starts in the background so new mail arrives right away.">
+        <Switch :model-value="!!settings.settings.launchAtLogin" aria-label="Open gomail when you log in" @update:model-value="(v: boolean) => settings.update({ launchAtLogin: v })" />
+      </SettingRow>
+      <SettingRow title="Check for updates" description="Looks for a new release on GitHub once a day. Nothing is installed automatically.">
+        <Switch :model-value="settings.settings.checkUpdates !== false" aria-label="Check for updates" @update:model-value="(v: boolean) => settings.update({ checkUpdates: v })" />
+      </SettingRow>
+    </SettingSection>
     <SettingSection title="Notifications">
       <SettingRow title="Desktop notifications for new mail" description="Show a system notification when new mail arrives.">
         <Switch :model-value="settings.settings.notifications" @update:model-value="(v: boolean) => settings.update({ notifications: v })" />

@@ -41,7 +41,7 @@ const editor = useEditor({
     Signature,
   ],
   editorProps: {
-    attributes: { class: 'compose-editor-content', spellcheck: 'true' },
+    attributes: { class: 'compose-editor-content', spellcheck: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Message body' },
     handleKeyDown(_view, e) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         emit('submit')

@@ -1,6 +1,7 @@
 // In-memory mock of the Go backend, used when the UI runs in a plain browser
 // (`npm run dev` without Wails). It mirrors the bound App methods closely
 // enough that every screen can be demoed and tested.
+import { parseSearch, type ParsedSearch } from '../searchQuery'
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
@@ -39,50 +40,6 @@ function levenshtein(a: string, b: string, max = 2): number {
     if (rowMin > max) return max + 1
   }
   return prev[b.length]
-}
-
-interface ParsedSearch {
-  terms: string[]
-  phrases: string[]
-  from: string[]
-  to: string[]
-  subject: string[]
-  labels: string[]
-  inKind: string
-  unread?: boolean
-  starred?: boolean
-  hasAttachment?: boolean
-  before?: number
-  after?: number
-}
-
-function parseSearch(q: string): ParsedSearch {
-  const out: ParsedSearch = { terms: [], phrases: [], from: [], to: [], subject: [], labels: [], inKind: '' }
-  const re = /(\w+):("([^"]*)"|\S+)|"([^"]*)"|(\S+)/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(q))) {
-    if (m[1]) {
-      const key = m[1].toLowerCase()
-      const val = (m[3] ?? m[2]).toLowerCase()
-      if (key === 'from') out.from.push(val)
-      else if (key === 'to') out.to.push(val)
-      else if (key === 'subject') out.subject.push(val)
-      else if (key === 'label') out.labels.push(val)
-      else if (key === 'in') out.inKind = val
-      else if (key === 'is' && val === 'unread') out.unread = true
-      else if (key === 'is' && val === 'read') out.unread = false
-      else if (key === 'is' && val === 'starred') out.starred = true
-      else if (key === 'has' && val.startsWith('attach')) out.hasAttachment = true
-      else if (key === 'before') out.before = Date.parse(val)
-      else if (key === 'after') out.after = Date.parse(val)
-      else out.terms.push(`${key}:${val}`)
-    } else if (m[4] !== undefined) {
-      if (m[4]) out.phrases.push(m[4].toLowerCase())
-    } else if (m[5]) {
-      out.terms.push(m[5].toLowerCase())
-    }
-  }
-  return out
 }
 
 function hash(s: string): number {
@@ -773,7 +730,16 @@ class MockBackend {
 
   async GetAppInfo(): Promise<AppInfo> {
     await latency(20, 50)
-    return { version: '0.1.0-dev', dataDir: '~/.config/gomail', logFile: '~/.config/gomail/gomail.log', platform: 'browser/mock', demo: true }
+    return { version: '0.1.0-dev', dataDir: '~/.config/gomail', logFile: '~/.config/gomail/gomail.log', platform: 'browser/mock', os: 'browser', arch: 'wasm', demo: true }
+  }
+
+  /** Next backend pass. ?update=1 pretends a newer release exists (and emits update:available). */
+  async CheckForUpdate() {
+    await latency(150, 400)
+    const available = typeof location !== 'undefined' && new URLSearchParams(location.search).has('update')
+    const info = { current: '0.1.0-dev', latest: available ? '0.2.0' : '0.1.0-dev', url: 'https://github.com/AVMG20/gomail/releases/latest', notes: available ? 'Faster search, dark-mode email rendering and bug fixes.' : '', available }
+    if (available) setTimeout(() => this.emit('update:available', info), 50)
+    return info
   }
 
   // ---------------------------------------------------------------- labels & AI

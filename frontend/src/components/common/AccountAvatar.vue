@@ -11,7 +11,7 @@ const label = computed(() => initials(props.account.displayName, props.account.e
 </script>
 
 <template>
-  <span class="relative inline-flex shrink-0" :style="{ width: `${size}px`, height: `${size}px` }">
+  <span class="relative inline-flex shrink-0" aria-hidden="true" :style="{ width: `${size}px`, height: `${size}px` }">
     <span
       class="flex size-full items-center justify-center rounded-full font-semibold text-white shadow-sm select-none"
       :style="{

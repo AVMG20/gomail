@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, h, ref } from 'vue'
 import {
-  WifiOffIcon, ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon,
+  CircleArrowUpIcon, WifiOffIcon, ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon,
 } from '@lucide/vue'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
 import type { Account, Folder } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
@@ -63,9 +64,19 @@ const labelRows = computed(() =>
   settings.labels.map((l) => ({ label: l, count: accounts.labelCounts.get(l.id) })).filter((x) => x.label.source === 'user' || !x.label.source || (x.count?.total ?? 0) > 0),
 )
 
+// Background backfill of older mail: shown as a quiet suffix, never as a progress bar.
+const backfill = computed(() => {
+  const list = Object.values(accounts.progress).filter((p) => p.phase === 'backfill' && (!account.value || p.accountId === account.value.id))
+  if (!list.length) return null
+  const done = list.reduce((n, p) => n + p.done, 0)
+  const total = list.reduce((n, p) => n + p.total, 0)
+  return total ? Math.min(99, Math.round((done / total) * 100)) : 0
+})
+
 const syncText = computed(() => {
   const list = account.value ? [account.value] : accounts.accounts
   if (list.some((a) => accounts.syncing.has(a.id) || a.syncing)) return 'Syncing…'
+  if (backfill.value !== null) return `Downloading older mail… ${backfill.value}%`
   const err = list.find((a) => a.syncError)
   if (err) return `Sync error: ${err.syncError}`
   const times = list.map((a) => a.lastSyncAt).filter(Boolean) as string[]
@@ -75,7 +86,7 @@ const syncText = computed(() => {
 })
 const syncing = computed(() => (account.value ? accounts.syncing.has(account.value.id) : accounts.anySyncing))
 const progress = computed(() => {
-  const list = Object.values(accounts.progress).filter((p) => !account.value || p.accountId === account.value.id)
+  const list = Object.values(accounts.progress).filter((p) => p.phase !== 'backfill' && (!account.value || p.accountId === account.value.id))
   if (!list.length) return null
   const done = list.reduce((n, p) => n + p.done, 0)
   const total = list.reduce((n, p) => n + p.total, 0)
@@ -198,7 +209,7 @@ function formatCount(n: number) {
                 </span>
                 <span class="flex-1 truncate text-left">{{ label.name }}</span>
                 <span v-if="count?.unread" class="text-foreground/80 text-xs font-medium tabular-nums">{{ formatCount(count.unread) }}</span>
-                <span v-else-if="count?.total" class="text-muted-foreground/70 text-xs tabular-nums">{{ formatCount(count.total) }}</span>
+                <span v-else-if="count?.total" class="text-muted-foreground text-xs tabular-nums">{{ formatCount(count.total) }}</span>
               </button>
             </li>
             <li v-if="!labelRows.length">
@@ -216,9 +227,18 @@ function formatCount(n: number) {
       <div class="text-muted-foreground mb-1 flex justify-between text-[11px]"><span>Syncing {{ progress.phase.toLowerCase() }}…</span><span class="tabular-nums">{{ progress.pct }}%</span></div>
       <div class="bg-sidebar-accent h-1 overflow-hidden rounded-full"><div class="h-full rounded-full transition-[width] duration-300" :style="{ width: `${progress.pct}%`, background: 'var(--account)' }" /></div>
     </div>
+    <button
+      v-if="settings.updateInfo?.available"
+      type="button"
+      class="text-primary hover:bg-sidebar-accent mx-2 mb-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium"
+      :title="settings.updateInfo.notes || undefined"
+      @click="api.openExternal(settings.updateInfo.url)"
+    >
+      <CircleArrowUpIcon class="size-3.5 shrink-0" /> <span class="flex-1 truncate">Update available: {{ settings.updateInfo.latest }}</span>
+    </button>
     <div class="border-sidebar-border flex items-center gap-2 border-t px-3 py-2">
       <template v-if="!accounts.online">
-        <span class="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400" role="status"><WifiOffIcon class="size-3" /> Offline</span>
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:text-amber-400" role="status"><WifiOffIcon class="size-3" /> Offline</span>
         <span class="flex-1" />
       </template>
       <template v-else>

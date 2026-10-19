@@ -247,6 +247,8 @@ type Settings struct {
 	SyncDepthDays       int     `json:"syncDepthDays"`    // background backfill depth: 30, 90 (default), 365 or 0 = all mail
 	BackfillPaused      bool    `json:"backfillPaused"`   // pause the background backfill
 	AIDailyBudgetUSD    float64 `json:"aiDailyBudgetUsd"` // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
+	LaunchAtLogin       bool    `json:"launchAtLogin"`    // start gomail at login, minimized to the tray when enabled (default false)
+	CheckUpdates        bool    `json:"checkUpdates"`     // check GitHub releases once a day (default true)
 
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`
@@ -360,7 +362,27 @@ const (
 	EventAIBudget         = "ai:budget"         // AIBudgetEvent: automatic labeling paused (budget reached) or resumed
 	EventNotificationOpen = "notification:open" // NotificationOpen: the user clicked a new-mail notification
 	EventDatabaseStatus   = "database:status"   // DatabaseStatus: integrity problems / repair
+	EventComposeOpen      = "compose:open"      // ComposeOpen: a mailto: link was opened
+	EventUpdateAvailable  = "update:available"  // UpdateInfo: a newer release exists
 )
+
+// ComposeOpen asks the UI to open the composer (mailto: links).
+type ComposeOpen struct {
+	To      []Address `json:"to"`
+	Cc      []Address `json:"cc"`
+	Bcc     []Address `json:"bcc"`
+	Subject string    `json:"subject"`
+	Body    string    `json:"body"`
+}
+
+// UpdateInfo describes the latest GitHub release.
+type UpdateInfo struct {
+	Current   string `json:"current"`
+	Latest    string `json:"latest"`
+	URL       string `json:"url"`   // release page
+	Notes     string `json:"notes"` // release notes (markdown)
+	Available bool   `json:"available"`
+}
 
 // AIBudgetEvent reports the daily AI budget state.
 type AIBudgetEvent struct {

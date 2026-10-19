@@ -1,10 +1,13 @@
 [Desktop Entry]
 Type=Application
 Name=gomail
-Exec=gomail
+GenericName=Mail Client
+Comment=Fast desktop mail client for Gmail and Outlook
+Exec=gomail %u
 Icon=gomail
-Categories=Development;
+Categories=Network;Email;
+MimeType=x-scheme-handler/mailto;
+Keywords=mail;email;gmail;outlook;
 Terminal=false
-Keywords=wails
-Version=1.0
 StartupNotify=false
+StartupWMClass=gomail

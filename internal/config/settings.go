@@ -76,6 +76,7 @@ func DefaultSettings() models.Settings {
 		Zoom:                     1,
 		SyncDepthDays:            90,
 		AIDailyBudgetUSD:         1,
+		CheckUpdates:             true,
 		ShowInTray:               true,
 		Labels:                   DefaultLabels(),
 		PrimaryColor:             DefaultPrimaryColor,

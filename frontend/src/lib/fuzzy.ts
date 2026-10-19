@@ -6,7 +6,8 @@ export function fuzzyScore(query: string, text: string): number | null {
   if (!q) return 0
   const t = text.toLowerCase()
   const direct = t.indexOf(q)
-  if (direct >= 0) return 100 - direct + (direct === 0 || /\W/.test(t[direct - 1] ?? ' ') ? 40 : 0) + q.length
+  // Ties go to the tighter match ("Sent" before "Settings" for "se").
+  if (direct >= 0) return 100 - direct + (direct === 0 || /\W/.test(t[direct - 1] ?? ' ') ? 40 : 0) + q.length - Math.min(40, t.length - q.length) * 0.05
   let score = 0
   let ti = 0
   let streak = 0

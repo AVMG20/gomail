@@ -56,7 +56,9 @@ export const useAiStore = defineStore('ai', () => {
       scores.value = nextScores
       const added = results.flatMap((r) => r.added)
       const removed = results.flatMap((r) => r.removed)
-      if (!added.length && !removed.length) {
+      if (!added.length && !removed.length && results.length && results.every((r) => r.skipped)) {
+        toast('Already up to date', { description: 'Nothing changed since the last AI run, so this was free.' })
+      } else if (!added.length && !removed.length) {
         toast('No label matched', { description: ids.length === 1 ? 'Jev was not confident about any label for this mail.' : undefined })
       } else {
         const parts: string[] = []
@@ -119,8 +121,8 @@ export const useAiStore = defineStore('ai', () => {
           const j = job.value
           if (!j) break
           for (const r of results) {
-            if (r.added.length || r.removed.length) j.labeled++
-            else j.skipped++
+            if (r.skipped) j.skipped++
+            else if (r.added.length || r.removed.length) j.labeled++
             j.added = (j.added ?? 0) + r.added.length
             j.removed = (j.removed ?? 0) + r.removed.length
             j.cost += r.cost

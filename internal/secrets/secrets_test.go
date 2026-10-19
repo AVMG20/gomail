@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
 func TestFileStoreRoundTrip(t *testing.T) {
@@ -65,4 +67,61 @@ func TestForcedFileBackend(t *testing.T) {
 	if _, ok := s.(*FileStore); !ok {
 		t.Fatalf("got %T", s)
 	}
+}
+
+func TestKeyringChunking(t *testing.T) {
+	keyring.MockInit()
+	old := chunkSize
+	chunkSize = 10
+	defer func() { chunkSize = old }()
+	k := keyringStore{service: "gomail-test"}
+	long := strings.Repeat("0123456789", 7) + "xyz" // 73 bytes -> 8 chunks
+	if err := k.Set("tok", long); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := k.Get("tok"); err != nil || v != long {
+		t.Fatalf("%q %v", v, err)
+	}
+	if n := k.chunks("tok"); n != 8 {
+		t.Fatalf("chunks %d", n)
+	}
+	// Shrinking back to a single entry removes the old chunks.
+	if err := k.Set("tok", "short"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := k.Get("tok"); v != "short" {
+		t.Fatal(v)
+	}
+	if _, err := k.raw(chunkKey("tok", 0)); !errors.Is(err, ErrNotFound) {
+		t.Fatal("stale chunk left behind")
+	}
+	k.Set("tok", long)
+	if err := k.Delete("tok"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Get("tok"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("not deleted")
+	}
+	if _, err := k.raw(chunkKey("tok", 3)); !errors.Is(err, ErrNotFound) {
+		t.Fatal("chunk not deleted")
+	}
+	// autoStore uses the keyring when it works.
+	a := &autoStore{kr: k, file: mustFile(t)}
+	if err := a.Set("x", long); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.file.Get("x"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("value also written to the fallback file")
+	}
+	if v, _ := a.Get("x"); v != long {
+		t.Fatal(v)
+	}
+}
+
+func mustFile(t *testing.T) *FileStore {
+	f, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
 }

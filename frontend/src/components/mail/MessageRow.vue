@@ -135,22 +135,23 @@ const date = computed(() => listDate(props.message.date))
         'bg-background/95 border-border/70 absolute right-2 flex items-center gap-0.5 rounded-md border p-0.5 shadow-sm backdrop-blur',
         compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5',
       ]"
+      aria-hidden="true"
       @click.stop
     >
       <Tip label="Archive" shortcut="e">
-        <button type="button" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" aria-label="Archive" @click="emit('archive')"><ArchiveIcon class="size-4" /></button>
+        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" aria-label="Archive" @click="emit('archive')"><ArchiveIcon class="size-4" /></button>
       </Tip>
       <Tip label="Delete" shortcut="#">
-        <button type="button" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" aria-label="Delete" @click="emit('trash')"><Trash2Icon class="size-4" /></button>
+        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" aria-label="Delete" @click="emit('trash')"><Trash2Icon class="size-4" /></button>
       </Tip>
       <Tip :label="message.unread ? 'Mark as read' : 'Mark as unread'" shortcut="u">
-        <button type="button" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" :aria-label="message.unread ? 'Mark as read' : 'Mark as unread'" @click="emit('read', message.unread)">
+        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" :aria-label="message.unread ? 'Mark as read' : 'Mark as unread'" @click="emit('read', message.unread)">
           <MailOpenIcon v-if="message.unread" class="size-4" />
           <MailIcon v-else class="size-4" />
         </button>
       </Tip>
       <Tip :label="message.starred ? 'Unstar' : 'Star'" shortcut="s">
-        <button type="button" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" :aria-label="message.starred ? 'Unstar' : 'Star'" @click="emit('star', !message.starred)">
+        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" :aria-label="message.starred ? 'Unstar' : 'Star'" @click="emit('star', !message.starred)">
           <StarIcon class="size-4" :class="message.starred && 'fill-amber-400 text-amber-400'" />
         </button>
       </Tip>

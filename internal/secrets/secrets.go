@@ -7,8 +7,10 @@ package secrets
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +76,14 @@ func withTimeout[T any](f func() (T, error)) (T, error) {
 	}
 }
 
-func (k keyringStore) Get(key string) (string, error) {
+// chunkSize keeps every keyring entry below Windows Credential Manager's
+// 2560-byte blob limit (Microsoft refresh tokens can be longer); larger
+// values are split over "<key>#<n>" entries behind a header entry.
+var chunkSize = 2000
+
+const chunkHeader = "gomail-chunks:"
+
+func (k keyringStore) raw(key string) (string, error) {
 	v, err := withTimeout(func() (string, error) { return keyring.Get(k.service, key) })
 	if errors.Is(err, keyring.ErrNotFound) {
 		return "", ErrNotFound
@@ -82,17 +91,86 @@ func (k keyringStore) Get(key string) (string, error) {
 	return v, err
 }
 
-func (k keyringStore) Set(key, value string) error {
+func (k keyringStore) put(key, value string) error {
 	_, err := withTimeout(func() (struct{}, error) { return struct{}{}, keyring.Set(k.service, key, value) })
 	return err
 }
 
-func (k keyringStore) Delete(key string) error {
+func (k keyringStore) del(key string) error {
 	_, err := withTimeout(func() (struct{}, error) { return struct{}{}, keyring.Delete(k.service, key) })
 	if errors.Is(err, keyring.ErrNotFound) {
 		return nil
 	}
 	return err
+}
+
+func chunkKey(key string, i int) string { return key + "#" + strconv.Itoa(i) }
+
+func (k keyringStore) Get(key string) (string, error) {
+	v, err := k.raw(key)
+	if err != nil || !strings.HasPrefix(v, chunkHeader) {
+		return v, err
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(v, chunkHeader))
+	if err != nil || n <= 0 || n > 1000 {
+		return "", errors.New("keyring entry is damaged")
+	}
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		part, err := k.raw(chunkKey(key, i))
+		if err != nil {
+			return "", fmt.Errorf("keyring entry is incomplete: %w", err)
+		}
+		b.WriteString(part)
+	}
+	return b.String(), nil
+}
+
+// chunks returns the number of chunk entries currently stored for key.
+func (k keyringStore) chunks(key string) int {
+	v, err := k.raw(key)
+	if err != nil || !strings.HasPrefix(v, chunkHeader) {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimPrefix(v, chunkHeader))
+	return n
+}
+
+func (k keyringStore) Set(key, value string) error {
+	old := k.chunks(key)
+	if len(value) <= chunkSize && !strings.HasPrefix(value, chunkHeader) {
+		if err := k.put(key, value); err != nil {
+			return err
+		}
+	} else {
+		n := 0
+		for off := 0; off < len(value); off += chunkSize {
+			if err := k.put(chunkKey(key, n), value[off:min(off+chunkSize, len(value))]); err != nil {
+				return err
+			}
+			n++
+		}
+		if err := k.put(key, chunkHeader+strconv.Itoa(n)); err != nil {
+			return err
+		}
+		if old > n {
+			for i := n; i < old; i++ {
+				_ = k.del(chunkKey(key, i))
+			}
+		}
+		return nil
+	}
+	for i := 0; i < old; i++ {
+		_ = k.del(chunkKey(key, i))
+	}
+	return nil
+}
+
+func (k keyringStore) Delete(key string) error {
+	for i := 0; i < k.chunks(key); i++ {
+		_ = k.del(chunkKey(key, i))
+	}
+	return k.del(key)
 }
 
 // autoStore tries the keyring first and transparently falls back to the
@@ -144,6 +222,7 @@ func (a *autoStore) Set(key, value string) error {
 			return nil
 		}
 		a.keyringFailed("set", err)
+		_ = a.kr.Delete(key) // never leave a stale value that Get would prefer
 	}
 	return a.file.Set(key, value)
 }

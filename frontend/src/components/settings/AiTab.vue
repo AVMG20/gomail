@@ -87,7 +87,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
         <div class="flex items-center gap-2">
           <div class="relative max-w-sm flex-1">
             <KeyRoundIcon class="text-muted-foreground absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
-            <Input v-model="keyInput" type="password" autocomplete="off" :placeholder="s.openRouterKeySet ? 'Enter a new key to replace it' : 'sk-or-v1-…'" class="pl-8 text-xs" @keydown.enter="keyInput && saveKey()" />
+            <Input v-model="keyInput" type="password" aria-label="OpenRouter API key" autocomplete="off" :placeholder="s.openRouterKeySet ? 'Enter a new key to replace it' : 'sk-or-v1-…'" class="pl-8 text-xs" @keydown.enter="keyInput && saveKey()" />
           </div>
           <Button size="sm" :disabled="!keyInput.trim() || savingKey" @click="saveKey">Save</Button>
           <Button v-if="s.openRouterKeySet" variant="outline" size="sm" :disabled="testing" @click="test">

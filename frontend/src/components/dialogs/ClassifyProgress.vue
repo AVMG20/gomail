@@ -39,7 +39,7 @@ watch(() => job.value?.finished, (done) => {
         <span>{{ formatUSD(job.cost) }}</span>
       </div>
       <div class="text-muted-foreground mt-1 text-xs tabular-nums">
-        {{ job.labeled }} changed<template v-if="job.added !== undefined"> · +{{ job.added }}</template><template v-if="job.removed !== undefined"> · −{{ job.removed }}</template> · {{ job.skipped }} skipped<template v-if="job.failed"> · <span class="text-destructive">{{ job.failed }} failed</span></template>
+        {{ job.labeled }} changed<template v-if="job.added !== undefined"> · +{{ job.added }}</template><template v-if="job.removed !== undefined"> · −{{ job.removed }}</template> · {{ job.skipped }} already up to date<template v-if="job.failed"> · <span class="text-destructive">{{ job.failed }} failed</span></template>
       </div>
       <p v-if="job.error" class="text-destructive mt-1 text-xs">{{ job.error }}</p>
       <div v-if="!job.finished" class="mt-2.5 flex justify-end">

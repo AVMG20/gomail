@@ -178,7 +178,7 @@ watch(() => d.value.accountId, (id, prev) => {
       <div v-if="accounts.accounts.length > 1" class="flex h-9 items-center gap-1">
         <span class="text-muted-foreground w-10 shrink-0 text-[13px]">From</span>
         <Select v-model="d.accountId">
-          <SelectTrigger size="sm" class="h-7 border-0 px-1.5 shadow-none focus-visible:ring-0 dark:bg-transparent">
+          <SelectTrigger size="sm" aria-label="From account" class="h-7 border-0 px-1.5 shadow-none focus-visible:ring-0 dark:bg-transparent">
             <SelectValue>
               <span v-if="fromAccount" class="flex items-center gap-2 text-[13px]">
                 <span class="size-2 rounded-full" :style="{ background: fromAccount.color }" />{{ fromAccount.email }}

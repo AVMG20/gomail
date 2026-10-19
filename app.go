@@ -14,6 +14,7 @@ import (
 
 	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/core"
+	"github.com/AVMG20/gomail/internal/mailto"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/safe"
 )
@@ -32,12 +33,25 @@ type MailService struct {
 	tray     *application.SystemTray
 	notifier *notifications.NotificationService
 
-	trayMu      sync.Mutex
-	trayTimer   *time.Timer
-	notified    map[string]models.NotificationOpen // notification id -> target
-	trayVisible bool                               // Settings.showInTray
-	closeToTray bool                               // Settings.closeToTray
-	logCloser   interface{ Close() error }
+	trayMu    sync.Mutex
+	trayTimer *time.Timer
+	notified  map[string]models.NotificationOpen // notification id -> target
+
+	startMinimized bool                // launched at login with --minimized
+	pending        *models.ComposeOpen // mailto: received before the UI asked
+	autostartOn    *bool               // last applied launch-at-login state
+	trayVisible    bool                // Settings.showInTray
+	closeToTray    bool                // Settings.closeToTray
+	logCloser      interface{ Close() error }
+
+	hooks *testHooks // nil in the app
+}
+
+// testHooks let end-to-end tests run the real service against fake servers.
+type testHooks struct {
+	options func(*core.Options)
+	openURL func(string) error
+	emit    func(event string, data any)
 }
 
 // NewMailService creates the service; the backend starts in ServiceStartup.
@@ -63,7 +77,11 @@ func (m *MailService) ServiceStartup(ctx context.Context, _ application.ServiceO
 	m.info = models.AppInfo{Version: version, DataDir: dir, LogFile: logFile, Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Demo: config.DemoMode()}
 	slog.Info("gomail starting", "version", version, "dataDir", dir, "demo", m.info.Demo)
-	svc, err := core.New(core.Options{DataDir: dir, LogFile: logFile, Version: version, Demo: m.info.Demo, UI: desktopUI{m}})
+	opts := core.Options{DataDir: dir, LogFile: logFile, Version: version, Demo: m.info.Demo, UI: desktopUI{m}}
+	if m.hooks != nil && m.hooks.options != nil {
+		m.hooks.options(&opts)
+	}
+	svc, err := core.New(opts)
 	if err != nil {
 		slog.Error("backend init failed", "err", err)
 		m.initErr = err
@@ -118,6 +136,9 @@ func (u desktopUI) Emit(event string, data any) {
 	if m.app != nil {
 		m.app.Event.Emit(event, data)
 	}
+	if m.hooks != nil && m.hooks.emit != nil {
+		m.hooks.emit(event, data)
+	}
 	if event == models.EventAccountsChanged || event == models.EventMessagesChanged {
 		m.scheduleTrayUpdate()
 	}
@@ -126,6 +147,9 @@ func (u desktopUI) Emit(event string, data any) {
 // OpenURL opens the system browser.
 func (u desktopUI) OpenURL(url string) error {
 	m := u.m
+	if m.hooks != nil && m.hooks.openURL != nil {
+		return m.hooks.openURL(url)
+	}
 	if m.app == nil {
 		return errors.New("the app is not ready")
 	}
@@ -186,13 +210,79 @@ func (m *MailService) onNotification(r notifications.NotificationResult) {
 	}
 }
 
-// ApplySettings shows/hides the tray icon and enables close-to-tray.
+// ApplySettings shows/hides the tray icon, enables close-to-tray and
+// registers/unregisters launch at login.
 func (u desktopUI) ApplySettings(st models.Settings) {
 	m := u.m
 	m.trayMu.Lock()
 	m.trayVisible, m.closeToTray = st.ShowInTray, st.CloseToTray
+	minimized := m.startMinimized
+	m.startMinimized = false
 	m.trayMu.Unlock()
 	m.applyTray()
+	// Launched at login but there's no tray to restore from: show the window.
+	if minimized && !(st.ShowInTray && trayAvailable()) {
+		m.showWindow()
+	}
+	m.applyAutostart(st.LaunchAtLogin)
+}
+
+func (m *MailService) applyAutostart(want bool) {
+	if m.app == nil || m.app.Autostart == nil || config.CustomProfile() {
+		return // profiles (GOMAIL_DATA_DIR / demo) never register at login
+	}
+	m.trayMu.Lock()
+	same := m.autostartOn != nil && *m.autostartOn == want
+	m.autostartOn = &want
+	m.trayMu.Unlock()
+	if same {
+		return
+	}
+	enabled, _ := m.app.Autostart.IsEnabled()
+	var err error
+	switch {
+	case want && !enabled:
+		err = m.app.Autostart.EnableWithOptions(application.AutostartOptions{Identifier: "gomail", Arguments: []string{minimizedArg}})
+	case !want && enabled:
+		err = m.app.Autostart.Disable()
+	}
+	if err != nil {
+		slog.Warn("updating launch at login failed", "err", err)
+	}
+}
+
+// handleArgs looks for a mailto: link (command line, second instance or
+// macOS open-URL event) and asks the UI to compose it.
+func (m *MailService) handleArgs(args []string) {
+	c, ok := mailto.FromArgs(args)
+	if !ok {
+		return
+	}
+	m.trayMu.Lock()
+	m.pending = &c
+	m.trayMu.Unlock()
+	if m.app != nil {
+		m.app.Event.Emit(models.EventComposeOpen, c)
+	}
+}
+
+// GetPendingCompose returns (once) a mailto: link that opened the app
+// before the UI was ready, or nil.
+func (m *MailService) GetPendingCompose() *models.ComposeOpen {
+	m.trayMu.Lock()
+	defer m.trayMu.Unlock()
+	c := m.pending
+	m.pending = nil
+	return c
+}
+
+// CheckForUpdate checks GitHub for a newer release now.
+func (m *MailService) CheckForUpdate() (models.UpdateInfo, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.UpdateInfo{Current: version}, err
+	}
+	return s.CheckForUpdate()
 }
 
 // applyTray syncs the tray icon visibility with the settings.

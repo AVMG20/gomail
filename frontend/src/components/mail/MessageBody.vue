@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { shade } from '@/lib/color'
 import { isSimpleHtml } from '@/lib/emailTheme'
-import { linkify, parseAddress } from '@/lib/format'
+import { linkify, parseMailto } from '@/lib/format'
 import { themeState } from '@/lib/theme'
 import type { Message } from '@/lib/types'
 import { useComposeStore } from '@/stores/compose'
@@ -127,7 +127,8 @@ function collapseQuotes(html: string): string {
 const isHtml = computed(() => !!props.message.bodyHtml.trim())
 
 const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml, props.allowRemote) : { html: '', blocked: 0 }))
-const simple = computed(() => isHtml.value && isSimpleHtml(sanitized.value.html))
+// Judged on the original HTML (DOMParser documents are inert), so loading remote images never flips the theme.
+const simple = computed(() => isHtml.value && isSimpleHtml(props.message.bodyHtml))
 /** Render this HTML mail with theme colors (no white card). */
 const themed = computed(() => darkAuto.value && simple.value)
 
@@ -215,8 +216,7 @@ function measure() {
 
 function handleLink(href: string) {
   if (href.startsWith('mailto:')) {
-    const addr = parseAddress(decodeURIComponent(href.slice(7).split('?')[0]))
-    compose.compose(addr ? [addr] : [])
+    compose.composeWith(parseMailto(href))
     return
   }
   if (/^https?:\/\//i.test(href)) void api.openExternal(href)

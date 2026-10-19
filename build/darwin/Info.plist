@@ -24,6 +24,19 @@
 		<string>12.0.0</string>
 		<key>NSHighResolutionCapable</key>
 		<string>true</string>
+		<key>CFBundleURLTypes</key>
+		<array>
+			<dict>
+				<key>CFBundleURLName</key>
+				<string>com.avmg20.gomail.mailto</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>mailto</string>
+				</array>
+				<key>LSHandlerRank</key>
+				<string>Alternate</string>
+			</dict>
+		</array>
 		<key>NSHumanReadableCopyright</key>
 		<string>(c) 2026, gomail contributors</string>
 	</dict>

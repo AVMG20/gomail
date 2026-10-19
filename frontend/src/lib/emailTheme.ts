@@ -109,7 +109,8 @@ export function isSimpleHtml(html: string): boolean {
       if (!styleIsNeutral(m[2], isLink)) return false
     }
   }
-  for (const el of Array.from(doc.body.querySelectorAll('*'))) {
+  // Include <body> itself: a full document's <body bgcolor/style> merges into it.
+  for (const el of [doc.body, ...Array.from(doc.body.querySelectorAll('*'))]) {
     const bg = el.getAttribute('bgcolor')
     if (bg && !isNeutralBackground(bg)) return false
     if (el.hasAttribute('background')) return false

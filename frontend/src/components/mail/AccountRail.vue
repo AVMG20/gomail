@@ -27,7 +27,7 @@ function badge(n: number) {
       <button
         type="button"
         class="group relative flex size-11 items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label="All inboxes"
+        :aria-label="totalUnread ? `All inboxes, ${totalUnread} unread` : 'All inboxes'"
         @click="mail.switchAccount('')"
       >
         <span
@@ -40,7 +40,7 @@ function badge(n: number) {
         >
           <LayersIcon class="size-4" />
         </span>
-        <span v-if="totalUnread" class="bg-foreground text-background absolute -top-0.5 -right-0.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-semibold">{{ badge(totalUnread) }}</span>
+        <span v-if="totalUnread" aria-hidden="true" class="bg-foreground text-background absolute -top-0.5 -right-0.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-semibold">{{ badge(totalUnread) }}</span>
       </button>
     </Tip>
     <div v-if="accounts.accounts.length > 1" class="bg-border my-1 h-px w-6" />
@@ -49,7 +49,7 @@ function badge(n: number) {
       <button
         type="button"
         class="group relative flex size-11 items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        :aria-label="`${acc.displayName} (${acc.email})`"
+        :aria-label="`${acc.displayName || acc.email} (${acc.email})${acc.needsReauth ? ', sign-in expired' : acc.unreadCount ? `, ${acc.unreadCount} unread` : ''}`"
         :aria-current="active === acc.id ? 'page' : undefined"
         @click="mail.switchAccount(acc.id)"
       >
@@ -59,8 +59,8 @@ function badge(n: number) {
           :style="{ background: acc.color }"
         />
         <AccountAvatar :account="acc" :size="34" :active="active === acc.id" class="transition-transform group-active:scale-95" />
-        <span v-if="acc.needsReauth" class="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white ring-2 ring-sidebar" aria-label="Sign-in expired">!</span>
-        <span v-else-if="acc.unreadCount" class="absolute -top-0.5 -right-0.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-semibold text-white ring-2 ring-sidebar" :style="{ background: '#ef4444' }">{{ badge(acc.unreadCount) }}</span>
+        <span v-if="acc.needsReauth" class="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white ring-2 ring-sidebar" aria-hidden="true">!</span>
+        <span v-else-if="acc.unreadCount" aria-hidden="true" class="absolute -top-0.5 -right-0.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-semibold text-white ring-2 ring-sidebar" :style="{ background: '#dc2626' }">{{ badge(acc.unreadCount) }}</span>
         <span v-if="accounts.syncing.has(acc.id)" class="absolute -bottom-0.5 left-1/2 h-0.5 w-5 -translate-x-1/2 overflow-hidden rounded-full bg-border">
           <span class="block h-full w-full animate-pulse rounded-full" :style="{ background: acc.color }" />
         </span>
@@ -80,7 +80,7 @@ function badge(n: number) {
 
     <div class="flex-1" />
     <Tip v-if="mockMode" label="Mock data: running in a browser without the Go backend" side="right">
-      <span class="mb-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-amber-700 uppercase select-none dark:text-amber-400" role="status">Mock</span>
+      <span class="mb-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-amber-800 uppercase select-none dark:text-amber-400" role="status">Mock</span>
     </Tip>
     <Tip label="Settings" shortcut="mod+," side="right">
       <button

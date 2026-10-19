@@ -73,8 +73,12 @@ function start() {
           <div class="mt-0.5 text-xl font-semibold tabular-nums"><template v-if="estimate && !estimate.priceKnown">—</template><template v-else>~{{ formatUSD(estimate?.estimatedCostUsd) }}</template></div>
         </div>
         <div v-if="estimate?.requests" class="text-muted-foreground col-span-2 -mt-1 text-xs">{{ estimate.requests.toLocaleString() }} classifier requests<template v-if="estimate.estimatedTokens"> · ~{{ Math.round(estimate.estimatedTokens / 1000).toLocaleString() }}K tokens</template><template v-if="!estimate.priceKnown"> · price unknown for this model</template></div>
+        <div v-if="estimate?.unchanged" class="text-muted-foreground col-span-2 text-xs">{{ estimate.unchanged.toLocaleString() }} already up to date (skipped, no cost)</div>
         <div class="text-muted-foreground col-span-2 text-xs">Model: <span class="text-foreground font-mono">{{ settings.settings?.classifierModel }}</span></div>
       </div>
+      <p v-if="estimate?.exceedsBudget" class="rounded-md bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-300" role="status">
+        This goes over your daily AI budget<template v-if="settings.settings?.aiDailyBudgetUsd"> of {{ formatUSD(settings.settings.aiDailyBudgetUsd) }}</template><template v-if="typeof estimate.todayUsd === 'number'"> ({{ formatUSD(estimate.todayUsd) }} spent today)</template>. You can still start it; automatic labeling will pause for the rest of the day.
+      </p>
 
       <div class="grid gap-3">
         <Label v-if="ai.bulkRequest?.query" class="flex items-center gap-2.5 font-normal">

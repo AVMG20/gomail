@@ -4,7 +4,7 @@
 // in-memory mock in ./mock.
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
-  EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings,
+  EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
 } from './types'
 import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
 
@@ -120,7 +120,7 @@ export const USED_METHODS = [
   'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels']
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate']
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -170,7 +170,7 @@ export function errorMessage(e: unknown): string {
 
 // ---- normalisation (Go nil slices arrive as null) ----
 
-function normSummary<T extends MessageSummary>(m: T): T {
+export function normSummary<T extends MessageSummary>(m: T): T {
   const legacy = (m as unknown as { category?: string }).category
   m.folderIds ??= []
   m.to ??= []
@@ -180,7 +180,7 @@ function normSummary<T extends MessageSummary>(m: T): T {
   return m
 }
 
-function normMessage(m: Message): Message {
+export function normMessage(m: Message): Message {
   normSummary(m)
   m.cc ??= []
   m.bcc ??= []
@@ -191,7 +191,7 @@ function normMessage(m: Message): Message {
   return m
 }
 
-function normSettings(s: Settings): Settings {
+export function normSettings(s: Settings): Settings {
   const legacy = (s as unknown as { categories?: Settings['labels'] }).categories
   return {
     ...s,
@@ -218,6 +218,8 @@ function normSettings(s: Settings): Settings {
     readingPane: s.readingPane ?? readLocal('readingPane', 'right'),
     zoom: s.zoom || readLocal('zoom', 1),
     emailBackground: s.emailBackground ?? readLocal('emailBackground', 'auto'),
+    launchAtLogin: s.launchAtLogin ?? readLocal('launchAtLogin', false),
+    checkUpdates: s.checkUpdates ?? readLocal('checkUpdates', true),
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,
     syncDepthDays: s.syncDepthDays ?? 90,
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
@@ -291,6 +293,7 @@ export const api = {
 
   /** AI spend so far (next backend pass). */
   getAIUsage: () => call<AIUsage>('GetAIUsage'),
+  checkForUpdate: () => call<UpdateInfo>('CheckForUpdate'),
   updateAccountSignature: (id: string, html: string) => call<void>('UpdateAccountSignature', id, html),
   /** Frequency-ranked contacts from all mail (backend pass 3). */
   searchContacts: async (query: string, limit = 8): Promise<Contact[]> => (await call<Contact[] | null>('SearchContacts', query, limit)) ?? [],
@@ -333,8 +336,8 @@ export const api = {
   // Reading/sending preferences now live in the backend's Settings; the
   // readLocal() fallbacks in normSettings only cover older backends.
   saveSettings: (s: Settings) => {
-    // Not in the Go Settings struct yet: keep a local copy so it survives restarts.
-    if (s.emailBackground) writeLocal('emailBackground', s.emailBackground)
+    // Not in the Go Settings struct yet: keep a local copy so they survive restarts.
+    for (const k of ['emailBackground', 'launchAtLogin', 'checkUpdates'] as const) if (s[k] !== undefined) writeLocal(k, s[k])
     return call<void>('SaveSettings', s)
   },
 

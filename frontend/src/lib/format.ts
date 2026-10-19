@@ -110,6 +110,32 @@ export function parseAddressList(input: string): Address[] {
     .filter((a): a is Address => !!a)
 }
 
+/** mailto:a@b.c,d@e.f?cc=…&subject=…&body=… → compose fields. */
+export function parseMailto(href: string): { to: Address[]; cc: Address[]; bcc: Address[]; subject: string; body: string } {
+  const raw = href.replace(/^mailto:/i, '')
+  const [path, query = ''] = raw.split('?')
+  const dec = (v: string) => {
+    try {
+      return decodeURIComponent(v.replace(/\+/g, '%20'))
+    } catch {
+      return v
+    }
+  }
+  const params = new Map<string, string>()
+  for (const part of query.split('&')) {
+    const i = part.indexOf('=')
+    if (i > 0) params.set(part.slice(0, i).toLowerCase(), dec(part.slice(i + 1)))
+  }
+  const list = (v: string | undefined) => (v ? parseAddressList(v) : [])
+  return {
+    to: [...list(dec(path)), ...list(params.get('to'))],
+    cc: list(params.get('cc')),
+    bcc: list(params.get('bcc')),
+    subject: params.get('subject') ?? '',
+    body: params.get('body') ?? '',
+  }
+}
+
 export function parseAddress(s: string): Address | null {
   const m = s.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/)
   if (m) return isEmail(m[2]) ? { name: m[1].trim(), email: m[2].trim() } : null

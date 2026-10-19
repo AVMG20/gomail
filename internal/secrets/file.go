@@ -35,19 +35,36 @@ func NewFileStore(dir string) (*FileStore, error) {
 	}, nil
 }
 
+const dpapiPrefix = "DPAPI1:"
+
 func (f *FileStore) key() ([]byte, error) {
-	k, err := os.ReadFile(f.keyPath)
-	if err == nil && len(k) == 32 {
-		return k, nil
+	raw, err := os.ReadFile(f.keyPath)
+	if err == nil {
+		k, uerr := unprotectKey(raw)
+		if uerr != nil {
+			return nil, fmt.Errorf("the secret key can't be unlocked for this user: %w", uerr)
+		}
+		if len(k) == 32 {
+			if string(raw[:min(len(raw), len(dpapiPrefix))]) != dpapiPrefix {
+				if p, perr := protectKey(k); perr == nil && string(p) != string(k) {
+					_ = writeFileAtomic(f.keyPath, p) // upgrade a legacy plain key
+				}
+			}
+			return k, nil
+		}
 	}
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	k = make([]byte, 32)
+	k := make([]byte, 32)
 	if _, err := rand.Read(k); err != nil {
 		return nil, err
 	}
-	if err := writeFileAtomic(f.keyPath, k); err != nil {
+	stored, err := protectKey(k)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeFileAtomic(f.keyPath, stored); err != nil {
 		return nil, err
 	}
 	return k, nil

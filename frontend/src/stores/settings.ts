@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, isWails, setWindowChrome } from '@/lib/api'
 import { applyTheme, themeFromSettings } from '@/lib/theme'
-import type { AIModel, AppInfo, DefaultPrompts, Label, Settings } from '@/lib/types'
+import type { AIModel, AppInfo, DefaultPrompts, Label, Settings, UpdateInfo } from '@/lib/types'
 
 export const JEV_MODELS: AIModel[] = [
   { id: 'typesafe/jev-1.13', name: 'Jev 1.13 (pinned)', description: 'Decision model for labeling, pinned version', contextLength: 0, promptPrice: 0, completionPrice: 0 },
@@ -49,10 +49,26 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** Latest update check (next backend pass: CheckForUpdate + update:available). */
+  const updateInfo = ref<UpdateInfo | null>(null)
+  const checkingUpdate = ref(false)
+  async function checkForUpdate(manual = false) {
+    if (!hasMethod('CheckForUpdate')) return
+    if (!manual && settings.value?.checkUpdates === false) return
+    checkingUpdate.value = true
+    try {
+      updateInfo.value = await api.checkForUpdate()
+    } catch {
+      if (manual) throw new Error('Couldn’t check for updates')
+    } finally {
+      checkingUpdate.value = false
+    }
+  }
+
   async function loadAppInfo() {
     try {
       appInfo.value = await api.getAppInfo()
-      if (isWails() && appInfo.value?.platform?.startsWith('darwin')) setWindowChrome('mac')
+      if (isWails() && (appInfo.value?.os === 'darwin' || appInfo.value?.platform?.startsWith('darwin'))) setWindowChrome('mac')
     } catch {
       appInfo.value = null
     }
@@ -116,7 +132,7 @@ export const useSettingsStore = defineStore('settings', () => {
   )
 
   return {
-    settings, saving, models, modelsLoading, modelsError, defaults, appInfo,
+    settings, saving, models, modelsLoading, modelsError, defaults, appInfo, updateInfo, checkingUpdate, checkForUpdate,
     labels, labelMap, aiReady, grammarReady,
     load, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
   }
