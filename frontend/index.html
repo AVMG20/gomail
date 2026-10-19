@@ -1,13 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8"/>
-    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-    <title>gomail</title>
+  <meta charset="UTF-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <meta name="color-scheme" content="light dark"/>
+  <title>gomail</title>
+  <script>
+    // Apply the cached theme before first paint to avoid a light/dark flash.
+    (function () {
+      try {
+        var t = JSON.parse(localStorage.getItem('gomail.theme.v1') || 'null');
+        var mode = t ? t.theme : 'system';
+        var dark = mode === 'dark' || (mode !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var root = document.documentElement;
+        if (dark) root.classList.add('dark');
+        root.style.colorScheme = dark ? 'dark' : 'light';
+        if (t) {
+          root.setAttribute('data-density', t.density || 'comfortable');
+          var vars = dark ? t.darkVars : t.vars;
+          for (var k in vars) root.style.setProperty(k, vars[k]);
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
 <div id="app"></div>
 <script src="./src/main.ts" type="module"></script>
 </body>
 </html>
-
