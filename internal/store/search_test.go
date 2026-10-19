@@ -127,12 +127,12 @@ func TestSearchOperators(t *testing.T) {
 		t.Fatalf("label filter %s", subjects(rs))
 	}
 	// ListMessages shares the parser.
-	p, err := s.ListMessages(models.ListQuery{Search: "from:acme is:unread"})
+	p, err := s.ListMessages(models.ListQuery{Search: "from:acme is:unread"}, ListOptions{})
 	if err != nil || p.Total != 0 {
 		// r001 and r005 are odd -> read
 		t.Fatalf("list search %v %d", err, p.Total)
 	}
-	p, _ = s.ListMessages(models.ListQuery{Search: "billing"})
+	p, _ = s.ListMessages(models.ListQuery{Search: "billing"}, ListOptions{})
 	if p.Total != 2 {
 		t.Fatalf("list search total %d", p.Total)
 	}
@@ -165,7 +165,7 @@ func TestSearchSpecialCharactersNeverError(t *testing.T) {
 		if _, err := s.Search(models.SearchQuery{Query: q}); err != nil {
 			t.Errorf("Search(%q): %v", q, err)
 		}
-		if _, err := s.ListMessages(models.ListQuery{Search: q}); err != nil {
+		if _, err := s.ListMessages(models.ListQuery{Search: q}, ListOptions{}); err != nil {
 			t.Errorf("ListMessages(%q): %v", q, err)
 		}
 	}

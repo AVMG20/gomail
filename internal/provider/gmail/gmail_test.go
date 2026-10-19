@@ -27,6 +27,10 @@ type fakeGmail struct {
 	sent      map[string]string
 	trashed   []string
 	throttled int32
+
+	draftBodies []map[string]any
+	draftSent   bool
+	olderQ      string
 }
 
 func (f *fakeGmail) handler(t *testing.T) http.HandlerFunc {
@@ -52,9 +56,9 @@ func (f *fakeGmail) handler(t *testing.T) http.HandlerFunc {
 			write(map[string]any{"id": "Label_2", "name": "New"})
 		case strings.HasPrefix(p, "labels/"):
 			write(map[string]any{"id": strings.TrimPrefix(p, "labels/"), "messagesTotal": 10, "messagesUnread": 3})
-		case p == "messages" && q.Get("labelIds") == "INBOX":
+		case p == "messages" && q.Get("labelIds") == "INBOX" && !strings.Contains(q.Get("q"), "before:"):
 			write(map[string]any{"messages": []map[string]string{{"id": "m1"}, {"id": "m2"}}})
-		case p == "messages":
+		case p == "messages" && !strings.Contains(q.Get("q"), "before:"):
 			write(map[string]any{})
 		case p == "messages/m1" && q.Get("format") == "metadata":
 			write(map[string]any{"id": "m1", "threadId": "t1", "labelIds": []string{"INBOX", "UNREAD", "Label_1", "CATEGORY_PROMOTIONS", "IMPORTANT"},
@@ -117,6 +121,23 @@ func (f *fakeGmail) handler(t *testing.T) http.HandlerFunc {
 			f.trashed = append(f.trashed, strings.TrimSuffix(strings.TrimPrefix(p, "messages/"), "/trash"))
 			f.mu.Unlock()
 			write(map[string]any{})
+		case p == "drafts" && r.Method == "POST", p == "drafts/d1" && r.Method == "PUT":
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			f.mu.Lock()
+			f.draftBodies = append(f.draftBodies, body)
+			f.mu.Unlock()
+			write(map[string]any{"id": "d1"})
+		case p == "drafts/send":
+			f.mu.Lock()
+			f.draftSent = true
+			f.mu.Unlock()
+			write(map[string]any{})
+		case p == "messages" && strings.Contains(q.Get("q"), "before:"):
+			f.mu.Lock()
+			f.olderQ = q.Get("q") + "|" + q.Get("labelIds")
+			f.mu.Unlock()
+			write(map[string]any{"messages": []map[string]string{{"id": "m1"}}})
 		case p == "messages/send":
 			var body map[string]string
 			json.NewDecoder(r.Body).Decode(&body)
@@ -278,5 +299,36 @@ func TestActionsAndSend(t *testing.T) {
 	}
 	if p.InReplyTo != "<abc@example.de>" || p.References != "<root@x> <abc@example.de>" || p.Subject != "Re: Grüße" || !strings.Contains(p.HTML, "Danke") {
 		t.Fatalf("sent %+v", p)
+	}
+}
+
+func TestDraftsOlderAndSearchString(t *testing.T) {
+	c, f := newTest(t)
+	ctx := context.Background()
+	c.Folders(ctx)
+	out := mail.Outgoing{From: models.Address{Email: "me@gmail.com"}, Subject: "Draft", Text: "hi", Mode: "reply",
+		Original: &mail.Message{RemoteID: "m1", ThreadID: "t1", MessageID: "<abc@example.de>"}}
+	id, err := c.SaveDraft(ctx, out, "")
+	if err != nil || id != "d1" {
+		t.Fatal(id, err)
+	}
+	if _, err := c.SaveDraft(ctx, out, "d1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SendDraft(ctx, out, "d1"); err != nil || !f.draftSent {
+		t.Fatal(err)
+	}
+	if len(f.draftBodies) != 3 || f.draftBodies[1]["id"] != "d1" || f.draftBodies[0]["message"].(map[string]any)["threadId"] != "t1" {
+		t.Fatalf("draft bodies %+v", f.draftBodies)
+	}
+	before := time.Unix(1790000000, 0)
+	msgs, err := c.ListOlder(ctx, mail.Folder{RemoteID: "INBOX", Kind: models.FolderInbox}, before, 50)
+	if err != nil || len(msgs) != 1 || f.olderQ != "before:1790000000|INBOX" {
+		t.Fatalf("%v %v %q", msgs, err, f.olderQ)
+	}
+	yes := true
+	qs := SearchString(mail.SearchQuery{Terms: []string{"invoice", "q4 plan"}, From: []string{"acme"}, Unread: &yes, HasAttachment: true, After: before})
+	if qs != `invoice "q4 plan" from:acme is:unread has:attachment after:1790000000` {
+		t.Fatal(qs)
 	}
 }

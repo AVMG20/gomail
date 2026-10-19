@@ -73,9 +73,12 @@ func (t *TokenSource) AccessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		var re *oauth2.RetrieveError
 		if errors.As(err, &re) && (re.ErrorCode == "invalid_grant" || re.ErrorCode == "interaction_required" || re.ErrorCode == "invalid_client") {
-			return "", fmt.Errorf("%w for %s: %s. Add the account again to sign in", ErrReauthRequired, t.label, strings.TrimSuffix(oauthErrorMessage(err), "."))
+			return "", fmt.Errorf("%w for %s: %s. Please sign in again", ErrReauthRequired, t.label, strings.TrimSuffix(oauthErrorMessage(err), "."))
 		}
-		return "", fmt.Errorf("could not refresh the sign-in for %s: %s", t.label, oauthErrorMessage(err))
+		if errors.As(err, &re) {
+			return "", fmt.Errorf("could not refresh the sign-in for %s: %s", t.label, oauthErrorMessage(err))
+		}
+		return "", fmt.Errorf("could not refresh the sign-in for %s: %w", t.label, err) // keeps network errors detectable
 	}
 	if nt.RefreshToken == "" {
 		nt.RefreshToken = old.RefreshToken

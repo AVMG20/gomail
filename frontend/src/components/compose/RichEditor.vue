@@ -238,7 +238,7 @@ defineExpose({ editor, improveGrammar })
             <button type="button" :class="['tb', editor?.isActive('link') && 'tb-on']" aria-label="Insert link"><LinkIcon class="size-4" /></button>
           </Tip>
         </PopoverTrigger>
-        <PopoverContent side="top" align="start" class="w-80 gap-2 p-2">
+        <PopoverContent side="top" align="center" :collision-padding="12" class="w-80 gap-2 p-2">
           <form ref="linkForm" class="flex items-center gap-1.5" @submit.prevent="applyLink">
             <Input v-model="linkUrl" placeholder="https://example.com" class="h-8 text-[13px]" aria-label="Link URL" />
             <Button type="submit" size="sm" class="h-8">Apply</Button>

@@ -108,17 +108,6 @@ func (s *Service) SummarizeMessage(id string) (string, error) {
 	return s.ai.Summarize(ctx, s.chatModel(), emailForPrompt(m))
 }
 
-// DraftReply drafts a plain-text reply.
-func (s *Service) DraftReply(id, instructions string) (string, error) {
-	m, err := s.Message(id)
-	if err != nil {
-		return "", err
-	}
-	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
-	defer cancel()
-	return s.ai.DraftReply(ctx, s.chatModel(), emailForPrompt(m), instructions)
-}
-
 // ---- classification ----
 
 func (s *Service) labelDefs() []ai.LabelDef {
@@ -274,6 +263,10 @@ func isFatalAIError(msg string) bool {
 // ClassifyMessages labels an explicit selection and returns the results.
 func (s *Service) ClassifyMessages(ids []string) ([]models.ClassificationResult, error) {
 	if err := s.checkAIReady(); err != nil {
+		return nil, err
+	}
+	ids, err := s.expand(ids, store.ExpandAnchor)
+	if err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {

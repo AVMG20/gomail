@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { api, errorMessage } from '@/lib/api'
+import { api, errorMessage, hasMethod } from '@/lib/api'
 import type { Address, ListQuery, Message, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from './accounts'
 import { useSettingsStore } from './settings'
@@ -65,6 +65,8 @@ export const useMailStore = defineStore('mail', () => {
 
   const messages = shallowRef<MessageSummary[]>([])
   const nextCursor = ref('')
+  const hasMoreRemote = ref(false)
+  const loadingOlder = ref(false)
   const total = ref(0)
   const status = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const refreshing = ref(false)
@@ -152,6 +154,7 @@ export const useMailStore = defineStore('mail', () => {
       if (t !== token) return
       messages.value = page.messages
       nextCursor.value = page.nextCursor
+      hasMoreRemote.value = !!page.hasMoreRemote
       total.value = page.total
       status.value = 'ready'
       learnAddresses(page.messages)
@@ -179,6 +182,7 @@ export const useMailStore = defineStore('mail', () => {
         return old && JSON.stringify(old) === JSON.stringify(m) ? old : m
       })
       nextCursor.value = page.nextCursor
+      hasMoreRemote.value = !!page.hasMoreRemote
       total.value = page.total
       status.value = 'ready'
       learnAddresses(page.messages)
@@ -202,12 +206,30 @@ export const useMailStore = defineStore('mail', () => {
       const seen = new Set(messages.value.map((m) => m.id))
       messages.value = [...messages.value, ...page.messages.filter((m) => !seen.has(m.id))]
       nextCursor.value = page.nextCursor
+      hasMoreRemote.value = !!page.hasMoreRemote
       total.value = page.total
       learnAddresses(page.messages)
     } catch (e) {
       toast.error('Could not load more messages', { description: errorMessage(e) })
     } finally {
       loadingMore.value = false
+    }
+  }
+
+  /** Past the local cache: ask the backend to fetch older mail from the server. */
+  async function loadOlder() {
+    if (loadingOlder.value || !hasMoreRemote.value || !hasMethod('LoadOlder')) return
+    loadingOlder.value = true
+    try {
+      const added = await api.loadOlder({ ...query.value, cursor: '' })
+      if (!added) hasMoreRemote.value = false
+      await softRefresh()
+      if (nextCursor.value) await loadMore()
+    } catch (e) {
+      hasMoreRemote.value = false
+      toast.error('Couldn’t load older mail', { description: errorMessage(e) })
+    } finally {
+      loadingOlder.value = false
     }
   }
 
@@ -574,7 +596,7 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   return {
-    mailbox, search, unreadOnly, filters, messages, nextCursor, total, status, refreshing, loadingMore, error,
+    mailbox, search, unreadOnly, filters, messages, nextCursor, hasMoreRemote, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook,
     labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,

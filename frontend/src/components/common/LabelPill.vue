@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { SparklesIcon, XIcon } from '@lucide/vue'
+import { cn } from 'cn'
 import type { Label, MessageLabel } from '@/lib/types'
 import Tip from './Tip.vue'
 
@@ -25,11 +26,11 @@ const tooltip = computed(() => {
 <template>
   <Tip :label="tooltip">
     <span
-      :class="[
+      :class="cn(
         'inline-flex max-w-36 shrink-0 items-center gap-1 rounded-full border font-medium whitespace-nowrap',
         size === 'xs' ? 'h-[18px] px-1.5 text-[10.5px]' : 'h-6 px-2 text-xs',
         props.class,
-      ]"
+      )"
       :style="{
         color: `color-mix(in oklab, ${label.color} 78%, var(--foreground))`,
         background: `color-mix(in oklab, ${label.color} 12%, transparent)`,

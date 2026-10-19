@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/AVMG20/gomail/internal/mail"
 )
@@ -42,6 +43,16 @@ type SyncRequest struct {
 	State   map[string]string // opaque provider state from the last round
 	Folders []mail.Folder     // as returned by Folders()
 	Limits  Limits
+	// Progress, if set, is called during long (initial) syncs. Phases:
+	// "listing" (done/total folders) and "fetching" (done/total messages).
+	Progress func(phase string, done, total int)
+}
+
+// Report calls Progress if set.
+func (r SyncRequest) Report(phase string, done, total int) {
+	if r.Progress != nil {
+		r.Progress(phase, done, total)
+	}
 }
 
 // Provider is a mail account backend. Methods take remote ids.
@@ -69,6 +80,21 @@ type Provider interface {
 	SetLabel(ctx context.Context, remoteIDs []string, labelName string, add bool) error
 	// Send sends a new message, reply or forward.
 	Send(ctx context.Context, out mail.Outgoing) error
+
+	// ListOlder returns up to limit messages of a folder received before
+	// the given time, newest first (scrolling past the cached range).
+	ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error)
+	// Search runs a server-side search.
+	Search(ctx context.Context, q mail.SearchQuery, limit int) ([]mail.Message, error)
+
+	// SaveDraft creates (draftID "") or replaces a draft and returns its id.
+	SaveDraft(ctx context.Context, out mail.Outgoing, draftID string) (string, error)
+	// SendDraft updates the draft with out and sends it.
+	SendDraft(ctx context.Context, out mail.Outgoing, draftID string) error
+	// DeleteDraft discards a draft (missing drafts are not an error).
+	DeleteDraft(ctx context.Context, draftID string) error
+	// DraftID returns the draft id for a message in the Drafts folder.
+	DraftID(ctx context.Context, messageRemoteID string) (string, error)
 }
 
 // ErrUnsupported is returned for operations a provider can't do.

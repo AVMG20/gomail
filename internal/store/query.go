@@ -196,55 +196,6 @@ const (
 	MaxPageSize     = 200
 )
 
-// ListMessages returns one page of message summaries, newest first, using
-// keyset pagination on (date, id).
-func (s *Store) ListMessages(q models.ListQuery) (models.MessagePage, error) {
-	page := models.MessagePage{Messages: []models.MessageSummary{}}
-	limit := q.Limit
-	if limit <= 0 {
-		limit = DefaultPageSize
-	}
-	if limit > MaxPageSize {
-		limit = MaxPageSize
-	}
-	w, err := s.buildFilter(q, FilterOptions{})
-	if err != nil {
-		return page, err
-	}
-	if err := s.db.QueryRow(`SELECT count(*) FROM messages m`+w.sql(), w.args...).Scan(&page.Total); err != nil {
-		return page, err
-	}
-	if q.Cursor != "" {
-		d, id, err := decodeCursor(q.Cursor)
-		if err != nil {
-			return page, err
-		}
-		w.add(`(m.date < ? OR (m.date = ? AND m.id < ?))`, d, d, id)
-	}
-	rows, err := s.db.Query(`SELECT `+s.summaryCols()+` FROM messages m`+w.sql()+` ORDER BY m.date DESC, m.id DESC LIMIT ?`,
-		append(w.args, limit+1)...)
-	if err != nil {
-		return page, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		m, err := scanSummary(rows)
-		if err != nil {
-			return page, err
-		}
-		page.Messages = append(page.Messages, m)
-	}
-	if err := rows.Err(); err != nil {
-		return page, err
-	}
-	if len(page.Messages) > limit {
-		page.Messages = page.Messages[:limit]
-		last := page.Messages[limit-1]
-		page.NextCursor = encodeCursor(toMillis(last.Date), last.ID)
-	}
-	return page, nil
-}
-
 // ResolveIDs returns the ids of up to max messages matching q, newest first.
 func (s *Store) ResolveIDs(q models.ListQuery, opt FilterOptions, max int) ([]string, error) {
 	w, err := s.buildFilter(q, opt)

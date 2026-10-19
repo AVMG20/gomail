@@ -154,3 +154,51 @@ func TestReplyHelpers(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestBlockRemoteContentAndLinks(t *testing.T) {
+	in := `<a href="https://example.com/x">x</a><img src="https://t.example/p.gif" srcset="https://a/1.png 1x, https://a/2.png 2x" alt="a">` +
+		`<img src="data:image/png;base64,AAAA"><img srcset="javascript:alert(1) 1x"><table background="http://bg/x.png"><tr><td style="background-image: url('https://bg/y.png'); color: red">t</td></tr></table>` +
+		`<style>.x{background:url(https://bg/z.png)}</style>`
+	clean := SanitizeHTML(in)
+	if !strings.Contains(clean, `rel="noreferrer noopener"`) && !strings.Contains(clean, `noopener`) {
+		t.Errorf("links lack noopener: %s", clean)
+	}
+	if strings.Contains(clean, "javascript") {
+		t.Errorf("unsafe srcset kept: %s", clean)
+	}
+	if !strings.Contains(clean, `srcset="https://a/1.png 1x, https://a/2.png 2x"`) {
+		t.Errorf("safe srcset dropped: %s", clean)
+	}
+	if !HasRemoteContent(clean) {
+		t.Fatal("remote content not detected")
+	}
+	blocked, changed := BlockRemoteContent(clean)
+	if !changed || HasRemoteContent(blocked) {
+		t.Fatalf("still remote after blocking: %s", blocked)
+	}
+	for _, keep := range []string{`href="https://example.com/x"`, "data:image/png;base64,AAAA", "color: red", `alt="a"`} {
+		if !strings.Contains(blocked, keep) {
+			t.Errorf("blocking removed %q: %s", keep, blocked)
+		}
+	}
+}
+
+func TestParseListUnsubscribe(t *testing.T) {
+	u := ParseListUnsubscribe("<mailto:unsub@news.example?subject=unsubscribe>, <https://news.example/u?id=1>", "List-Unsubscribe=One-Click")
+	if u.Mailto != "mailto:unsub@news.example?subject=unsubscribe" || u.URL != "https://news.example/u?id=1" || !u.OneClick {
+		t.Fatalf("%+v", u)
+	}
+	u = ParseListUnsubscribe("<http://x.example/u>, <javascript:alert(1)>", "List-Unsubscribe=One-Click")
+	if u.URL != "http://x.example/u" || u.OneClick {
+		t.Fatalf("http one-click must be refused: %+v", u)
+	}
+	if u := ParseListUnsubscribe("garbage", ""); !u.Empty() {
+		t.Fatalf("%+v", u)
+	}
+	raw, _ := Build(Message{From: models.Address{Email: "a@b.c"}, Subject: "x", Text: "y",
+		Headers: map[string]string{"List-Unsubscribe": "<https://n.example/u>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click", "Bad\nHeader": "x"}})
+	p, _ := Parse(raw)
+	if !p.Unsubscribe.OneClick || strings.Contains(string(raw), "Bad") {
+		t.Fatalf("%+v", p.Unsubscribe)
+	}
+}

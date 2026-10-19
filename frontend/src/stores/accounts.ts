@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { api } from '@/lib/api'
-import type { Account, Folder, LabelCount } from '@/lib/types'
+import type { Account, Folder, LabelCount, SyncProgress } from '@/lib/types'
 
 export const SYSTEM_ORDER = ['inbox', 'starred', 'sent', 'drafts', 'archive', 'spam', 'trash']
 
@@ -14,6 +14,8 @@ export const useAccountsStore = defineStore('accounts', () => {
   const labelScope = ref('')
   const loaded = ref(false)
   const syncing = ref<Set<string>>(new Set())
+  /** Latest sync:progress per account (cleared when the sync finishes). */
+  const progress = ref<Record<string, SyncProgress>>({})
 
   const accountMap = computed(() => new Map(accounts.value.map((a) => [a.id, a])))
   const anySyncing = computed(() => syncing.value.size > 0 || accounts.value.some((a) => a.syncing))
@@ -76,10 +78,20 @@ export const useAccountsStore = defineStore('accounts', () => {
     return n
   }
 
+  function setProgress(p: SyncProgress | null, accountId = '') {
+    const next = { ...progress.value }
+    if (p) next[p.accountId] = p
+    else delete next[accountId]
+    progress.value = next
+  }
+
   function setSyncing(id: string, on: boolean) {
     const s = new Set(syncing.value)
     if (on) s.add(id)
-    else s.delete(id)
+    else {
+      s.delete(id)
+      if (progress.value[id]) setProgress(null, id)
+    }
     syncing.value = s
   }
 
@@ -96,7 +108,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   }
 
   return {
-    accounts, folders, labelCounts, labelScope, loaded, syncing, accountMap, anySyncing, folderMap,
+    accounts, folders, labelCounts, labelScope, loaded, syncing, progress, setProgress, accountMap, anySyncing, folderMap,
     load, loadFolders, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })

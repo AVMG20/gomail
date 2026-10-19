@@ -11,14 +11,16 @@ import (
 	"github.com/AVMG20/gomail/internal/models"
 )
 
-const accountCols = `a.id, a.provider, a.email, a.display_name, a.color, a.created_at, a.last_sync_at, a.sync_error,
+const accountCols = `a.id, a.provider, a.email, a.display_name, a.color, a.created_at, a.last_sync_at, a.sync_error, a.needs_reauth,
 	coalesce((SELECT sum(f.unread) FROM folders f WHERE f.account_id = a.id AND f.kind = 'inbox'), 0)`
 
 func scanAccount(sc interface{ Scan(...any) error }) (models.Account, error) {
 	var a models.Account
 	var created int64
 	var last sql.NullInt64
-	err := sc.Scan(&a.ID, &a.Provider, &a.Email, &a.DisplayName, &a.Color, &created, &last, &a.SyncError, &a.UnreadCount)
+	var reauth int
+	err := sc.Scan(&a.ID, &a.Provider, &a.Email, &a.DisplayName, &a.Color, &created, &last, &a.SyncError, &reauth, &a.UnreadCount)
+	a.NeedsReauth = reauth == 1
 	if err != nil {
 		return a, err
 	}
@@ -96,6 +98,12 @@ func (s *Store) SetSyncResult(id string, at time.Time, syncErr string) error {
 		return err
 	}
 	_, err := s.db.Exec(`UPDATE accounts SET last_sync_at = ?, sync_error = '' WHERE id = ?`, toMillis(at), id)
+	return err
+}
+
+// SetNeedsReauth flags (or clears) an account whose sign-in was revoked.
+func (s *Store) SetNeedsReauth(id string, needs bool) error {
+	_, err := s.db.Exec(`UPDATE accounts SET needs_reauth = ? WHERE id = ?`, boolInt(needs), id)
 	return err
 }
 

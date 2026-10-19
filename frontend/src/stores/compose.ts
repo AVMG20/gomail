@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { api, errorMessage } from '@/lib/api'
+import { api, errorMessage, hasMethod } from '@/lib/api'
 import { displayName, escapeHtml, formatAddress, htmlToText, longDate, textToHtml } from '@/lib/format'
 import { uid } from '@/lib/platform'
 import type { Address, ComposeMode, Message } from '@/lib/types'
@@ -36,6 +36,8 @@ export interface Draft {
   /** Bumped when html is replaced programmatically (so the editor reloads). */
   version: number
   savedAt?: number
+  /** Server-side draft id once SaveDraft has run (backend pass 2). */
+  remoteId?: string
 }
 
 const DRAFTS_KEY = 'gomail.drafts.v1'
@@ -78,7 +80,30 @@ export const useComposeStore = defineStore('compose', () => {
     saveTimer = setTimeout(persist, 600)
   }, { deep: true })
 
+  // Server drafts (when the backend supports them), throttled per draft.
+  const remoteTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const lastRemote = new Map<string, string>()
+  function scheduleRemote(d: Draft) {
+    if (!hasMethod('SaveDraft') || d.queued || d.sending || !draftHasContent(d)) return
+    const sig = JSON.stringify([d.accountId, d.to, d.cc, d.bcc, d.subject, d.html, d.attachments.length])
+    if (lastRemote.get(d.id) === sig) return
+    const t = remoteTimers.get(d.id)
+    if (t) clearTimeout(t)
+    remoteTimers.set(d.id, setTimeout(async () => {
+      remoteTimers.delete(d.id)
+      const cur = drafts.value.find((x) => x.id === d.id)
+      if (!cur || cur.queued || cur.sending) return
+      try {
+        cur.remoteId = await api.saveDraft(toRequest(cur), cur.remoteId ?? '')
+        lastRemote.set(d.id, sig)
+      } catch {
+        /* keep the local copy; retry on the next edit */
+      }
+    }, 3000))
+  }
+
   function persist() {
+    drafts.value.forEach(scheduleRemote)
     const list = drafts.value.filter((d) => draftHasContent(d)).map((d) => {
       const size = d.attachments.reduce((n, a) => n + a.dataBase64.length, 0)
       return { ...d, attachments: size > MAX_PERSIST_ATTACH ? [] : d.attachments }
@@ -145,16 +170,53 @@ export const useComposeStore = defineStore('compose', () => {
     drafts.value = drafts.value.filter((d) => d.id !== id)
   }
 
+  /** Close the window: keep the draft on the server when supported. Returns false if it must be confirmed. */
+  async function saveAndClose(id: string): Promise<boolean> {
+    const d = drafts.value.find((x) => x.id === id)
+    if (!d) return true
+    if (!draftHasContent(d)) {
+      close(id)
+      return true
+    }
+    if (!hasMethod('SaveDraft')) return false
+    try {
+      d.remoteId = await api.saveDraft(toRequest(d), d.remoteId ?? '')
+      close(id)
+      toast('Draft saved', { description: 'You can find it in Drafts.' })
+      void useMailStore().softRefresh()
+      return true
+    } catch (e) {
+      toast.error('Couldn’t save the draft', { description: errorMessage(e) })
+      return false
+    }
+  }
+
+  /** Discard: also remove the server copy. */
+  function discard(id: string) {
+    const d = drafts.value.find((x) => x.id === id)
+    const t = remoteTimers.get(id)
+    if (t) clearTimeout(t)
+    if (d?.remoteId && hasMethod('DeleteDraft')) void api.deleteDraft(d.remoteId).catch(() => {})
+    close(id)
+  }
+
   function focus(id: string) {
     for (const d of drafts.value) if (d.id === id) d.minimized = false
   }
 
-  async function deliver(d: Draft) {
-    await api.sendMessage({
+  function toRequest(d: Draft) {
+    return {
       accountId: d.accountId, to: d.to, cc: d.cc, bcc: d.bcc, subject: d.subject,
       bodyHtml: d.html, bodyText: htmlToText(d.html), replyToId: d.replyToId, mode: d.mode,
       attachments: d.attachments.map(({ filename, mimeType, dataBase64 }) => ({ filename, mimeType, dataBase64 })),
-    })
+    }
+  }
+
+  async function deliver(d: Draft) {
+    const t = remoteTimers.get(d.id)
+    if (t) clearTimeout(t)
+    await api.sendMessage(toRequest(d))
+    if (d.remoteId && hasMethod('DeleteDraft')) void api.deleteDraft(d.remoteId).catch(() => {})
   }
 
   async function send(id: string, delaySeconds = 0) {
@@ -211,5 +273,5 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  return { drafts, compose, respond, close, focus, send, undoSend }
+  return { drafts, compose, respond, close, discard, saveAndClose, focus, send, undoSend }
 })

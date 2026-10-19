@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
-import { api, errorMessage } from '@/lib/api'
+import { api, errorMessage, hasMethod } from '@/lib/api'
 import { displayName } from '@/lib/format'
 import type { Label, Message, MessageLabel } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
@@ -86,6 +86,18 @@ const labelPills = computed(() => {
   const details = new Map((m.labelDetails ?? []).map((d) => [d.labelId, d]))
   return m.labels.map((id) => ({ label: settings.labelMap.get(id), detail: details.get(id) })).filter((x): x is { label: Label; detail: MessageLabel | undefined } => !!x.label)
 })
+
+/** "Load images": the backend strips remote content, so refetch with it kept. */
+async function loadImages(threadId: string) {
+  remoteAllowed.value = new Set([...remoteAllowed.value, threadId])
+  if (!hasMethod('GetMessageWithRemoteContent')) return
+  try {
+    const updated = await Promise.all(thread.value.map((m) => (m.hasRemoteContent ? api.getMessageWithRemoteContent(m.id) : Promise.resolve(m))))
+    thread.value = updated
+  } catch (e) {
+    toast.error('Couldn’t load images', { description: errorMessage(e) })
+  }
+}
 
 function toggleExpanded(id: string) {
   const next = new Set(expanded.value)
@@ -243,7 +255,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
               :allow-remote="allowRemote"
               @toggle="toggleExpanded(m.id)"
               @reply="respond('reply', m)"
-              @load-images="remoteAllowed = new Set([...remoteAllowed, m.threadId])"
+              @load-images="loadImages(m.threadId)"
             />
           </div>
 

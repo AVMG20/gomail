@@ -159,6 +159,15 @@ CREATE TRIGGER messages_fts_au AFTER UPDATE OF subject, from_name, from_email, t
 		new.snippet, coalesce(new.body_text, ''));
 END;
 `,
+	// 2: conversations, List-Unsubscribe, re-auth state
+	`
+ALTER TABLE messages ADD COLUMN thread_key TEXT GENERATED ALWAYS AS (CASE WHEN thread_id = '' THEN id ELSE thread_id END) VIRTUAL;
+CREATE INDEX messages_thread_key ON messages(account_id, thread_key, date DESC, id DESC);
+ALTER TABLE messages ADD COLUMN unsub_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN unsub_mailto TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN unsub_one_click INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

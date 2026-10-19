@@ -8,6 +8,7 @@ export type {
     Address,
     AppInfo,
     Attachment,
+    AttachmentData,
     ClassificationResult,
     ClassifyEstimate,
     ClassifyJob,
@@ -27,5 +28,7 @@ export type {
     SearchQuery,
     SearchResult,
     Settings,
-    SyncEvent
+    SyncEvent,
+    Unsubscribe,
+    UnsubscribeResult
 } from "./models.js";

@@ -72,9 +72,12 @@ function sendNow() {
 }
 
 const confirmDiscard = ref(false)
+async function closeWindow() {
+  if (!(await compose.saveAndClose(d.value.id))) confirmDiscard.value = true
+}
 function discard() {
   if (draftHasContent(d.value)) confirmDiscard.value = true
-  else compose.close(d.value.id)
+  else compose.discard(d.value.id)
 }
 
 const totalSize = computed(() => d.value.attachments.reduce((n, a) => n + a.size, 0))
@@ -163,7 +166,7 @@ const fromAccount = computed(() => accounts.accountMap.get(d.value.accountId))
           <Minimize2Icon v-if="d.expanded" /><Maximize2Icon v-else />
         </Button>
       </Tip>
-      <Tip label="Close"><Button variant="ghost" size="icon-xs" aria-label="Close" @click="compose.close(d.id)"><XIcon /></Button></Tip>
+      <Tip label="Save & close"><Button variant="ghost" size="icon-xs" aria-label="Save and close" @click="closeWindow"><XIcon /></Button></Tip>
     </div>
 
     <!-- Header fields -->
@@ -267,7 +270,7 @@ const fromAccount = computed(() => accounts.accountMap.get(d.value.accountId))
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Keep editing</AlertDialogCancel>
-          <AlertDialogAction class="bg-destructive hover:bg-destructive/90 text-white" @click="compose.close(d.id)">Discard</AlertDialogAction>
+          <AlertDialogAction class="bg-destructive hover:bg-destructive/90 text-white" @click="compose.discard(d.id)">Discard</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

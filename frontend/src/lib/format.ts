@@ -52,13 +52,15 @@ export function formatAddress(a: Address): string {
   return a.name ? `${a.name} <${a.email}>` : a.email
 }
 
-export function initials(nameOrEmail: string): string {
-  const s = (nameOrEmail || '?').replace(/<.*>/, '').trim()
-  const local = s.includes('@') ? s.split('@')[0] : s
-  const parts = local.split(/[\s._-]+/).filter(Boolean)
-  if (parts.length === 0) return '?'
-  if (parts.length === 1) return parts[0][0].toUpperCase()
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+export function initials(nameOrEmail: string, email = ''): string {
+  // Letters only (Unicode-aware): "Alex (Gmail)" -> "AG", "Zoë" -> "Z"; fall back to the email local part.
+  const words = (s: string) => (s.replace(/<.*>/, '').split('@')[0].match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => /\p{L}/u.test(w))
+  let parts = words(nameOrEmail || '')
+  if (!parts.length && email) parts = words(email)
+  if (!parts.length) return '?'
+  const first = (w: string) => (w.match(/\p{L}/u)?.[0] ?? '').toUpperCase()
+  if (parts.length === 1) return first(parts[0])
+  return first(parts[0]) + first(parts[parts.length - 1])
 }
 
 export function formatBytes(n: number): string {

@@ -74,6 +74,13 @@ const syncText = computed(() => {
   return `Synced ${relativeTime(oldest)}`
 })
 const syncing = computed(() => (account.value ? accounts.syncing.has(account.value.id) : accounts.anySyncing))
+const progress = computed(() => {
+  const list = Object.values(accounts.progress).filter((p) => !account.value || p.accountId === account.value.id)
+  if (!list.length) return null
+  const done = list.reduce((n, p) => n + p.done, 0)
+  const total = list.reduce((n, p) => n + p.total, 0)
+  return { pct: total ? Math.min(100, Math.round((done / total) * 100)) : 0, phase: list[0].phase }
+})
 
 function labelAllWithAi() {
   ai.requestBulk({ query: { accountId: account.value?.id ?? '' }, ids: [], title: account.value ? `All mail in ${account.value.displayName || account.value.email}` : 'All mail' })
@@ -205,6 +212,10 @@ function formatCount(n: number) {
     </div>
 
     <!-- Footer: sync status -->
+    <div v-if="progress" class="px-3 pt-2" role="progressbar" :aria-valuenow="progress.pct" aria-valuemin="0" aria-valuemax="100" :aria-label="`Syncing ${progress.phase}`">
+      <div class="text-muted-foreground mb-1 flex justify-between text-[11px]"><span>Syncing {{ progress.phase.toLowerCase() }}…</span><span class="tabular-nums">{{ progress.pct }}%</span></div>
+      <div class="bg-sidebar-accent h-1 overflow-hidden rounded-full"><div class="h-full rounded-full transition-[width] duration-300" :style="{ width: `${progress.pct}%`, background: 'var(--account)' }" /></div>
+    </div>
     <div class="border-sidebar-border flex items-center gap-2 border-t px-3 py-2">
       <span class="size-1.5 shrink-0 rounded-full" :class="syncing ? 'animate-pulse bg-amber-500' : syncText.startsWith('Sync error') ? 'bg-destructive' : 'bg-emerald-500'" />
       <span class="text-muted-foreground min-w-0 flex-1 truncate text-xs" :title="syncText">{{ syncText }}</span>

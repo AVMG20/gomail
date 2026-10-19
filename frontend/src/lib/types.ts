@@ -1,5 +1,5 @@
 // Frontend mirror of internal/models/models.go. These are plain interfaces
-// (not the generated wailsjs classes) so the UI is decoupled from binding
+// (not the generated v3 binding classes) so the UI is decoupled from binding
 // regeneration; src/lib/api.ts is the only bridge to the generated code.
 
 export type Provider = 'gmail' | 'outlook'
@@ -30,6 +30,8 @@ export interface Account {
   syncError: string
   syncing: boolean
   unreadCount: number
+  /** Sign-in expired/revoked: show a Reconnect banner (backend pass 2). */
+  needsReauth?: boolean
 }
 
 export interface Folder {
@@ -60,6 +62,28 @@ export interface MessageSummary {
   labels: string[]
   /** Who assigned each label (manual vs AI) and with what confidence. */
   labelDetails?: MessageLabel[]
+  /** Messages in the conversation (conversation view, backend pass 2). */
+  threadCount?: number
+}
+
+export interface UnsubscribeInfo {
+  url: string
+  mailto: string
+  oneClick: boolean
+}
+
+export interface AttachmentData {
+  filename?: string
+  mimeType: string
+  size?: number
+  dataBase64: string
+}
+
+export interface SyncProgress {
+  accountId: string
+  phase: string
+  done: number
+  total: number
 }
 
 export interface MessageLabel {
@@ -88,6 +112,7 @@ export interface Message extends MessageSummary {
   inReplyTo: string
   references: string
   hasRemoteContent?: boolean
+  unsubscribe?: UnsubscribeInfo | null
 }
 
 export interface ListQuery {
@@ -108,6 +133,8 @@ export interface MessagePage {
   messages: MessageSummary[]
   nextCursor: string
   total: number
+  /** More (older) mail exists on the server beyond the local cache: call LoadOlder. */
+  hasMoreRemote?: boolean
 }
 
 export interface OutgoingAttachment {
@@ -175,6 +202,10 @@ export interface Settings {
   notifications: boolean
   /** Keep a system tray icon (requested from backend; stored locally until supported). */
   showInTray?: boolean
+  /** Keep running in the tray when the window is closed. */
+  closeToTray?: boolean
+  /** Group messages into conversations (default true). */
+  conversationView?: boolean
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
   primaryColor: string
@@ -280,6 +311,7 @@ export const Events = {
   NewMail: 'mail:new',
   ClassifyFinished: 'classify:finished',
   LabelsChanged: 'labels:changed',
+  SyncProgress: 'sync:progress',
 } as const
 
 export interface EventPayloads {
@@ -288,6 +320,7 @@ export interface EventPayloads {
   'messages:changed': { accountId: string }
   'accounts:changed': { accountId?: string } | undefined
   'labels:changed': { accountId?: string } | undefined
+  'sync:progress': SyncProgress
   'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }
   'classify:finished': Partial<ClassifyJobProgress>
   'mail:new': { accountId: string; count: number; latest: MessageSummary }

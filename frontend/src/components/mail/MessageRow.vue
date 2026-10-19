@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ArchiveIcon, MailIcon, MailOpenIcon, PaperclipIcon, StarIcon, Trash2Icon } from '@lucide/vue'
-import { Checkbox } from '@/components/ui/checkbox'
 import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
 import { displayName, listDate } from '@/lib/format'
@@ -17,6 +16,8 @@ const props = defineProps<{
   showAccount: boolean
   labelMap: Map<string, Label>
   sentView: boolean
+  /** Only the hovered row mounts its quick actions (keeps scrolling cheap). */
+  hovered: boolean
 }>()
 
 const emit = defineEmits<{
@@ -66,12 +67,20 @@ const date = computed(() => listDate(props.message.date))
 
     <!-- Leading gutter: unread dot, or a checkbox on hover / selection mode -->
     <div :class="['flex w-8 shrink-0 justify-center', compact ? 'items-center' : 'pt-[15px]']" @click.stop="emit('toggle', $event)">
-      <Checkbox
-        :model-value="selected"
-        :class="[selected || selectionMode ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100', 'transition-opacity']"
+      <!-- Lightweight checkbox (a reka Checkbox per virtual row is costly while scrolling) -->
+      <span
+        role="checkbox"
+        :aria-checked="selected"
         aria-label="Select message"
+        :class="[
+          'flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-[opacity,background-color]',
+          selected ? 'bg-primary border-primary text-primary-foreground' : 'border-input bg-background dark:bg-input/30',
+          selected || selectionMode ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100',
+        ]"
         @click.stop="emit('toggle', $event)"
-      />
+      >
+        <svg v-if="selected" viewBox="0 0 24 24" class="size-3" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+      </span>
       <span
         v-if="message.unread && !selected && !selectionMode"
         class="bg-primary pointer-events-none absolute size-2 rounded-full transition-opacity group-hover/row:opacity-0"
@@ -82,7 +91,9 @@ const date = computed(() => listDate(props.message.date))
     <!-- Comfortable: three lines -->
     <div v-if="!compact" class="flex min-w-0 flex-1 flex-col justify-center gap-0.5 py-2">
       <div class="flex items-center gap-2">
-        <span :class="['min-w-0 flex-1 truncate text-[13.5px]', message.unread ? 'text-foreground font-semibold' : 'text-foreground/80 font-medium']">{{ who }}</span>
+        <span :class="['min-w-0 truncate text-[13.5px]', message.unread ? 'text-foreground font-semibold' : 'text-foreground/80 font-medium']">{{ who }}</span>
+        <span v-if="(message.threadCount ?? 1) > 1" class="text-muted-foreground shrink-0 text-[11px] tabular-nums" :aria-label="`${message.threadCount} messages`">{{ message.threadCount }}</span>
+        <span class="flex-1" />
         <PaperclipIcon v-if="message.hasAttachments" class="text-muted-foreground size-3.5 shrink-0" />
         <StarIcon v-if="message.starred" class="size-3.5 shrink-0 fill-amber-400 text-amber-400 group-hover/row:invisible" />
         <span :class="['shrink-0 text-xs tabular-nums group-hover/row:invisible', message.unread ? 'text-foreground font-medium' : 'text-muted-foreground']">{{ date }}</span>
@@ -101,7 +112,7 @@ const date = computed(() => listDate(props.message.date))
 
     <!-- Compact: one line -->
     <div v-else class="flex min-w-0 flex-1 items-center gap-3">
-      <span :class="['w-[28%] max-w-44 min-w-24 shrink-0 truncate text-[13px]', message.unread ? 'font-semibold' : 'text-foreground/80']">{{ who }}</span>
+      <span :class="['w-[28%] max-w-44 min-w-24 shrink-0 truncate text-[13px]', message.unread ? 'font-semibold' : 'text-foreground/80']">{{ who }}<span v-if="(message.threadCount ?? 1) > 1" class="text-muted-foreground ml-1 text-[11px] font-normal">{{ message.threadCount }}</span></span>
       <span class="min-w-0 flex-1 truncate text-[13px]">
         <span :class="message.unread ? 'font-medium' : 'text-foreground/80'">{{ message.subject || '(no subject)' }}</span>
         <span class="text-muted-foreground"> — {{ message.snippet }}</span>
@@ -116,8 +127,9 @@ const date = computed(() => listDate(props.message.date))
 
     <!-- Hover quick actions -->
     <div
+      v-if="hovered"
       :class="[
-        'bg-background/95 border-border/70 absolute right-2 hidden items-center gap-0.5 rounded-md border p-0.5 shadow-sm backdrop-blur group-hover/row:flex',
+        'bg-background/95 border-border/70 absolute right-2 flex items-center gap-0.5 rounded-md border p-0.5 shadow-sm backdrop-blur',
         compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5',
       ]"
       @click.stop

@@ -47,6 +47,11 @@ export function useBackendEvents() {
     }),
     api.on('accounts:changed', () => void reloadAccounts()),
     api.on('labels:changed', () => refreshLabels()),
+    api.on('sync:progress', (p) => {
+      if (!p?.accountId) return
+      accounts.setProgress(p)
+      if (!accounts.syncing.has(p.accountId)) accounts.setSyncing(p.accountId, true)
+    }),
     api.on('classify:progress', (p) => p && ai.onProgress(p)),
     api.on('classify:finished', (p) => ai.onFinished(p ?? {})),
     api.on('mail:new', (p) => {

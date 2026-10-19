@@ -45,6 +45,8 @@ type Message struct {
 	// IncludeBcc writes the Bcc header (Gmail's API reads recipients from
 	// headers and strips Bcc before delivery).
 	IncludeBcc bool
+	// Headers are extra header fields (values are written as given).
+	Headers map[string]string
 }
 
 // FormatAddress encodes an address for a header, RFC 2047-encoding
@@ -122,6 +124,16 @@ func Build(m Message) ([]byte, error) {
 	h("Message-ID", m.MessageID)
 	h("In-Reply-To", m.InReplyTo)
 	h("References", m.References)
+	extra := make([]string, 0, len(m.Headers))
+	for k := range m.Headers {
+		extra = append(extra, k)
+	}
+	sort.Strings(extra)
+	for _, k := range extra {
+		if !strings.ContainsAny(k, ":\r\n") && !strings.ContainsAny(m.Headers[k], "\r\n") {
+			h(k, m.Headers[k])
+		}
+	}
 	h("MIME-Version", "1.0")
 	h("X-Mailer", "gomail")
 

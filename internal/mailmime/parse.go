@@ -9,11 +9,14 @@ import (
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"golang.org/x/net/html/charset"
+
+	imail "github.com/AVMG20/gomail/internal/mail"
 
 	"github.com/AVMG20/gomail/internal/models"
 )
@@ -41,6 +44,38 @@ type Parsed struct {
 	HTML        string // UTF-8
 	Text        string // UTF-8
 	Attachments []Part // non-body parts (including inline images)
+	Unsubscribe imail.Unsubscribe
+}
+
+// ParseListUnsubscribe parses List-Unsubscribe and List-Unsubscribe-Post
+// (RFC 2369 / RFC 8058). Only http(s) and mailto URIs are kept; one-click
+// requires an https URL.
+func ParseListUnsubscribe(header, post string) imail.Unsubscribe {
+	var u imail.Unsubscribe
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.HasPrefix(part, "<") || !strings.HasSuffix(part, ">") {
+			continue
+		}
+		uri := strings.TrimSpace(part[1 : len(part)-1])
+		pu, err := url.Parse(uri)
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(pu.Scheme) {
+		case "https", "http":
+			if u.URL == "" && pu.Host != "" {
+				u.URL = uri
+			}
+		case "mailto":
+			if u.Mailto == "" && pu.Opaque != "" {
+				u.Mailto = uri
+			}
+		}
+	}
+	u.OneClick = strings.HasPrefix(strings.ToLower(u.URL), "https://") &&
+		strings.Contains(strings.ToLower(strings.ReplaceAll(post, " ", "")), "list-unsubscribe=one-click")
+	return u
 }
 
 var wordDecoder = &mime.WordDecoder{CharsetReader: func(cs string, r io.Reader) (io.Reader, error) {
@@ -170,16 +205,17 @@ func Parse(raw []byte) (*Parsed, error) {
 	}
 	h := msg.Header
 	p := &Parsed{
-		From:       ParseAddress(h.Get("From")),
-		To:         ParseAddressList(h.Get("To")),
-		Cc:         ParseAddressList(h.Get("Cc")),
-		Bcc:        ParseAddressList(h.Get("Bcc")),
-		ReplyTo:    ParseAddressList(h.Get("Reply-To")),
-		Subject:    DecodeHeader(h.Get("Subject")),
-		Date:       ParseDate(h.Get("Date")),
-		MessageID:  strings.TrimSpace(h.Get("Message-ID")),
-		InReplyTo:  strings.TrimSpace(h.Get("In-Reply-To")),
-		References: strings.Join(strings.Fields(h.Get("References")), " "),
+		From:        ParseAddress(h.Get("From")),
+		To:          ParseAddressList(h.Get("To")),
+		Cc:          ParseAddressList(h.Get("Cc")),
+		Bcc:         ParseAddressList(h.Get("Bcc")),
+		ReplyTo:     ParseAddressList(h.Get("Reply-To")),
+		Subject:     DecodeHeader(h.Get("Subject")),
+		Date:        ParseDate(h.Get("Date")),
+		MessageID:   strings.TrimSpace(h.Get("Message-ID")),
+		InReplyTo:   strings.TrimSpace(h.Get("In-Reply-To")),
+		References:  strings.Join(strings.Fields(h.Get("References")), " "),
+		Unsubscribe: ParseListUnsubscribe(h.Get("List-Unsubscribe"), h.Get("List-Unsubscribe-Post")),
 	}
 	body, err := io.ReadAll(msg.Body)
 	if err != nil {

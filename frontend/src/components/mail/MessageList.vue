@@ -16,6 +16,8 @@ import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { dateGroup } from '@/lib/dateGroups'
+import { hasMethod } from '@/lib/api'
+import ReauthBanner from './ReauthBanner.vue'
 import { defineAsyncComponent, h } from 'vue'
 const BulkBar = defineAsyncComponent(() => import('./BulkBar.vue'))
 const RowContextMenu = defineAsyncComponent(() => import('./RowContextMenu.vue'))
@@ -62,15 +64,33 @@ function onSearchKey(e: KeyboardEvent) {
   }
 }
 
+// Track the hovered row via delegation so only it mounts quick actions.
+const hoveredId = ref<string | null>(null)
+function onHover(e: MouseEvent) {
+  const id = ((e.target as HTMLElement).closest('[data-id]') as HTMLElement | null)?.dataset.id ?? null
+  if (id !== hoveredId.value) hoveredId.value = id
+}
+
+// Group label per message object (objects are stable across pages).
+const groupCache = new WeakMap<object, string>()
+function groupOf(m: { date: string }): string {
+  let g = groupCache.get(m)
+  if (!g) {
+    g = dateGroup(m.date)
+    groupCache.set(m, g)
+  }
+  return g
+}
+
 // ---- rows: messages interleaved with light date-group headers
-type Row = { kind: 'header'; key: string; label: string } | { kind: 'msg'; key: string; index: number; group: string } | { kind: 'loader'; key: string }
+type Row = { kind: 'header'; key: string; label: string } | { kind: 'msg'; key: string; index: number; group: string } | { kind: 'loader'; key: string } | { kind: 'older'; key: string }
 const HEADER_H = computed(() => (compact.value ? 26 : 30))
 const rows = computed<Row[]>(() => {
   const out: Row[] = []
   let last = ''
   const list = mail.messages
   for (let i = 0; i < list.length; i++) {
-    const g = dateGroup(list[i].date)
+    const g = groupOf(list[i])
     if (g !== last) {
       out.push({ kind: 'header', key: `h:${g}:${i}`, label: g })
       last = g
@@ -78,6 +98,7 @@ const rows = computed<Row[]>(() => {
     out.push({ kind: 'msg', key: list[i].id, index: i, group: g })
   }
   if (mail.hasMore) out.push({ kind: 'loader', key: 'loader' })
+  else if (mail.hasMoreRemote && list.length && hasMethod('LoadOlder')) out.push({ kind: 'older', key: 'older' })
   return out
 })
 const rowIndexById = computed(() => {
@@ -103,6 +124,7 @@ watch([rowHeight, HEADER_H], () => virtualizer.value.measure())
 watch(items, (list) => {
   const last = list[list.length - 1]
   if (last && last.index >= rows.value.length - 12 && mail.hasMore) void mail.loadMore()
+  else if (last && rows.value[last.index]?.kind === 'older') void mail.loadOlder()
 })
 
 // Sticky group label: the group of the first visible row, pushed up by the next header.
@@ -147,28 +169,24 @@ watch(() => mail.openId, (id) => {
 // New mail arrives at the top without moving what you are reading: keep the
 // first visible message anchored and offer a "N new messages" pill instead.
 const newCount = ref(0)
-let anchor: { id: string; delta: number } | null = null
-watch(() => mail.messages, () => {
-  anchor = null
+watch(rows, async (now, old) => {
   const el = scroller.value
-  if (!el || el.scrollTop <= 0 || mail.status !== 'ready') return
-  const first = items.value.find((it) => it.end > el.scrollTop && rows.value[it.index]?.kind === 'msg')
-  if (first) anchor = { id: rows.value[first.index].key, delta: first.start - el.scrollTop }
-}, { flush: 'pre' })
-watch(() => mail.messages, async (now, prev) => {
-  const a = anchor
-  anchor = null
-  if (!a || !scroller.value) return
+  if (!el || el.scrollTop <= 0 || mail.status !== 'ready' || !old?.length) return
+  // The virtualizer still describes the old rows here (pre-flush): anchor on them.
+  const first = items.value.find((it) => it.end > el.scrollTop && old[it.index]?.kind === 'msg')
+  if (!first) return
+  const anchorId = old[first.index].key
+  const delta = first.start - el.scrollTop
+  const before = new Set(old.filter((r) => r.kind === 'msg').map((r) => r.key))
   await nextTick()
-  const idx = rowIndexById.value.get(a.id)
-  if (idx === undefined) return
-  const before = new Set(prev.map((m) => m.id))
-  const msgIndex = (rows.value[idx] as { index: number }).index
-  const added = now.slice(0, msgIndex).filter((m) => !before.has(m.id)).length
+  const idx = rowIndexById.value.get(anchorId)
+  if (idx === undefined || !scroller.value) return
+  const added = now.slice(0, idx).filter((r) => r.kind === 'msg' && !before.has(r.key)).length
   const offset = virtualizer.value.getOffsetForIndex(idx, 'start')?.[0]
-  if (offset === undefined) return
-  const target = offset - a.delta
-  if (Math.abs(target - scroller.value.scrollTop) > 1) scroller.value.scrollTop = target
+  if (offset !== undefined) {
+    const target = offset - delta
+    if (Math.abs(target - scroller.value.scrollTop) > 1) scroller.value.scrollTop = target
+  }
   if (added > 0) newCount.value += added
 })
 function jumpToTop() {
@@ -294,7 +312,7 @@ const emptyState = computed(() => {
         </div>
         <Tip label="Unread only">
           <Toggle v-model="mail.unreadOnly" size="sm" class="text-muted-foreground data-[state=on]:text-foreground h-8 gap-1.5 px-2 text-xs" aria-label="Unread only">
-            <MailIcon class="size-4" /> Unread
+            <MailIcon class="size-4" /> <span class="hidden @[440px]:inline">Unread</span>
           </Toggle>
         </Tip>
         <LabelFilter />
@@ -309,6 +327,8 @@ const emptyState = computed(() => {
         <button type="button" class="text-muted-foreground hover:text-foreground ml-1 text-xs" @click="mail.clearLabelFilter()">Clear</button>
       </div>
     </header>
+
+    <ReauthBanner />
 
     <!-- Select-all banner -->
     <div
@@ -354,6 +374,8 @@ const emptyState = computed(() => {
           :aria-activedescendant="mail.openId ? `row-${mail.openId}` : undefined"
           aria-multiselectable="true"
           @scroll.passive="onScroll"
+          @mouseover="onHover"
+          @mouseleave="hoveredId = null"
           @contextmenu="onContext"
         >
           <div v-if="mail.status === 'loading'" aria-busy="true">
@@ -408,6 +430,7 @@ const emptyState = computed(() => {
                   :show-account="mail.isUnified"
                   :label-map="settings.labelMap"
                   :sent-view="sentView"
+                  :hovered="hoveredId === rows[it.index].key"
                   @open="(e) => onRowClick(rows[it.index].key, e)"
                   @toggle="(e) => onToggle(rows[it.index].key, e)"
                   @archive="quick(() => mail.archive([rows[it.index].key]))"
@@ -418,6 +441,10 @@ const emptyState = computed(() => {
               </template>
               <div v-else-if="rows[it.index]?.kind === 'header'" class="text-muted-foreground/80 flex h-full items-end px-4 pb-1 pl-12 text-[11px] font-medium tracking-wide uppercase" role="presentation">
                 {{ (rows[it.index] as HeaderRow).label }}
+              </div>
+              <div v-else-if="rows[it.index]?.kind === 'older'" class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
+                <template v-if="mail.loadingOlder"><RefreshCwIcon class="size-3.5 animate-spin" /> Fetching older mail from the server…</template>
+                <button v-else type="button" class="hover:text-foreground rounded px-2 py-1 font-medium" @click="mail.loadOlder()">Load older messages</button>
               </div>
               <div v-else class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
                 <RefreshCwIcon class="size-3.5 animate-spin" /> Loading more…

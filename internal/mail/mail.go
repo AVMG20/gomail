@@ -42,7 +42,19 @@ type Message struct {
 	// Labels are the provider label names on the message (Gmail user labels,
 	// Outlook categories). System labels/folders are never included.
 	Labels []string
+	// Unsubscribe holds List-Unsubscribe info when known at sync time.
+	Unsubscribe Unsubscribe
 }
+
+// Unsubscribe is parsed List-Unsubscribe / List-Unsubscribe-Post data.
+type Unsubscribe struct {
+	URL      string // https URL
+	Mailto   string // mailto: URI
+	OneClick bool   // RFC 8058 List-Unsubscribe-Post: List-Unsubscribe=One-Click
+}
+
+// Empty reports whether no unsubscribe method is known.
+func (u Unsubscribe) Empty() bool { return u.URL == "" && u.Mailto == "" }
 
 // Label is a provider-side label definition (Gmail user label, Outlook
 // master category).
@@ -68,9 +80,10 @@ type Body struct {
 	MessageID  string
 	InReplyTo  string
 	References string
-	Cc         []models.Address
-	Bcc        []models.Address
-	ReplyTo    []models.Address
+	Cc          []models.Address
+	Bcc         []models.Address
+	ReplyTo     []models.Address
+	Unsubscribe Unsubscribe
 }
 
 // SyncResult is what a provider returns from one sync round.
@@ -105,6 +118,26 @@ type Outgoing struct {
 	Mode        string // "new" | "reply" | "replyAll" | "forward"
 	// Original is set for replies/forwards.
 	Original *Message
+	// ForwardAttachments are the original's attachments to include when
+	// forwarding (filled by the core for providers that need them).
+	ForwardAttachments []OutgoingAttachment
+}
+
+// SearchQuery is a provider-neutral server search.
+type SearchQuery struct {
+	Terms         []string // words or phrases
+	From, To      []string
+	Subject       []string
+	Unread        *bool
+	Starred       *bool
+	HasAttachment bool
+	Before, After time.Time
+}
+
+// Empty reports whether the query has no criteria.
+func (q SearchQuery) Empty() bool {
+	return len(q.Terms)+len(q.From)+len(q.To)+len(q.Subject) == 0 && q.Unread == nil && q.Starred == nil &&
+		!q.HasAttachment && q.Before.IsZero() && q.After.IsZero()
 }
 
 type OutgoingAttachment struct {

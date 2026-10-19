@@ -4,7 +4,7 @@ import { colorForString, initials } from '@/lib/format'
 import type { Address } from '@/lib/types'
 
 const props = withDefaults(defineProps<{ address: Address; size?: number }>(), { size: 32 })
-const text = computed(() => initials(props.address.name || props.address.email))
+const text = computed(() => initials(props.address.name, props.address.email))
 const bg = computed(() => colorForString(props.address.email || props.address.name))
 </script>
 

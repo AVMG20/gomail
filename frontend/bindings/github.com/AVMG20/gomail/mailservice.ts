@@ -67,10 +67,10 @@ export function ClassifyQuery(q: models$0.ListQuery, onlyUnlabeled: boolean, inc
 }
 
 /**
- * DraftReply drafts a plain-text reply following optional instructions.
+ * DeleteDraft discards a draft (draft id or draft message id).
  */
-export function DraftReply(id: string, instructions: string): $CancellablePromise<string> {
-    return $Call.ByID(2433051139, id, instructions);
+export function DeleteDraft(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1473408140, id);
 }
 
 /**
@@ -93,6 +93,13 @@ export function GetAccounts(): $CancellablePromise<models$0.Account[] | null> {
  */
 export function GetAppInfo(): $CancellablePromise<models$0.AppInfo> {
     return $Call.ByID(1215559341);
+}
+
+/**
+ * GetAttachmentData returns attachment bytes (max 15 MB) for previews.
+ */
+export function GetAttachmentData(messageID: string, attachmentID: string): $CancellablePromise<models$0.AttachmentData> {
+    return $Call.ByID(3612036539, messageID, attachmentID);
 }
 
 /**
@@ -131,6 +138,14 @@ export function GetMessage(id: string): $CancellablePromise<models$0.Message> {
     return $Call.ByID(1577330773, id);
 }
 
+/**
+ * GetMessageWithRemoteContent returns a message with remote images and
+ * CSS kept (the "Show images" button).
+ */
+export function GetMessageWithRemoteContent(id: string): $CancellablePromise<models$0.Message> {
+    return $Call.ByID(519860792, id);
+}
+
 export function GetSettings(): $CancellablePromise<models$0.Settings> {
     return $Call.ByID(867973699);
 }
@@ -164,6 +179,15 @@ export function ListMessages(q: models$0.ListQuery): $CancellablePromise<models$
     return $Call.ByID(3645670514, q);
 }
 
+/**
+ * LoadOlder fetches the next page of older mail from the server for the
+ * view q (use when ListMessages reports hasMoreRemote). It returns how
+ * many messages were added; messages:changed follows.
+ */
+export function LoadOlder(q: models$0.ListQuery): $CancellablePromise<number> {
+    return $Call.ByID(2167194788, q);
+}
+
 export function MarkRead(ids: string[] | null, read: boolean): $CancellablePromise<void> {
     return $Call.ByID(2773403271, ids, read);
 }
@@ -177,6 +201,14 @@ export function MoveToFolder(ids: string[] | null, folderID: string): $Cancellab
  */
 export function OpenExternalURL(url: string): $CancellablePromise<void> {
     return $Call.ByID(1247249626, url);
+}
+
+/**
+ * ReauthAccount signs in again for an account with needsReauth, keeping
+ * its local data.
+ */
+export function ReauthAccount(accountID: string): $CancellablePromise<models$0.Account> {
+    return $Call.ByID(2640192080, accountID);
 }
 
 /**
@@ -213,6 +245,15 @@ export function ResolveQueryIDs(q: models$0.ListQuery, max: number): $Cancellabl
  */
 export function SaveAttachment(messageID: string, attachmentID: string): $CancellablePromise<void> {
     return $Call.ByID(1079976658, messageID, attachmentID);
+}
+
+/**
+ * SaveDraft creates (draftID "") or updates a draft and returns its draft
+ * id. Saves within 3 s are coalesced. draftID may also be the id of a
+ * message in a Drafts folder (to keep editing an existing draft).
+ */
+export function SaveDraft(req: models$0.ComposeRequest, draftID: string): $CancellablePromise<string> {
+    return $Call.ByID(2453387042, req, draftID);
 }
 
 export function SaveSettings(st: models$0.Settings): $CancellablePromise<void> {
@@ -268,6 +309,14 @@ export function TestOpenRouter(): $CancellablePromise<void> {
 
 export function Trash(ids: string[] | null): $CancellablePromise<void> {
     return $Call.ByID(2569072960, ids);
+}
+
+/**
+ * Unsubscribe uses the message's List-Unsubscribe header (one-click POST,
+ * unsubscribe email, or opening the link in the browser).
+ */
+export function Unsubscribe(messageID: string): $CancellablePromise<models$0.UnsubscribeResult> {
+    return $Call.ByID(1835183503, messageID);
 }
 
 /**

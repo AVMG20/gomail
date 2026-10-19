@@ -15,7 +15,7 @@ const compose = useComposeStore()
           {{ d.subject.trim() || 'New message' }}
         </button>
         <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted flex size-6 items-center justify-center rounded" aria-label="Open" @click="compose.focus(d.id)"><Maximize2Icon class="size-3.5" /></button>
-        <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted flex size-6 items-center justify-center rounded" aria-label="Close" @click="compose.close(d.id)"><XIcon class="size-3.5" /></button>
+        <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted flex size-6 items-center justify-center rounded" aria-label="Close" @click="compose.saveAndClose(d.id).then((ok) => !ok && compose.focus(d.id))"><XIcon class="size-3.5" /></button>
       </div>
       <ComposeWindow v-else :draft="d" />
     </template>

@@ -1,0 +1,392 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/AVMG20/gomail/internal/models"
+)
+
+// ListOptions control how ListMessages groups results.
+type ListOptions struct {
+	// Conversations returns one row per thread (its latest message
+	// matching the query) with thread-level aggregates.
+	Conversations bool
+}
+
+// ConversationPrefix marks conversation ids ("c:<anchor message id>").
+const ConversationPrefix = "c:"
+
+var aliasRe = regexp.MustCompile(`\bm\.`)
+
+// latestInThread restricts w to the newest message (by date, id) of each
+// thread among the messages matching w.
+func latestInThread(w *where) {
+	inner := []string{"n.account_id = m.account_id", "n.thread_key = m.thread_key",
+		"(n.date > m.date OR (n.date = m.date AND n.id > m.id))"}
+	for _, c := range w.conds {
+		inner = append(inner, aliasRe.ReplaceAllString(c, "n."))
+	}
+	args := append([]any(nil), w.args...)
+	w.add(`NOT EXISTS (SELECT 1 FROM messages n WHERE `+strings.Join(inner, " AND ")+`)`, args...)
+}
+
+// ListMessages returns one page of message summaries (or conversations),
+// newest first, using keyset pagination on (date, id).
+func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.MessagePage, error) {
+	page := models.MessagePage{Messages: []models.MessageSummary{}}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = DefaultPageSize
+	}
+	if limit > MaxPageSize {
+		limit = MaxPageSize
+	}
+	w, err := s.buildFilter(q, FilterOptions{})
+	if err != nil {
+		return page, err
+	}
+	if opt.Conversations {
+		latestInThread(w)
+	}
+	if err := s.db.QueryRow(`SELECT count(*) FROM messages m`+w.sql(), w.args...).Scan(&page.Total); err != nil {
+		return page, err
+	}
+	if q.Cursor != "" {
+		d, id, err := decodeCursor(q.Cursor)
+		if err != nil {
+			return page, err
+		}
+		w.add(`(m.date < ? OR (m.date = ? AND m.id < ?))`, d, d, id)
+	}
+	rows, err := s.db.Query(`SELECT `+s.summaryCols()+` FROM messages m`+w.sql()+` ORDER BY m.date DESC, m.id DESC LIMIT ?`,
+		append(w.args, limit+1)...)
+	if err != nil {
+		return page, err
+	}
+	for rows.Next() {
+		m, err := scanSummary(rows)
+		if err != nil {
+			rows.Close()
+			return page, err
+		}
+		page.Messages = append(page.Messages, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return page, err
+	}
+	if len(page.Messages) > limit {
+		page.Messages = page.Messages[:limit]
+		last := page.Messages[limit-1]
+		page.NextCursor = encodeCursor(toMillis(last.Date), last.ID)
+	}
+	if opt.Conversations {
+		if err := s.aggregateThreads(page.Messages); err != nil {
+			return page, err
+		}
+	} else {
+		for i := range page.Messages {
+			page.Messages[i].ThreadCount = 1
+			page.Messages[i].Participants = []string{displayName(page.Messages[i].From)}
+		}
+	}
+	if page.NextCursor == "" {
+		page.HasMoreRemote = s.hasMoreRemote(q)
+	}
+	return page, nil
+}
+
+func displayName(a models.Address) string {
+	if a.Name != "" {
+		return a.Name
+	}
+	if i := strings.Index(a.Email, "@"); i > 0 {
+		return a.Email[:i]
+	}
+	return a.Email
+}
+
+// sameThread selects thread siblings of the anchor ?1 (account, thread and
+// trash-ness: trashed messages only group with trashed ones).
+const sameThread = `t.account_id = x.account_id AND t.thread_key = x.thread_key
+	AND ((t.folder_kinds & 32) != 0) = ((x.folder_kinds & 32) != 0)`
+
+var sourceRank = map[string]int{"manual": 4, "provider": 3, "system": 2, "ai": 1}
+
+// aggregateThreads fills thread-level fields of conversation rows.
+func (s *Store) aggregateThreads(rows []models.MessageSummary) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	msgs, err := s.db.Prepare(`SELECT t.unread, t.starred, t.has_attachments, t.from_name, t.from_email, a.email
+		FROM messages x JOIN messages t ON ` + sameThread + ` JOIN accounts a ON a.id = t.account_id
+		WHERE x.id = ? ORDER BY t.date, t.id`)
+	if err != nil {
+		return err
+	}
+	defer msgs.Close()
+	labels, err := s.db.Prepare(`SELECT ml.label_id, ml.source, max(ml.confidence)
+		FROM messages x JOIN messages t ON ` + sameThread + ` JOIN message_labels ml ON ml.message_id = t.id
+		WHERE x.id = ?` + s.labelCond() + ` GROUP BY ml.label_id, ml.source`)
+	if err != nil {
+		return err
+	}
+	defer labels.Close()
+	for i := range rows {
+		r := &rows[i]
+		r.ConversationID = ConversationPrefix + r.ID
+		rs, err := msgs.Query(r.ID)
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		r.Participants = []string{}
+		count := 0
+		for rs.Next() {
+			var unread, starred, att int
+			var name, email, me string
+			if err := rs.Scan(&unread, &starred, &att, &name, &email, &me); err != nil {
+				rs.Close()
+				return err
+			}
+			count++
+			r.Unread = r.Unread || unread == 1
+			r.Starred = r.Starred || starred == 1
+			r.HasAttachments = r.HasAttachments || att == 1
+			p := displayName(models.Address{Name: name, Email: email})
+			if strings.EqualFold(email, me) {
+				p = "me"
+			}
+			if !seen[p] && len(r.Participants) < 6 {
+				seen[p] = true
+				r.Participants = append(r.Participants, p)
+			}
+		}
+		rs.Close()
+		r.ThreadCount = max(count, 1)
+		lr, err := labels.Query(r.ID)
+		if err != nil {
+			return err
+		}
+		best := map[string]models.MessageLabel{}
+		var order []string
+		for lr.Next() {
+			var l models.MessageLabel
+			if err := lr.Scan(&l.LabelID, &l.Source, &l.Confidence); err != nil {
+				lr.Close()
+				return err
+			}
+			cur, ok := best[l.LabelID]
+			if !ok {
+				order = append(order, l.LabelID)
+			}
+			if !ok || sourceRank[l.Source] > sourceRank[cur.Source] {
+				best[l.LabelID] = l
+			}
+		}
+		lr.Close()
+		if len(order) > 0 || len(r.Labels) > 0 {
+			ids, details := []string{}, []models.MessageLabel{}
+			for _, id := range sortedStrings(order) {
+				ids = append(ids, id)
+				details = append(details, best[id])
+			}
+			r.Labels, r.LabelDetails = ids, details
+		}
+	}
+	return nil
+}
+
+func sortedStrings(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
+// ExpandMode says how ExpandConversations widens conversation ids.
+type ExpandMode int
+
+const (
+	// ExpandThread: every message of the thread (same trash-ness).
+	ExpandThread ExpandMode = iota
+	// ExpandFolder: thread messages sharing a folder with the anchor (Gmail's
+	// All Mail is ignored unless it is the anchor's only folder). Used for
+	// archive/trash/move so e.g. replies in Sent stay where they are.
+	ExpandFolder
+	// ExpandAnchor: only the anchor (latest) message.
+	ExpandAnchor
+)
+
+// IsConversationID reports whether id is a conversation id.
+func IsConversationID(id string) bool { return strings.HasPrefix(id, ConversationPrefix) }
+
+// ExpandConversations replaces conversation ids by message ids. Plain
+// message ids pass through. Order is preserved, duplicates removed.
+func (s *Store) ExpandConversations(ids []string, mode ExpandMode) ([]string, error) {
+	out := make([]string, 0, len(ids))
+	seen := map[string]bool{}
+	push := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, id := range ids {
+		if !IsConversationID(id) {
+			push(id)
+			continue
+		}
+		anchor := strings.TrimPrefix(id, ConversationPrefix)
+		if mode == ExpandAnchor {
+			push(anchor)
+			continue
+		}
+		rows, err := s.db.Query(`SELECT t.id FROM messages x JOIN messages t ON `+sameThread+` WHERE x.id = ? ORDER BY t.date, t.id`, anchor)
+		if err != nil {
+			return nil, err
+		}
+		var thread []string
+		for rows.Next() {
+			var tid string
+			if err := rows.Scan(&tid); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			thread = append(thread, tid)
+		}
+		rows.Close()
+		if len(thread) == 0 {
+			continue // anchor vanished
+		}
+		if mode == ExpandThread {
+			for _, t := range thread {
+				push(t)
+			}
+			continue
+		}
+		folders, err := s.MessageFolders(thread)
+		if err != nil {
+			return nil, err
+		}
+		kinds, err := s.folderKinds(folders[anchor])
+		if err != nil {
+			return nil, err
+		}
+		scope := map[string]bool{}
+		for _, f := range folders[anchor] {
+			if kinds[f] != models.FolderArchive {
+				scope[f] = true
+			}
+		}
+		if len(scope) == 0 {
+			for _, f := range folders[anchor] {
+				scope[f] = true
+			}
+		}
+		push(anchor)
+		for _, t := range thread {
+			for _, f := range folders[t] {
+				if scope[f] {
+					push(t)
+					break
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) folderKinds(ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, id := range ids {
+		var k string
+		err := s.db.QueryRow(`SELECT kind FROM folders WHERE id = ?`, id).Scan(&k)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		out[id] = k
+	}
+	return out, nil
+}
+
+// QueryFolders returns the folders a plain folder view covers (FolderID,
+// or FolderKind across accounts). Views with search/label/unread filters
+// or the starred view return nil.
+func (s *Store) QueryFolders(q models.ListQuery) ([]models.Folder, error) {
+	if q.Search != "" || len(q.Labels) > 0 || q.Unlabeled || q.UnreadOnly {
+		return nil, nil
+	}
+	if q.FolderID != "" {
+		f, err := s.Folder(q.FolderID)
+		if err != nil || f.Kind == models.FolderStarred {
+			return nil, nil
+		}
+		return []models.Folder{f}, nil
+	}
+	if q.FolderKind == "" || q.FolderKind == models.FolderStarred {
+		return nil, nil
+	}
+	all, err := s.Folders(q.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	var out []models.Folder
+	for _, f := range all {
+		if f.Kind == q.FolderKind {
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+func olderDoneKey(folderID string) string { return "olderdone:" + folderID }
+
+// LocalFolderCount counts cached messages in a folder.
+func (s *Store) LocalFolderCount(folderID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT count(*) FROM message_folders WHERE folder_id = ?`, folderID).Scan(&n)
+	return n, err
+}
+
+// OldestInFolder returns the date of the oldest cached message in a folder.
+func (s *Store) OldestInFolder(folderID string) (time.Time, error) {
+	var ms sql.NullInt64
+	err := s.db.QueryRow(`SELECT min(m.date) FROM message_folders mf JOIN messages m ON m.id = mf.message_id WHERE mf.folder_id = ?`, folderID).Scan(&ms)
+	if err != nil || !ms.Valid {
+		return time.Time{}, err
+	}
+	return fromMillis(ms.Int64), nil
+}
+
+// SetOlderDone records that the server has no older mail for a folder.
+func (s *Store) SetOlderDone(accountID, folderID string, done bool) error {
+	v := ""
+	if done {
+		v = "1"
+	}
+	return s.tx(context.Background(), func(tx *sql.Tx) error { return saveSyncState(tx, accountID, map[string]string{olderDoneKey(folderID): v}) })
+}
+
+func (s *Store) hasMoreRemote(q models.ListQuery) bool {
+	folders, err := s.QueryFolders(q)
+	if err != nil {
+		return false
+	}
+	for _, f := range folders {
+		state, _ := s.SyncState(f.AccountID)
+		if state[olderDoneKey(f.ID)] == "1" {
+			continue
+		}
+		local, err := s.LocalFolderCount(f.ID)
+		if err == nil && f.Total > local {
+			return true
+		}
+	}
+	return false
+}

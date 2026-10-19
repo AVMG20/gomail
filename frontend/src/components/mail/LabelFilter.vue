@@ -31,7 +31,7 @@ const activeCount = computed(() => mail.labelFilter.labels.length + (mail.labelF
       <Tip label="Filter by label">
         <Button variant="ghost" size="sm" :class="['text-muted-foreground gap-1.5 px-2', activeCount && 'text-foreground bg-muted']" aria-label="Filter by label">
           <ListFilterIcon class="size-4" />
-          <span class="text-xs font-medium">Labels</span>
+          <span class="hidden text-xs font-medium @[440px]:inline">Labels</span>
           <span v-if="activeCount" class="bg-primary text-primary-foreground min-w-4 rounded-full px-1 text-[10px] leading-4 font-semibold">{{ activeCount }}</span>
         </Button>
       </Tip>

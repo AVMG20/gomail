@@ -31,9 +31,11 @@ type MailService struct {
 	tray     *application.SystemTray
 	notifier *notifications.NotificationService
 
-	trayMu    sync.Mutex
-	trayTimer *time.Timer
-	logCloser interface{ Close() error }
+	trayMu      sync.Mutex
+	trayTimer   *time.Timer
+	trayVisible bool // Settings.showInTray
+	closeToTray bool // Settings.closeToTray
+	logCloser   interface{ Close() error }
 }
 
 // NewMailService creates the service; the backend starts in ServiceStartup.
@@ -152,6 +154,41 @@ func (u desktopUI) Notify(title, body string) {
 	if err != nil {
 		slog.Debug("notification failed", "err", err)
 	}
+}
+
+// ApplySettings shows/hides the tray icon and enables close-to-tray.
+func (u desktopUI) ApplySettings(st models.Settings) {
+	m := u.m
+	m.trayMu.Lock()
+	m.trayVisible, m.closeToTray = st.ShowInTray, st.CloseToTray
+	m.trayMu.Unlock()
+	m.applyTray()
+}
+
+// applyTray syncs the tray icon visibility with the settings.
+func (m *MailService) applyTray() {
+	m.trayMu.Lock()
+	visible := m.trayVisible
+	m.trayMu.Unlock()
+	if m.tray == nil {
+		return
+	}
+	if visible {
+		m.tray.Show()
+	} else {
+		m.tray.Hide()
+	}
+	m.scheduleTrayUpdate()
+}
+
+// hideOnClose reports whether closing the window should hide it to the
+// tray: only when enabled and a tray host actually exists (some Linux
+// desktops have none, and a hidden window would be unreachable).
+func (m *MailService) hideOnClose() bool {
+	m.trayMu.Lock()
+	ok := m.trayVisible && m.closeToTray
+	m.trayMu.Unlock()
+	return ok && trayAvailable()
 }
 
 func (m *MailService) showWindow() {
@@ -375,6 +412,76 @@ func (m *MailService) OpenExternalURL(url string) error {
 	return s.OpenExternalURL(url)
 }
 
+// GetMessageWithRemoteContent returns a message with remote images and
+// CSS kept (the "Show images" button).
+func (m *MailService) GetMessageWithRemoteContent(id string) (models.Message, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.Message{}, err
+	}
+	return s.MessageWithRemoteContent(id)
+}
+
+// LoadOlder fetches the next page of older mail from the server for the
+// view q (use when ListMessages reports hasMoreRemote). It returns how
+// many messages were added; messages:changed follows.
+func (m *MailService) LoadOlder(q models.ListQuery) (int, error) {
+	s, err := m.ready()
+	if err != nil {
+		return 0, err
+	}
+	return s.LoadOlder(q)
+}
+
+// GetAttachmentData returns attachment bytes (max 15 MB) for previews.
+func (m *MailService) GetAttachmentData(messageID, attachmentID string) (models.AttachmentData, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.AttachmentData{}, err
+	}
+	return s.AttachmentData(messageID, attachmentID)
+}
+
+// SaveDraft creates (draftID "") or updates a draft and returns its draft
+// id. Saves within 3 s are coalesced. draftID may also be the id of a
+// message in a Drafts folder (to keep editing an existing draft).
+func (m *MailService) SaveDraft(req models.ComposeRequest, draftID string) (string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return "", err
+	}
+	return s.SaveDraft(req, draftID)
+}
+
+// DeleteDraft discards a draft (draft id or draft message id).
+func (m *MailService) DeleteDraft(id string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return s.DeleteDraft(id)
+}
+
+// Unsubscribe uses the message's List-Unsubscribe header (one-click POST,
+// unsubscribe email, or opening the link in the browser).
+func (m *MailService) Unsubscribe(messageID string) (models.UnsubscribeResult, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.UnsubscribeResult{}, err
+	}
+	return s.Unsubscribe(messageID)
+}
+
+// ReauthAccount signs in again for an account with needsReauth, keeping
+// its local data.
+func (m *MailService) ReauthAccount(accountID string) (models.Account, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.Account{}, err
+	}
+	return s.ReauthAccount(accountID)
+}
+
 // ---- Labels ----
 
 // AddLabel assigns a label manually.
@@ -526,15 +633,6 @@ func (m *MailService) SummarizeMessage(id string) (string, error) {
 		return "", err
 	}
 	return s.SummarizeMessage(id)
-}
-
-// DraftReply drafts a plain-text reply following optional instructions.
-func (m *MailService) DraftReply(id, instructions string) (string, error) {
-	s, err := m.ready()
-	if err != nil {
-		return "", err
-	}
-	return s.DraftReply(id, instructions)
 }
 
 // ImproveGrammar returns text with spelling and grammar corrected (meaning,

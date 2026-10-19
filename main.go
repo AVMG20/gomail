@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"github.com/AVMG20/gomail/internal/appicon"
@@ -72,6 +73,15 @@ func main() {
 	tray.SetMenu(menu)
 	tray.OnClick(func() { svc.showWindow() })
 	svc.tray = tray
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { svc.applyTray() })
+
+	// Close-to-tray: hide instead of closing when enabled.
+	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if svc.hideOnClose() {
+			e.Cancel()
+			window.Hide()
+		}
+	})
 
 	notifier.OnNotificationResponse(func(notifications.NotificationResult) { svc.showWindow() })
 

@@ -59,7 +59,8 @@ function badge(n: number) {
           :style="{ background: acc.color }"
         />
         <AccountAvatar :account="acc" :size="34" :active="active === acc.id" class="transition-transform group-active:scale-95" />
-        <span v-if="acc.unreadCount" class="absolute -top-0.5 -right-0.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-semibold text-white ring-2 ring-sidebar" :style="{ background: '#ef4444' }">{{ badge(acc.unreadCount) }}</span>
+        <span v-if="acc.needsReauth" class="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white ring-2 ring-sidebar" aria-label="Sign-in expired">!</span>
+        <span v-else-if="acc.unreadCount" class="absolute -top-0.5 -right-0.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-semibold text-white ring-2 ring-sidebar" :style="{ background: '#ef4444' }">{{ badge(acc.unreadCount) }}</span>
         <span v-if="accounts.syncing.has(acc.id)" class="absolute -bottom-0.5 left-1/2 h-0.5 w-5 -translate-x-1/2 overflow-hidden rounded-full bg-border">
           <span class="block h-full w-full animate-pulse rounded-full" :style="{ background: acc.color }" />
         </span>

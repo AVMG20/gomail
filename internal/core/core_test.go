@@ -41,6 +41,7 @@ func (f *fakeUI) OpenURL(u string) error {
 	return nil
 }
 func (f *fakeUI) SaveFile(string) (string, error) { return f.savePath, nil }
+func (f *fakeUI) ApplySettings(models.Settings)   {}
 func (f *fakeUI) Notify(title, body string) {
 	f.mu.Lock()
 	f.notified = append(f.notified, title)

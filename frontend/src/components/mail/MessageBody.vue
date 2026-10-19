@@ -217,7 +217,7 @@ onBeforeUnmount(() => ro?.disconnect())
 <template>
   <div>
     <div
-      v-if="isHtml && blockedCount > 0 && !allowRemote"
+      v-if="isHtml && (blockedCount > 0 || message.hasRemoteContent) && !allowRemote"
       class="bg-muted/60 text-muted-foreground mb-3 flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
     >
       <ImageOffIcon class="size-3.5 shrink-0" />

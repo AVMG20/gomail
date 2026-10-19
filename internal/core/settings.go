@@ -113,6 +113,7 @@ func (s *Service) SaveSettings(in models.Settings) error {
 	if old.SyncIntervalMinutes != in.SyncIntervalMinutes {
 		s.engine.Wake()
 	}
+	s.ui.ApplySettings(in)
 	s.emit(models.EventLabelsChanged, models.AccountEvent{})
 	s.emit(models.EventMessagesChanged, models.AccountEvent{})
 	return nil

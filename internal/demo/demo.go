@@ -59,6 +59,7 @@ type Provider struct {
 	NewMailChance float64
 	// Latency simulates network delay per call.
 	Latency time.Duration
+	size    int
 }
 
 type change struct {
@@ -68,7 +69,11 @@ type change struct {
 }
 
 // New creates a demo provider for an account from Accounts().
-func New(acct models.Account) *Provider {
+func New(acct models.Account) *Provider { return NewSized(acct, 52) }
+
+// NewSized creates a demo provider with about n generated messages (plus
+// threads, sent mail and drafts); used by benchmarks.
+func NewSized(acct models.Account, n int) *Provider {
 	seed := uint64(1)
 	if acct.Provider == models.ProviderOutlook {
 		seed = 2
@@ -82,6 +87,7 @@ func New(acct models.Account) *Provider {
 		NewMailChance: 0.35,
 		Latency:       150 * time.Millisecond,
 	}
+	p.size = n
 	p.setupFolders()
 	p.seed(time.Now())
 	return p
@@ -148,7 +154,7 @@ func (p *Provider) seed(now time.Time) {
 	}
 	var items []item
 	n := 0
-	for round := 0; n < 52; round++ {
+	for round := 0; n < p.size; round++ {
 		for i, t := range templates {
 			if round > 0 && (t.replies != nil || t.folder != "") {
 				continue // threads and spam only once
@@ -156,10 +162,14 @@ func (p *Provider) seed(now time.Time) {
 			if round > 0 && (i+round)%3 == 0 {
 				continue
 			}
-			age := time.Duration(n)*13*time.Hour + time.Duration(p.rng.IntN(300))*time.Minute
+			step := 13 * time.Hour
+			if p.size > 52 {
+				step = 30 * 24 * time.Hour / time.Duration(p.size)
+			}
+			age := time.Duration(n)*step + time.Duration(p.rng.IntN(300))*time.Minute
 			items = append(items, item{t, age, round})
 			n++
-			if n >= 52 {
+			if n >= p.size {
 				break
 			}
 		}
@@ -233,7 +243,10 @@ func variantSubject(s string, v int) string {
 
 // add builds the raw MIME for a template and stores the message.
 func (p *Provider) add(t template, to models.Address, date time.Time, folders []string, unread, starred bool, parent *message) string {
-	id := p.nextID()
+	return p.addID(p.nextID(), t, to, date, folders, unread, starred, parent, nil)
+}
+
+func (p *Provider) addID(id string, t template, to models.Address, date time.Time, folders []string, unread, starred bool, parent *message, extra []mailmime.Attachment) string {
 	from := models.Address{Name: t.fromName, Email: t.fromEmail}
 	cid := ""
 	var atts []mailmime.Attachment
@@ -244,6 +257,7 @@ func (p *Provider) add(t template, to models.Address, date time.Time, folders []
 	for _, a := range t.attachments {
 		atts = append(atts, mailmime.Attachment{Filename: a.name, MimeType: a.mime, Data: a.data()})
 	}
+	atts = append(atts, extra...)
 	body := htmlBody(t, cid)
 	if t.rawHTML != "" {
 		body = t.rawHTML
@@ -261,16 +275,26 @@ func (p *Provider) add(t template, to models.Address, date time.Time, folders []
 		thread = parent.meta.ThreadID
 	}
 	m.MessageID = "<" + id + "@demo.gomail>"
+	var unsub mail.Unsubscribe
+	if t.newsletter {
+		domain := t.fromEmail[strings.Index(t.fromEmail, "@")+1:]
+		m.Headers = map[string]string{
+			"List-Unsubscribe":      "<mailto:unsubscribe@" + domain + "?subject=unsubscribe>, <https://" + domain + "/unsubscribe?u=" + id + ">",
+			"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+		}
+		unsub = mailmime.ParseListUnsubscribe(m.Headers["List-Unsubscribe"], m.Headers["List-Unsubscribe-Post"])
+	}
 	raw, err := mailmime.Build(m)
 	if err != nil {
 		panic(err) // static demo data
 	}
 	text := mailmime.HTMLToText(body)
-	hasAtt := len(t.attachments) > 0
+	hasAtt := len(t.attachments)+len(extra) > 0
 	meta := mail.Message{
 		RemoteID: id, ThreadID: thread, FolderRemoteIDs: folders, From: from, To: m.To, Subject: t.subject,
 		Snippet: mailmime.Snippet(text, 140), Date: date.UTC(), Unread: unread, Starred: starred, HasAttachments: hasAtt,
 		MessageID: m.MessageID, InReplyTo: m.InReplyTo, References: m.References, Labels: append([]string(nil), t.labels...),
+		Unsubscribe: unsub,
 	}
 	p.msgs[id] = &message{meta: meta, raw: raw}
 	p.touch(id, false)
@@ -350,6 +374,7 @@ func (p *Provider) Sync(ctx context.Context, req provider.SyncRequest) (mail.Syn
 		for id := range p.msgs {
 			res.Upserts = append(res.Upserts, p.snapshot(id))
 		}
+		req.Report("fetching", len(res.Upserts), len(res.Upserts))
 		sort.Slice(res.Upserts, func(i, j int) bool { return res.Upserts[i].Date.After(res.Upserts[j].Date) })
 		res.State = map[string]string{"cursor": p.instance + ":" + strconv.Itoa(p.version)}
 		return res, nil
@@ -517,41 +542,145 @@ func (p *Provider) SetLabel(ctx context.Context, ids []string, name string, add 
 	})
 }
 
-func (p *Provider) Send(ctx context.Context, out mail.Outgoing) error {
-	if err := p.sleep(ctx); err != nil {
-		return err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
+// outgoing turns out into a template, the thread parent and the attachments
+// copied from a forwarded original (caller holds p.mu).
+func (p *Provider) outgoing(out mail.Outgoing) (template, *message, []mailmime.Attachment) {
 	var parent *message
+	var extra []mailmime.Attachment
 	if out.Original != nil {
-		parent = p.msgs[out.Original.RemoteID]
-		if out.Mode == "forward" {
-			parent = nil
+		orig := p.msgs[out.Original.RemoteID]
+		if out.Mode == "forward" && orig != nil {
+			if parsed, err := mailmime.Parse(orig.raw); err == nil {
+				for _, a := range parsed.Attachments {
+					if !a.Inline {
+						extra = append(extra, mailmime.Attachment{Filename: a.Filename, MimeType: a.ContentType, Data: a.Data})
+					}
+				}
+			}
+		} else {
+			parent = orig
 		}
 	}
 	html := out.HTML
 	if html == "" {
 		html = mailmime.TextToHTML(out.Text)
 	}
-	to := models.Address{}
-	if len(out.To) > 0 {
-		to = out.To[0]
-	}
 	t := template{fromName: p.me.Name, fromEmail: p.me.Email, subject: out.Subject, rawHTML: html}
 	for _, a := range out.Attachments {
 		data := a.Data
 		t.attachments = append(t.attachments, tmplAttachment{a.Filename, a.MimeType, func() []byte { return data }})
 	}
-	p.add(t, to, time.Now(), p.folderSet(models.FolderSent), false, false, parent)
+	return t, parent, extra
+}
+
+func firstAddr(list []models.Address) models.Address {
+	if len(list) > 0 {
+		return list[0]
+	}
+	return models.Address{}
+}
+
+func (p *Provider) Send(ctx context.Context, out mail.Outgoing) error {
+	if err := p.sleep(ctx); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sendLocked(out)
+	return nil
+}
+
+func (p *Provider) sendLocked(out mail.Outgoing) {
+	t, parent, extra := p.outgoing(out)
+	p.addID(p.nextID(), t, firstAddr(out.To), time.Now(), p.folderSet(models.FolderSent), false, false, parent, extra)
 	// Mail to yourself arrives in the inbox too.
 	for _, r := range append(append([]models.Address{}, out.To...), out.Cc...) {
 		if strings.EqualFold(r.Email, p.me.Email) {
-			p.add(t, p.me, time.Now(), p.folderSet(models.FolderInbox), true, false, parent)
+			p.addID(p.nextID(), t, p.me, time.Now(), p.folderSet(models.FolderInbox), true, false, parent, extra)
 			break
 		}
 	}
+}
+
+// ---- drafts ----
+
+func (p *Provider) SaveDraft(ctx context.Context, out mail.Outgoing, draftID string) (string, error) {
+	if err := p.sleep(ctx); err != nil {
+		return "", err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.msgs[draftID]; !ok || draftID == "" {
+		draftID = p.nextID()
+	}
+	t, parent, extra := p.outgoing(out)
+	p.addID(draftID, t, firstAddr(out.To), time.Now(), p.folderSet(models.FolderDrafts), false, false, parent, extra)
+	return draftID, nil
+}
+
+func (p *Provider) SendDraft(ctx context.Context, out mail.Outgoing, draftID string) error {
+	if err := p.sleep(ctx); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.msgs[draftID]; ok {
+		delete(p.msgs, draftID)
+		p.touch(draftID, true)
+	}
+	p.sendLocked(out)
 	return nil
+}
+
+func (p *Provider) DeleteDraft(ctx context.Context, draftID string) error {
+	if err := p.sleep(ctx); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.msgs[draftID]; ok {
+		delete(p.msgs, draftID)
+		p.touch(draftID, true)
+	}
+	return nil
+}
+
+func (p *Provider) DraftID(_ context.Context, messageRemoteID string) (string, error) {
+	return messageRemoteID, nil
+}
+
+// ---- older mail & search ----
+
+// ListOlder: the demo mailbox is fully synced up front.
+func (p *Provider) ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error) {
+	return nil, p.sleep(ctx)
+}
+
+// Search matches all terms against subject, sender and snippet.
+func (p *Provider) Search(ctx context.Context, q mail.SearchQuery, limit int) ([]mail.Message, error) {
+	if err := p.sleep(ctx); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []mail.Message
+	for id, m := range p.msgs {
+		hay := strings.ToLower(m.meta.Subject + " " + m.meta.From.Name + " " + m.meta.From.Email + " " + m.meta.Snippet)
+		ok := len(q.Terms)+len(q.From)+len(q.Subject) > 0
+		for _, t := range append(append(append([]string{}, q.Terms...), q.From...), q.Subject...) {
+			if !strings.Contains(hay, strings.ToLower(t)) {
+				ok = false
+			}
+		}
+		if ok {
+			out = append(out, p.snapshot(id))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date.After(out[j].Date) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 var _ provider.Provider = (*Provider)(nil)

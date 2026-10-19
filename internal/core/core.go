@@ -37,6 +37,8 @@ type UI interface {
 	SaveFile(defaultName string) (string, error)
 	// Notify shows a desktop notification (best effort).
 	Notify(title, body string)
+	// ApplySettings lets the shell react to settings (tray, close-to-tray).
+	ApplySettings(s models.Settings)
 }
 
 // Options configure a Service.
@@ -52,6 +54,8 @@ type Options struct {
 	ProviderFactory func(acct models.Account) (provider.Provider, error)
 	// OpenRouterBase overrides the OpenRouter URL (tests).
 	OpenRouterBase string
+	// Online overrides the connectivity probe (tests).
+	Online func(ctx context.Context) bool
 }
 
 // Service implements the application's use cases.
@@ -72,7 +76,10 @@ type Service struct {
 	addMu     sync.Mutex
 	addCancel context.CancelFunc
 
-	jobs jobManager
+	jobs     jobManager
+	drafts   draftSaver
+	searches remoteSearches
+	attCache *attCache
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -104,9 +111,16 @@ func New(opts Options) (*Service, error) {
 			return nil, err
 		}
 	}
+	online := opts.Online
+	if online == nil && !opts.Demo && opts.ProviderFactory == nil {
+		online = syncer.ProbeHosts("gmail.googleapis.com:443", "graph.microsoft.com:443", "www.google.com:443")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{opts: opts, store: st, secrets: sec, ui: opts.UI, providers: map[string]provider.Provider{}, ctx: ctx, cancel: cancel}
 	s.jobs.init()
+	s.drafts.entries = map[string]*draftEntry{}
+	s.searches.recent, s.searches.busy = map[string]time.Time{}, map[string]bool{}
+	s.attCache = newAttCache(filepath.Join(opts.DataDir, "attachments"), defaultAttCacheLimit)
 	if err := s.loadSettings(); err != nil {
 		st.Close()
 		return nil, err
@@ -121,7 +135,9 @@ func New(opts Options) (*Service, error) {
 			return time.Duration(s.Settings().SyncIntervalMinutes) * time.Minute
 		},
 		OnNewMessages: s.onNewMessages,
+		Online:        online,
 	})
+	s.ui.ApplySettings(s.Settings())
 	if opts.Demo {
 		if err := s.seedDemo(); err != nil {
 			st.Close()
@@ -303,15 +319,11 @@ func (s *Service) Accounts() ([]models.Account, error) {
 	return accts, nil
 }
 
-// AddAccount runs the OAuth flow and stores the account. Signing in again
-// with an existing account refreshes its tokens.
-func (s *Service) AddAccount(kind string) (models.Account, error) {
-	if kind != models.ProviderGmail && kind != models.ProviderOutlook {
-		return models.Account{}, fmt.Errorf("unknown provider %q", kind)
-	}
+// signIn runs the OAuth flow and reads the mailbox profile.
+func (s *Service) signIn(kind string) (provider.Profile, *oauth2.Token, error) {
 	creds := auth.Resolve(s.Settings())
 	if _, err := auth.Config(kind, creds, ""); err != nil {
-		return models.Account{}, errors.New(strings.TrimPrefix(err.Error(), auth.ErrNotConfigured.Error()+": "))
+		return provider.Profile{}, nil, errors.New(strings.TrimPrefix(err.Error(), auth.ErrNotConfigured.Error()+": "))
 	}
 	s.addMu.Lock()
 	if s.addCancel != nil {
@@ -324,20 +336,20 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 
 	tok, err := auth.Login(ctx, kind, creds, s.ui.OpenURL)
 	if err != nil {
-		return models.Account{}, err
+		return provider.Profile{}, nil, err
 	}
 	cfg, _ := auth.Config(kind, creds, "")
-	var current *oauth2.Token = tok
+	current := tok
 	ts := auth.NewTokenSource(cfg, tok, "the new account", func(t *oauth2.Token) error { current = t; return nil })
 	p, err := newProvider(kind, ts)
 	if err != nil {
-		return models.Account{}, err
+		return provider.Profile{}, nil, err
 	}
 	pctx, pcancel := context.WithTimeout(ctx, 30*time.Second)
 	defer pcancel()
 	prof, err := p.Profile(pctx)
 	if err != nil {
-		return models.Account{}, fmt.Errorf("signed in, but reading the mailbox failed: %w", err)
+		return provider.Profile{}, nil, fmt.Errorf("signed in, but reading the mailbox failed: %w", err)
 	}
 	id := auth.IdentityFromToken(tok)
 	if prof.Email == "" {
@@ -347,7 +359,20 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 		prof.Name = id.Name
 	}
 	if prof.Email == "" {
-		return models.Account{}, errors.New("signed in, but the provider did not return an email address")
+		return provider.Profile{}, nil, errors.New("signed in, but the provider did not return an email address")
+	}
+	return prof, current, nil
+}
+
+// AddAccount runs the OAuth flow and stores the account. Signing in again
+// with an existing account refreshes its tokens.
+func (s *Service) AddAccount(kind string) (models.Account, error) {
+	if kind != models.ProviderGmail && kind != models.ProviderOutlook {
+		return models.Account{}, fmt.Errorf("unknown provider %q", kind)
+	}
+	prof, tok, err := s.signIn(kind)
+	if err != nil {
+		return models.Account{}, err
 	}
 	acct, err := s.store.FindAccount(kind, prof.Email)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -359,24 +384,58 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 		if acct.DisplayName == "" {
 			acct.DisplayName = acct.Email
 		}
-		if err := auth.SaveToken(s.secrets, acct.ID, current); err != nil {
+		if err := auth.SaveToken(s.secrets, acct.ID, tok); err != nil {
 			return models.Account{}, fmt.Errorf("could not store the sign-in securely: %w", err)
 		}
 		if err := s.store.InsertAccount(acct); err != nil {
 			_ = s.secrets.Delete(auth.TokenKey(acct.ID))
 			return models.Account{}, err
 		}
-	} else if err := auth.SaveToken(s.secrets, acct.ID, current); err != nil {
+		slog.Info("account added", "provider", kind, "account", acct.ID)
+	} else if err := auth.SaveToken(s.secrets, acct.ID, tok); err != nil {
 		return models.Account{}, fmt.Errorf("could not store the sign-in securely: %w", err)
 	}
+	return s.afterSignIn(acct.ID)
+}
+
+// ReauthAccount signs in again for an account whose sign-in expired or was
+// revoked, keeping all local data. The same mailbox must be chosen.
+func (s *Service) ReauthAccount(accountID string) (models.Account, error) {
+	acct, err := s.store.Account(accountID)
+	if err != nil {
+		return acct, errors.New("account not found")
+	}
+	if s.opts.Demo && strings.HasPrefix(acct.ID, "demo-") {
+		_ = s.store.SetNeedsReauth(acct.ID, false)
+		return s.afterSignIn(acct.ID)
+	}
+	prof, tok, err := s.signIn(acct.Provider)
+	if err != nil {
+		return acct, err
+	}
+	if !strings.EqualFold(prof.Email, acct.Email) {
+		return acct, fmt.Errorf("you signed in as %s, but this account is %s. Sign in with %s, or add %s as a new account",
+			prof.Email, acct.Email, acct.Email, prof.Email)
+	}
+	if err := auth.SaveToken(s.secrets, acct.ID, tok); err != nil {
+		return acct, fmt.Errorf("could not store the sign-in securely: %w", err)
+	}
+	slog.Info("account re-authenticated", "account", acct.ID)
+	return s.afterSignIn(acct.ID)
+}
+
+func (s *Service) afterSignIn(accountID string) (models.Account, error) {
 	s.provMu.Lock()
-	delete(s.providers, acct.ID)
+	if !(s.opts.Demo && strings.HasPrefix(accountID, "demo-")) {
+		delete(s.providers, accountID)
+	}
 	s.provMu.Unlock()
-	_ = s.store.SetSyncResult(acct.ID, time.Time{}, "")
-	slog.Info("account added", "provider", kind, "account", acct.ID)
-	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: acct.ID})
-	s.goBG(func() { _ = s.engine.SyncNow(s.ctx, acct.ID) })
-	return s.store.Account(acct.ID)
+	_ = s.store.SetNeedsReauth(accountID, false)
+	_ = s.store.SetSyncResult(accountID, time.Time{}, "")
+	s.engine.ResetBackoff(accountID)
+	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
+	s.goBG(func() { _ = s.engine.SyncNow(s.ctx, accountID) })
+	return s.store.Account(accountID)
 }
 
 // CancelAddAccount aborts a running AddAccount.
@@ -404,6 +463,7 @@ func (s *Service) RemoveAccount(accountID string) error {
 	delete(s.providers, accountID)
 	s.provMu.Unlock()
 	s.engine.Forget(accountID)
+	s.attCache.dropAccount(accountID)
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 	s.emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
 	return nil

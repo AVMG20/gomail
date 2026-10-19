@@ -4,7 +4,7 @@
 // in-memory mock in ./mock.
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
-  EventPayloads, Folder, LabelCount, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings,
+  EventPayloads, Folder, LabelCount, AttachmentData, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings,
 } from './types'
 import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
 
@@ -106,6 +106,8 @@ export const USED_METHODS = [
   'GetDefaultPrompts', 'TestOpenRouter', 'ListAIModels', 'ClassifyMessages', 'AddLabel', 'RemoveLabel', 'GetLabelCounts',
   'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
 ]
+/** Backend pass 2 methods: features hide gracefully while these are missing. */
+export const OPTIONAL_METHODS = ['GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels']
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -197,6 +199,8 @@ function normSettings(s: Settings): Settings {
     notifications: s.notifications ?? true,
     // Not (yet) in the Go Settings struct: fall back to the locally stored value.
     showInTray: s.showInTray ?? readLocal('showInTray', true),
+    closeToTray: s.closeToTray ?? readLocal('closeToTray', false),
+    conversationView: s.conversationView ?? readLocal('conversationView', true),
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
   }
 }
@@ -246,7 +250,7 @@ export const api = {
   getFolders: async (accountId: string) => (await call<Folder[] | null>('GetFolders', accountId)) ?? [],
   listMessages: async (q: Partial<ListQuery>): Promise<MessagePage> => {
     const page = await call<MessagePage>('ListMessages', normQuery(q))
-    return { messages: (page.messages ?? []).map(normSummary), nextCursor: page.nextCursor ?? '', total: page.total ?? 0 }
+    return { messages: (page.messages ?? []).map(normSummary), nextCursor: page.nextCursor ?? '', total: page.total ?? 0, hasMoreRemote: !!page.hasMoreRemote }
   },
   getMessage: async (id: string) => normMessage(await call<Message>('GetMessage', id)),
   getThread: async (id: string) => ((await call<Message[] | null>('GetThread', id)) ?? []).map(normMessage),
@@ -266,6 +270,24 @@ export const api = {
     return call<void>('OpenExternalURL', url)
   },
 
+  /** Fetch older mail from the server beyond the local cache (backend pass 2). */
+  loadOlder: async (q: Partial<ListQuery>): Promise<number> => {
+    const r = await call<number | { added?: number } | null>('LoadOlder', normQuery(q))
+    return typeof r === 'number' ? r : r?.added ?? 0
+  },
+  reauthAccount: (id: string) => call<unknown>('ReauthAccount', id),
+  /** Returns how it was done: "oneClick" | "mailto" (email sent) | "url" (opened in the browser). */
+  unsubscribe: async (id: string): Promise<{ method: string; url: string }> => (await call<{ method: string; url: string } | null>('Unsubscribe', id)) ?? { method: '', url: '' },
+  /** The message with remote images/CSS kept ("Load images"). */
+  getMessageWithRemoteContent: async (id: string) => normMessage(await call<Message>('GetMessageWithRemoteContent', id)),
+  getAttachmentData: async (messageId: string, attachmentId: string): Promise<AttachmentData> => {
+    const r = await call<AttachmentData | string>('GetAttachmentData', messageId, attachmentId)
+    return typeof r === 'string' ? { mimeType: '', dataBase64: r } : r
+  },
+  /** Returns the server draft id (backend pass 2); local autosave works without it. */
+  saveDraft: async (req: ComposeRequest, draftId: string): Promise<string> => (await call<string | null>('SaveDraft', req, draftId)) ?? draftId,
+  deleteDraft: (id: string) => call<void>('DeleteDraft', id),
+
   // ---- search & bulk queries
   searchMessages: async (q: SearchQuery): Promise<SearchResult[]> =>
     ((await call<SearchResult[] | null>('SearchMessages', q)) ?? []).map((r) => ({ ...r, message: normSummary(r.message) })),
@@ -276,6 +298,8 @@ export const api = {
   saveSettings: (s: Settings) => {
     writeLocal('showInTray', s.showInTray)
     writeLocal('undoSendSeconds', s.undoSendSeconds)
+    writeLocal('closeToTray', s.closeToTray)
+    writeLocal('conversationView', s.conversationView)
     return call<void>('SaveSettings', s)
   },
   setOpenRouterKey: (key: string) => call<void>('SetOpenRouterKey', key),

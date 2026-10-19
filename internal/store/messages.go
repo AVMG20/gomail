@@ -113,8 +113,9 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		}
 		defer exists.Close()
 		up, err := tx.Prepare(`INSERT INTO messages(id, account_id, remote_id, thread_id, from_name, from_email, to_json, cc_json, bcc_json,
-			reply_to_json, subject, snippet, date, unread, starred, has_attachments, message_id_hdr, in_reply_to, refs, updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			reply_to_json, subject, snippet, date, unread, starred, has_attachments, message_id_hdr, in_reply_to, refs, updated_at,
+			unsub_url, unsub_mailto, unsub_one_click)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id, from_name = excluded.from_name, from_email = excluded.from_email,
 				to_json = excluded.to_json, cc_json = excluded.cc_json, bcc_json = excluded.bcc_json, reply_to_json = excluded.reply_to_json,
 				subject = excluded.subject, snippet = excluded.snippet, date = excluded.date, unread = excluded.unread,
@@ -122,6 +123,9 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				message_id_hdr = CASE WHEN excluded.message_id_hdr != '' THEN excluded.message_id_hdr ELSE message_id_hdr END,
 				in_reply_to = CASE WHEN excluded.in_reply_to != '' THEN excluded.in_reply_to ELSE in_reply_to END,
 				refs = CASE WHEN excluded.refs != '' THEN excluded.refs ELSE refs END,
+				unsub_url = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_url ELSE unsub_url END,
+				unsub_mailto = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_mailto ELSE unsub_mailto END,
+				unsub_one_click = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_one_click ELSE unsub_one_click END,
 				updated_at = excluded.updated_at`)
 		if err != nil {
 			return err
@@ -157,7 +161,8 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 			isNew := errors.Is(exists.QueryRow(id).Scan(&one), sql.ErrNoRows)
 			if _, err := up.Exec(id, accountID, m.RemoteID, m.ThreadID, m.From.Name, m.From.Email, addrsJSON(m.To), addrsJSON(m.Cc),
 				addrsJSON(m.Bcc), addrsJSON(m.ReplyTo), m.Subject, m.Snippet, toMillis(m.Date), boolInt(m.Unread), boolInt(m.Starred),
-				boolInt(m.HasAttachments), m.MessageID, m.InReplyTo, m.References, now); err != nil {
+				boolInt(m.HasAttachments), m.MessageID, m.InReplyTo, m.References, now,
+				m.Unsubscribe.URL, m.Unsubscribe.Mailto, boolInt(m.Unsubscribe.OneClick)); err != nil {
 				return err
 			}
 			if isNew {
@@ -411,10 +416,12 @@ func (s *Store) Summaries(ids []string) ([]models.MessageSummary, error) {
 func (s *Store) Message(id string) (msg models.Message, hasBody bool, err error) {
 	var cc, bcc, replyTo string
 	var html, text sql.NullString
-	var remote int
+	var remote, oneClick, kinds int
+	var unsubURL, unsubMailto string
 	row := s.db.QueryRow(`SELECT `+s.summaryCols()+`, m.cc_json, m.bcc_json, m.reply_to_json, m.message_id_hdr, m.in_reply_to, m.refs,
-		m.body_html, m.body_text, m.has_remote FROM messages m WHERE m.id = ?`, id)
-	sum, err := scanSummary(row, &cc, &bcc, &replyTo, &msg.MessageID, &msg.InReplyTo, &msg.References, &html, &text, &remote)
+		m.body_html, m.body_text, m.has_remote, m.unsub_url, m.unsub_mailto, m.unsub_one_click, m.folder_kinds FROM messages m WHERE m.id = ?`, id)
+	sum, err := scanSummary(row, &cc, &bcc, &replyTo, &msg.MessageID, &msg.InReplyTo, &msg.References, &html, &text, &remote,
+		&unsubURL, &unsubMailto, &oneClick, &kinds)
 	if errors.Is(err, sql.ErrNoRows) {
 		return msg, false, ErrNotFound
 	}
@@ -425,6 +432,12 @@ func (s *Store) Message(id string) (msg models.Message, hasBody bool, err error)
 	msg.Cc, msg.Bcc, msg.ReplyTo = decodeAddrs(cc), decodeAddrs(bcc), decodeAddrs(replyTo)
 	msg.BodyHTML, msg.BodyText = html.String, text.String
 	msg.HasRemoteContent = remote == 1
+	msg.IsDraft = kinds&kindBits["drafts"] != 0
+	if unsubURL != "" || unsubMailto != "" {
+		msg.Unsubscribe = &models.Unsubscribe{URL: unsubURL, Mailto: unsubMailto, OneClick: oneClick == 1 && unsubURL != ""}
+	}
+	msg.ThreadCount = 1
+	msg.Participants = []string{displayName(sum.From)}
 	msg.Attachments, err = s.attachments(id)
 	return msg, html.Valid || text.Valid, err
 }
@@ -470,6 +483,7 @@ type BodyUpdate struct {
 	InReplyTo        string
 	References       string
 	Cc, Bcc, ReplyTo []models.Address // only stored when non-empty
+	Unsubscribe      mail.Unsubscribe // only stored when non-empty
 }
 
 // SaveBody caches a message body and its attachment metadata.
@@ -488,6 +502,12 @@ func (s *Store) SaveBody(id string, b BodyUpdate) error {
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return ErrNotFound
+		}
+		if !b.Unsubscribe.Empty() {
+			if _, err := tx.Exec(`UPDATE messages SET unsub_url = ?, unsub_mailto = ?, unsub_one_click = ? WHERE id = ?`,
+				b.Unsubscribe.URL, b.Unsubscribe.Mailto, boolInt(b.Unsubscribe.OneClick), id); err != nil {
+				return err
+			}
 		}
 		for col, v := range map[string][]models.Address{"cc_json": b.Cc, "bcc_json": b.Bcc, "reply_to_json": b.ReplyTo} {
 			if len(v) > 0 {

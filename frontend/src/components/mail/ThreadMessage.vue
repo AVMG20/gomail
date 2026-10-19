@@ -3,7 +3,14 @@ import { computed, ref } from 'vue'
 import { ChevronDownIcon, CornerUpLeftIcon, PaperclipIcon } from '@lucide/vue'
 import SenderAvatar from '@/components/common/SenderAvatar.vue'
 import Tip from '@/components/common/Tip.vue'
-import { displayName, formatAddress, listDate, longDate } from '@/lib/format'
+import { displayName, formatAddress, listDate, longDate, parseAddress } from '@/lib/format'
+import { toast } from 'vue-sonner'
+import { api, errorMessage, hasMethod } from '@/lib/api'
+import { useComposeStore } from '@/stores/compose'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import type { Address, Message } from '@/lib/types'
 import AttachmentList from './AttachmentList.vue'
 import MessageBody from './MessageBody.vue'
@@ -12,6 +19,27 @@ const props = defineProps<{ message: Message; expanded: boolean; ownEmail: strin
 const emit = defineEmits<{ toggle: []; reply: []; loadImages: [] }>()
 
 const showDetails = ref(false)
+const confirmUnsub = ref(false)
+const compose = useComposeStore()
+
+async function unsubscribe() {
+  const u = props.message.unsubscribe
+  if (!u) return
+  try {
+    if (hasMethod('Unsubscribe')) {
+      const r = await api.unsubscribe(props.message.id)
+      if (r.method === 'url') toast('Opened the unsubscribe page in your browser')
+      else toast.success(`Unsubscribed from ${displayName(props.message.from)}`, { description: r.method === 'mailto' ? 'An unsubscribe email was sent.' : 'It can take a few days for mail to stop.' })
+    } else if (u.url) {
+      await api.openExternal(u.url)
+    } else if (u.mailto) {
+      const addr = parseAddress(decodeURIComponent(u.mailto.replace(/^mailto:/, '').split('?')[0]))
+      if (addr) void compose.compose([addr])
+    }
+  } catch (e) {
+    toast.error('Couldn’t unsubscribe', { description: errorMessage(e) })
+  }
+}
 
 function short(list: Address[]) {
   return list.map((a) => (a.email.toLowerCase() === props.ownEmail.toLowerCase() ? 'me' : displayName(a))).join(', ')
@@ -47,6 +75,12 @@ const recipients = computed(() => {
           <div class="flex items-baseline gap-2">
             <span class="selectable truncate text-[14px] font-semibold">{{ displayName(message.from) }}</span>
             <span class="text-muted-foreground selectable truncate text-xs">{{ message.from.email }}</span>
+            <button
+              v-if="message.unsubscribe && (message.unsubscribe.url || message.unsubscribe.mailto)"
+              type="button"
+              class="text-muted-foreground hover:text-foreground shrink-0 text-xs underline-offset-2 hover:underline"
+              @click="confirmUnsub = true"
+            >Unsubscribe</button>
           </div>
           <button type="button" class="text-muted-foreground hover:text-foreground flex max-w-full items-center gap-1 text-xs" @click="showDetails = !showDetails">
             <span class="truncate">{{ recipients }}</span>
@@ -74,5 +108,19 @@ const recipients = computed(() => {
         <AttachmentList v-if="message.attachments.length" :message-id="message.id" :attachments="message.attachments" />
       </div>
     </div>
+    <AlertDialog v-model:open="confirmUnsub">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Unsubscribe from {{ displayName(message.from) }}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {{ message.unsubscribe?.oneClick ? 'gomail will send an unsubscribe request to the sender on your behalf.' : message.unsubscribe?.mailto ? 'gomail will send an unsubscribe email from your account.' : 'This opens the sender’s unsubscribe page in your browser.' }}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction @click="unsubscribe">Unsubscribe</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </article>
 </template>

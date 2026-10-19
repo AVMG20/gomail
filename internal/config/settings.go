@@ -69,6 +69,8 @@ func DefaultSettings() models.Settings {
 		AICorrectsProviderLabels: true,
 		ImportProviderLabels:     true,
 		Notifications:            true,
+		ConversationView:         true,
+		ShowInTray:               true,
 		Labels:                   DefaultLabels(),
 		PrimaryColor:             DefaultPrimaryColor,
 		Radius:                   DefaultRadius,

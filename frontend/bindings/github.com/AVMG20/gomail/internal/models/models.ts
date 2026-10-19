@@ -39,6 +39,12 @@ export interface Account {
     "syncError": string;
     "syncing": boolean;
     "unreadCount": number;
+
+    /**
+     * NeedsReauth is set when the provider revoked or expired the sign-in;
+     * call ReauthAccount to sign in again (local data is kept).
+     */
+    "needsReauth": boolean;
 }
 
 /**
@@ -75,6 +81,16 @@ export interface Attachment {
     "size": number;
     "inline": boolean;
     "contentId": string;
+}
+
+/**
+ * AttachmentData is attachment content for previews.
+ */
+export interface AttachmentData {
+    "filename": string;
+    "mimeType": string;
+    "size": number;
+    "dataBase64": string;
 }
 
 /**
@@ -167,6 +183,11 @@ export interface ComposeRequest {
      * local message id being replied to / forwarded
      */
     "replyToId": string;
+
+    /**
+     * draft handle from SaveDraft; sending it removes the draft
+     */
+    "draftId": string;
 
     /**
      * "new" | "reply" | "replyAll" | "forward"
@@ -280,6 +301,26 @@ export interface Message {
      */
     "labels": string[] | null;
     "labelDetails": MessageLabel[] | null;
+
+    /**
+     * Conversation view (Settings.conversationView): one row per thread.
+     * The row shows the thread's latest message matching the query; Unread,
+     * Starred, HasAttachments and Labels are aggregated over the thread.
+     * ConversationID ("c:<id>") can be passed to every action method instead
+     * of message ids to act on the whole conversation (see docs/BACKEND.md).
+     * It is "" in message view.
+     */
+    "conversationId": string;
+
+    /**
+     * messages in the conversation (1 in message view)
+     */
+    "threadCount": number;
+
+    /**
+     * sender names, oldest first; "me" for the account itself
+     */
+    "participants": string[] | null;
     "cc": Address[] | null;
     "bcc": Address[] | null;
     "replyTo": Address[] | null;
@@ -295,10 +336,23 @@ export interface Message {
     "references": string;
 
     /**
-     * HasRemoteContent reports whether BodyHTML references remote resources
-     * (http/https images, stylesheets). The UI can offer "Show images".
+     * HasRemoteContent reports whether the body references remote resources
+     * (images, srcset, CSS url()). RemoteContentBlocked is true when they
+     * were stripped from BodyHTML (Settings.showRemoteImages off); call
+     * GetMessageWithRemoteContent to load them.
      */
     "hasRemoteContent": boolean;
+    "remoteContentBlocked": boolean;
+
+    /**
+     * nil when the sender offers none
+     */
+    "unsubscribe": Unsubscribe | null;
+
+    /**
+     * message is in a Drafts folder (editable via SaveDraft)
+     */
+    "isDraft": boolean;
 }
 
 /**
@@ -321,7 +375,17 @@ export interface MessageLabel {
 export interface MessagePage {
     "messages": MessageSummary[] | null;
     "nextCursor": string;
+
+    /**
+     * conversations in conversation view, messages otherwise
+     */
     "total": number;
+
+    /**
+     * HasMoreRemote is true on the last local page when the server has
+     * older mail for this view: call LoadOlder(query) to fetch the next page.
+     */
+    "hasMoreRemote": boolean;
 }
 
 export interface MessageSummary {
@@ -348,6 +412,26 @@ export interface MessageSummary {
      */
     "labels": string[] | null;
     "labelDetails": MessageLabel[] | null;
+
+    /**
+     * Conversation view (Settings.conversationView): one row per thread.
+     * The row shows the thread's latest message matching the query; Unread,
+     * Starred, HasAttachments and Labels are aggregated over the thread.
+     * ConversationID ("c:<id>") can be passed to every action method instead
+     * of message ids to act on the whole conversation (see docs/BACKEND.md).
+     * It is "" in message view.
+     */
+    "conversationId": string;
+
+    /**
+     * messages in the conversation (1 in message view)
+     */
+    "threadCount": number;
+
+    /**
+     * sender names, oldest first; "me" for the account itself
+     */
+    "participants": string[] | null;
 }
 
 /**
@@ -444,6 +528,21 @@ export interface Settings {
      * desktop notifications for new mail (default true)
      */
     "notifications": boolean;
+
+    /**
+     * group the message list by conversation (default true)
+     */
+    "conversationView": boolean;
+
+    /**
+     * system tray icon with unread count (default true)
+     */
+    "showInTray": boolean;
+
+    /**
+     * closing the window hides it to the tray (default false)
+     */
+    "closeToTray": boolean;
     "googleClientId": string;
     "googleClientSecret": string;
     "microsoftClientId": string;
@@ -516,4 +615,35 @@ export interface SyncEvent {
     "accountId": string;
     "newMessages": number;
     "error": string;
+}
+
+/**
+ * Unsubscribe describes the List-Unsubscribe options of a message.
+ */
+export interface Unsubscribe {
+    /**
+     * https link ("" if none)
+     */
+    "url": string;
+
+    /**
+     * mailto: URI ("" if none)
+     */
+    "mailto": string;
+
+    /**
+     * RFC 8058 one-click POST supported
+     */
+    "oneClick": boolean;
+}
+
+/**
+ * UnsubscribeResult says what Unsubscribe did.
+ */
+export interface UnsubscribeResult {
+    /**
+     * "oneClick" (done), "mailto" (email sent) or "url" (opened in the browser)
+     */
+    "method": string;
+    "url": string;
 }

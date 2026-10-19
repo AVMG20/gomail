@@ -83,6 +83,8 @@ func emailPolicy() *bluemonday.Policy {
 		p.AllowDataURIImages()
 		p.AllowURLSchemes("http", "https", "mailto", "tel", "cid", "data")
 		p.AllowAttrs("src", "alt", "width", "height").OnElements("img")
+		p.AllowAttrs("srcset").Matching(safeSrcset).OnElements("img")
+		p.AllowAttrs("sizes").Matching(regexp.MustCompile(`^[a-zA-Z0-9 ()%.,:-]+$`)).OnElements("img")
 		p.RequireNoFollowOnLinks(false)
 		p.RequireNoReferrerOnLinks(true)
 		p.AddTargetBlankToFullyQualifiedLinks(true)
@@ -96,6 +98,9 @@ func emailPolicy() *bluemonday.Policy {
 }
 
 var styleBlockRe = regexp.MustCompile(`(?is)<style[^>]*>(.*?)</style>`)
+
+// safeSrcset accepts only http(s) image candidates.
+var safeSrcset = regexp.MustCompile(`^\s*https?://[^\s,"'<>]+(\s+\d+(\.\d+)?[wx])?(\s*,\s*https?://[^\s,"'<>]+(\s+\d+(\.\d+)?[wx])?)*\s*$`)
 
 // SanitizeHTML makes an email HTML body safe to render (in a sandboxed
 // iframe): scripts, iframes, forms, objects and event handlers are removed;
@@ -111,10 +116,29 @@ func SanitizeHTML(s string) string {
 	return strings.TrimSpace(emailPolicy().Sanitize(s))
 }
 
-var remoteRe = regexp.MustCompile(`(?i)(src|background)\s*=\s*["']?\s*https?:|url\(\s*["']?\s*https?:`)
+var (
+	remoteRe      = regexp.MustCompile(`(?i)\b(src|background|srcset)\s*=\s*["']?[^"'>]*?\bhttps?:|url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//`)
+	remoteAttrRe  = regexp.MustCompile(`(?i)\s(src|background)\s*=\s*"\s*(https?:)?//[^"]*"`)
+	remoteSetRe   = regexp.MustCompile(`(?i)\ssrcset\s*=\s*"[^"]*"`)
+	remoteURLFnRe = regexp.MustCompile(`(?i)url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//[^)]*\)`)
+)
 
-// HasRemoteContent reports whether HTML loads remote resources.
+// HasRemoteContent reports whether HTML loads remote resources (images,
+// srcset candidates, CSS url()).
 func HasRemoteContent(s string) bool { return remoteRe.MatchString(s) }
+
+// BlockRemoteContent strips remote resource references from sanitized
+// HTML: remote src/background attributes, srcset and CSS url(). Links are
+// kept. It reports whether anything was removed.
+func BlockRemoteContent(s string) (string, bool) {
+	if !HasRemoteContent(s) {
+		return s, false
+	}
+	out := remoteAttrRe.ReplaceAllString(s, ` data-gomail-blocked=""`)
+	out = remoteSetRe.ReplaceAllString(out, "")
+	out = remoteURLFnRe.ReplaceAllString(out, "none")
+	return out, out != s
+}
 
 // HTMLToText converts HTML to readable plain text (for search, snippets,
 // and the text alternative of outgoing mail).

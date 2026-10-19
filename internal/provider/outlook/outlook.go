@@ -47,8 +47,9 @@ type Client struct {
 	base string
 
 	mu        sync.Mutex
-	wellKnown map[string]string // folder id -> kind ("" = hidden)
-	byKind    map[string]string // kind -> folder id
+	wellKnown map[string]string            // folder id -> kind ("" = hidden)
+	byKind    map[string]string            // kind -> folder id
+	added     map[string]map[string]string // draft id -> attachment key -> id (attachments we uploaded)
 }
 
 // New creates a client. base "" means production Graph.
@@ -430,7 +431,8 @@ func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncR
 	res := mail.SyncResult{State: map[string]string{}, Removed: map[string][]string{}}
 	known := map[string]bool{}
 	custom := 0
-	for _, f := range req.Folders {
+	for i, f := range req.Folders {
+		req.Report("listing", i, len(req.Folders))
 		if f.RemoteID == Flagged || f.Kind == models.FolderStarred {
 			continue
 		}
@@ -576,14 +578,20 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 		return nil, err
 	}
 	b := &mail.Body{MessageID: g.InternetMsgID, Cc: addrs(g.CcRecipients), Bcc: addrs(g.BccRecipients), ReplyTo: addrs(g.ReplyTo)}
+	var unsub, unsubPost string
 	for _, h := range g.InternetMessageHeaders {
 		switch strings.ToLower(h.Name) {
 		case "in-reply-to":
 			b.InReplyTo = strings.TrimSpace(h.Value)
 		case "references":
 			b.References = strings.Join(strings.Fields(h.Value), " ")
+		case "list-unsubscribe":
+			unsub = h.Value
+		case "list-unsubscribe-post":
+			unsubPost = h.Value
 		}
 	}
+	b.Unsubscribe = mailmime.ParseListUnsubscribe(unsub, unsubPost)
 	if strings.EqualFold(g.Body.ContentType, "html") {
 		b.HTML = g.Body.Content
 		b.Text = mailmime.HTMLToText(g.Body.Content)
@@ -723,10 +731,7 @@ func (c *Client) SetLabel(ctx context.Context, ids []string, name string, add bo
 
 const smallAttachment = 3 << 20 // larger attachments use an upload session
 
-func (c *Client) Send(ctx context.Context, out mail.Outgoing) error {
-	var draft struct {
-		ID string `json:"id"`
-	}
+func draftFields(out mail.Outgoing) map[string]any {
 	msg := map[string]any{
 		"subject":       out.Subject,
 		"toRecipients":  toGAddrs(out.To),
@@ -738,34 +743,248 @@ func (c *Client) Send(ctx context.Context, out mail.Outgoing) error {
 	} else {
 		msg["body"] = map[string]string{"contentType": "Text", "content": out.Text}
 	}
-	if o := out.Original; o != nil && out.Mode != "" && out.Mode != "new" {
-		action := map[string]string{"reply": "createReply", "replyAll": "createReplyAll", "forward": "createForward"}[out.Mode]
-		if action == "" {
-			return fmt.Errorf("unknown compose mode %q", out.Mode)
+	return msg
+}
+
+func attKey(name string, size int) string { return fmt.Sprintf("%s|%d", strings.ToLower(name), size) }
+
+// SaveDraft creates or updates a draft. Replies and forwards are created
+// with createReply/createReplyAll/createForward so Exchange threads them
+// and keeps the forwarded attachments.
+func (c *Client) SaveDraft(ctx context.Context, out mail.Outgoing, draftID string) (string, error) {
+	msg := draftFields(out)
+	if draftID != "" {
+		err := c.api.JSON(ctx, http.MethodPatch, c.msgPath(draftID), msg, nil)
+		if httpx.StatusOf(err) == http.StatusNotFound {
+			draftID = "" // sent or deleted elsewhere: start over
+		} else if err != nil {
+			return "", err
 		}
-		if err := c.api.JSON(ctx, http.MethodPost, c.msgPath(o.RemoteID)+"/"+action, map[string]any{}, &draft); err != nil {
-			return err
+	}
+	created := false
+	if draftID == "" {
+		var draft struct {
+			ID string `json:"id"`
 		}
-		// Replace the generated body and recipients with what the user wrote.
-		if err := c.api.JSON(ctx, http.MethodPatch, c.msgPath(draft.ID), msg, nil); err != nil {
-			c.discard(draft.ID)
-			return err
+		if o := out.Original; o != nil && out.Mode != "" && out.Mode != "new" {
+			action := map[string]string{"reply": "createReply", "replyAll": "createReplyAll", "forward": "createForward"}[out.Mode]
+			if action == "" {
+				return "", fmt.Errorf("unknown compose mode %q", out.Mode)
+			}
+			if err := c.api.JSON(ctx, http.MethodPost, c.msgPath(o.RemoteID)+"/"+action, map[string]any{}, &draft); err != nil {
+				return "", err
+			}
+			// Replace the generated body and recipients with what the user wrote.
+			if err := c.api.JSON(ctx, http.MethodPatch, c.msgPath(draft.ID), msg, nil); err != nil {
+				c.discard(draft.ID)
+				return "", err
+			}
+		} else if err := c.api.JSON(ctx, http.MethodPost, "me/messages", msg, &draft); err != nil {
+			return "", err
 		}
-	} else {
-		if err := c.api.JSON(ctx, http.MethodPost, "me/messages", msg, &draft); err != nil {
+		draftID, created = draft.ID, true
+	}
+	if err := c.syncAttachments(ctx, draftID, out.Attachments); err != nil {
+		if created {
+			c.discard(draftID)
+		}
+		return "", err
+	}
+	return draftID, nil
+}
+
+// syncAttachments makes the draft's user-added attachments match atts.
+// Attachments the draft got from createForward are left alone.
+func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mail.OutgoingAttachment) error {
+	want := map[string]mail.OutgoingAttachment{}
+	for _, a := range atts {
+		want[attKey(a.Filename, len(a.Data))] = a
+	}
+	c.mu.Lock()
+	if c.added == nil {
+		c.added = map[string]map[string]string{}
+	}
+	ours := c.added[draftID] // key -> attachment id
+	if ours == nil {
+		ours = map[string]string{}
+		c.added[draftID] = ours
+	}
+	c.mu.Unlock()
+	var existing struct {
+		Value []gAttachment `json:"value"`
+	}
+	if len(atts) > 0 || len(ours) > 0 {
+		if err := c.api.JSON(ctx, http.MethodGet, c.msgPath(draftID)+"/attachments?$select=id,name,size", nil, &existing); err != nil {
 			return err
 		}
 	}
-	for _, a := range out.Attachments {
-		if err := c.addAttachment(ctx, draft.ID, a); err != nil {
-			c.discard(draft.ID)
+	have := map[string]string{}
+	for _, a := range existing.Value {
+		have[attKey(a.Name, int(a.Size))] = a.ID
+	}
+	for key, id := range ours {
+		if _, keep := want[key]; !keep {
+			if err := c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID)+"/attachments/"+url.PathEscape(id), nil, nil); err != nil && httpx.StatusOf(err) != http.StatusNotFound {
+				return err
+			}
+			c.mu.Lock()
+			delete(ours, key)
+			c.mu.Unlock()
+		}
+	}
+	for key, a := range want {
+		if _, ok := have[key]; ok {
+			continue
+		}
+		id, err := c.addAttachment(ctx, draftID, a)
+		if err != nil {
 			return fmt.Errorf("could not attach %s: %w", a.Filename, err)
 		}
-	}
-	if err := c.api.JSON(ctx, http.MethodPost, c.msgPath(draft.ID)+"/send", nil, nil); err != nil {
-		return err
+		c.mu.Lock()
+		ours[key] = id
+		c.mu.Unlock()
 	}
 	return nil
+}
+
+func (c *Client) Send(ctx context.Context, out mail.Outgoing) error {
+	id, err := c.SaveDraft(ctx, out, "")
+	if err != nil {
+		return err
+	}
+	if err := c.api.JSON(ctx, http.MethodPost, c.msgPath(id)+"/send", nil, nil); err != nil {
+		c.discard(id)
+		return err
+	}
+	c.forget(id)
+	return nil
+}
+
+func (c *Client) SendDraft(ctx context.Context, out mail.Outgoing, draftID string) error {
+	id, err := c.SaveDraft(ctx, out, draftID)
+	if err != nil {
+		return err
+	}
+	if err := c.api.JSON(ctx, http.MethodPost, c.msgPath(id)+"/send", nil, nil); err != nil {
+		return err
+	}
+	c.forget(id)
+	return nil
+}
+
+func (c *Client) DeleteDraft(ctx context.Context, draftID string) error {
+	err := c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID), nil, nil)
+	c.forget(draftID)
+	if httpx.StatusOf(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
+// DraftID: Graph drafts are messages, so the ids are the same.
+func (c *Client) DraftID(_ context.Context, messageRemoteID string) (string, error) {
+	return messageRemoteID, nil
+}
+
+func (c *Client) forget(draftID string) {
+	c.mu.Lock()
+	delete(c.added, draftID)
+	c.mu.Unlock()
+}
+
+// ---- older mail & search ----
+
+func (c *Client) ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error) {
+	if folder.RemoteID == Flagged || folder.Kind == models.FolderStarred {
+		return nil, nil
+	}
+	q := url.Values{}
+	q.Set("$top", strconv.Itoa(min(max(limit, 1), 1000)))
+	q.Set("$orderby", "receivedDateTime desc")
+	q.Set("$select", messageSelect)
+	if !before.IsZero() {
+		q.Set("$filter", "receivedDateTime lt "+before.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	var resp struct {
+		Value []gMessage `json:"value"`
+	}
+	if err := c.api.JSON(ctx, http.MethodGet, "me/mailFolders/"+url.PathEscape(folder.RemoteID)+"/messages?"+q.Encode(), nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]mail.Message, 0, len(resp.Value))
+	for _, g := range resp.Value {
+		if g.ParentFolderID == "" {
+			g.ParentFolderID = folder.RemoteID
+		}
+		out = append(out, toMessage(g))
+	}
+	return out, nil
+}
+
+func kqlValue(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '"' || r == '\\' {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if strings.ContainsAny(s, " \t") {
+		return "'" + strings.ReplaceAll(s, "'", "") + "'"
+	}
+	return s
+}
+
+// KQL renders a query for Graph $search (Keyword Query Language). Unread
+// and starred aren't searchable; they are applied locally afterwards.
+func KQL(q mail.SearchQuery) string {
+	var parts []string
+	for _, t := range q.Terms {
+		parts = append(parts, kqlValue(t))
+	}
+	for _, v := range q.From {
+		parts = append(parts, "from:"+kqlValue(v))
+	}
+	for _, v := range q.To {
+		parts = append(parts, "to:"+kqlValue(v))
+	}
+	for _, v := range q.Subject {
+		parts = append(parts, "subject:"+kqlValue(v))
+	}
+	if q.HasAttachment {
+		parts = append(parts, "hasattachments:true")
+	}
+	if !q.After.IsZero() {
+		parts = append(parts, "received>="+q.After.Format("2006-01-02"))
+	}
+	if !q.Before.IsZero() {
+		parts = append(parts, "received<"+q.Before.Format("2006-01-02"))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (c *Client) Search(ctx context.Context, q mail.SearchQuery, limit int) ([]mail.Message, error) {
+	kql := KQL(q)
+	if kql == "" {
+		return nil, nil
+	}
+	v := url.Values{}
+	v.Set("$search", `"`+kql+`"`)
+	v.Set("$top", strconv.Itoa(min(max(limit, 1), 250)))
+	v.Set("$select", messageSelect)
+	var resp struct {
+		Value []gMessage `json:"value"`
+	}
+	if err := c.api.JSON(ctx, http.MethodGet, "me/messages?"+v.Encode(), nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]mail.Message, 0, len(resp.Value))
+	for _, g := range resp.Value {
+		if g.ParentFolderID != "" {
+			out = append(out, toMessage(g))
+		}
+	}
+	return out, nil
 }
 
 func (c *Client) discard(draftID string) {
@@ -774,16 +993,20 @@ func (c *Client) discard(draftID string) {
 	_ = c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID), nil, nil)
 }
 
-func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.OutgoingAttachment) error {
+func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.OutgoingAttachment) (string, error) {
 	ct := a.MimeType
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
 	if len(a.Data) <= smallAttachment {
-		return c.api.JSON(ctx, http.MethodPost, c.msgPath(draftID)+"/attachments", map[string]any{
+		var created struct {
+			ID string `json:"id"`
+		}
+		err := c.api.JSON(ctx, http.MethodPost, c.msgPath(draftID)+"/attachments", map[string]any{
 			"@odata.type": "#microsoft.graph.fileAttachment", "name": a.Filename, "contentType": ct,
 			"contentBytes": base64.StdEncoding.EncodeToString(a.Data),
-		}, nil)
+		}, &created)
+		return created.ID, err
 	}
 	var sess struct {
 		UploadURL string `json:"uploadUrl"`
@@ -791,7 +1014,7 @@ func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.Outgo
 	if err := c.api.JSON(ctx, http.MethodPost, c.msgPath(draftID)+"/attachments/createUploadSession", map[string]any{
 		"AttachmentItem": map[string]any{"attachmentType": "file", "name": a.Filename, "size": len(a.Data), "contentType": ct},
 	}, &sess); err != nil {
-		return err
+		return "", err
 	}
 	// The upload URL is pre-authenticated: no bearer token.
 	up := &httpx.Client{Service: "Microsoft Graph upload", Sleep: c.api.Sleep}
@@ -802,11 +1025,22 @@ func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.Outgo
 			ContentType: "application/octet-stream",
 			Headers:     map[string]string{"Content-Range": fmt.Sprintf("bytes %d-%d/%d", off, end-1, len(a.Data))}})
 		if err != nil {
-			return err
+			return "", err
 		}
 		resp.Body.Close()
 	}
-	return nil
+	// Upload sessions don't return the attachment id; look it up.
+	var list struct {
+		Value []gAttachment `json:"value"`
+	}
+	if err := c.api.JSON(ctx, http.MethodGet, c.msgPath(draftID)+"/attachments?$select=id,name,size", nil, &list); err == nil {
+		for _, x := range list.Value {
+			if attKey(x.Name, int(x.Size)) == attKey(a.Filename, len(a.Data)) {
+				return x.ID, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 var _ provider.Provider = (*Client)(nil)

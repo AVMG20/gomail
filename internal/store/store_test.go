@@ -80,7 +80,7 @@ func TestApplySyncAndPagination(t *testing.T) {
 	var all []models.MessageSummary
 	cursor := ""
 	for pages := 0; ; pages++ {
-		p, err := s.ListMessages(models.ListQuery{FolderKind: models.FolderInbox, Limit: 10, Cursor: cursor})
+		p, err := s.ListMessages(models.ListQuery{FolderKind: models.FolderInbox, Limit: 10, Cursor: cursor}, ListOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,7 +108,7 @@ func TestApplySyncAndPagination(t *testing.T) {
 		t.Fatalf("first = %+v", all[0])
 	}
 
-	p, _ := s.ListMessages(models.ListQuery{UnreadOnly: true, AccountID: "a1"})
+	p, _ := s.ListMessages(models.ListQuery{UnreadOnly: true, AccountID: "a1"}, ListOptions{})
 	if p.Total != 13 {
 		t.Fatalf("unread total %d", p.Total)
 	}
@@ -118,7 +118,7 @@ func TestApplySyncAndPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _ = s.ListMessages(models.ListQuery{AccountID: "a1"})
+	p, _ = s.ListMessages(models.ListQuery{AccountID: "a1"}, ListOptions{})
 	if p.Total != 23 {
 		t.Fatalf("after delete total %d", p.Total)
 	}
@@ -174,7 +174,7 @@ func TestUnreadCountersAndMove(t *testing.T) {
 	if st.Total != 1 {
 		t.Fatalf("starred total %d", st.Total)
 	}
-	p, _ := s.ListMessages(models.ListQuery{FolderID: st.ID})
+	p, _ := s.ListMessages(models.ListQuery{FolderID: st.ID}, ListOptions{})
 	if p.Total != 1 {
 		t.Fatalf("starred list %d", p.Total)
 	}
@@ -198,11 +198,11 @@ func TestLabels(t *testing.T) {
 	if err := s.AddLabels([]string{id2}, "personal"); err != nil {
 		t.Fatal(err)
 	}
-	p, _ := s.ListMessages(models.ListQuery{Labels: []string{"personal", "finance"}})
+	p, _ := s.ListMessages(models.ListQuery{Labels: []string{"personal", "finance"}}, ListOptions{})
 	if p.Total != 2 {
 		t.Fatalf("labels any %d", p.Total)
 	}
-	p, _ = s.ListMessages(models.ListQuery{Unlabeled: true})
+	p, _ = s.ListMessages(models.ListQuery{Unlabeled: true}, ListOptions{})
 	if p.Total != 0 {
 		t.Fatalf("unlabeled %d", p.Total)
 	}
@@ -275,7 +275,7 @@ func TestDeleteAccountCascades(t *testing.T) {
 	if err := s.DeleteAccount("a1"); err != nil {
 		t.Fatal(err)
 	}
-	p, _ := s.ListMessages(models.ListQuery{})
+	p, _ := s.ListMessages(models.ListQuery{}, ListOptions{})
 	if p.Total != 1 || p.Messages[0].AccountID != "a2" {
 		t.Fatalf("%+v", p)
 	}

@@ -269,3 +269,19 @@ func TestBodyActionsSend(t *testing.T) {
 		t.Fatalf("send %+v", f.patched)
 	}
 }
+
+func TestKQLAndOlder(t *testing.T) {
+	q := mail.SearchQuery{Terms: []string{"invoice", `big "deal"`}, From: []string{"ana@contoso.com"}, HasAttachment: true,
+		Before: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	if got := KQL(q); got != `invoice 'big  deal' from:ana@contoso.com hasattachments:true received<2026-10-01` {
+		t.Fatal(got)
+	}
+	c, _ := newTest(t)
+	msgs, err := c.ListOlder(context.Background(), mail.Folder{RemoteID: "id-inbox", Kind: models.FolderInbox}, time.Now(), 10)
+	if err != nil || len(msgs) != 2 || msgs[0].FolderRemoteIDs[0] != "id-inbox" {
+		t.Fatal(msgs, err)
+	}
+	if msgs, _ := c.ListOlder(context.Background(), mail.Folder{RemoteID: Flagged, Kind: models.FolderStarred}, time.Now(), 10); msgs != nil {
+		t.Fatal("flagged has no server folder")
+	}
+}

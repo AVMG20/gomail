@@ -49,8 +49,9 @@ type Client struct {
 	api  *httpx.Client
 	base string
 
-	mu     sync.Mutex
-	labels map[string]gLabel // id -> user label
+	mu       sync.Mutex
+	labels   map[string]gLabel // id -> user label
+	fwdCache map[string][]mailmime.Attachment
 }
 
 // New creates a client. base "" means the production API.
@@ -208,23 +209,25 @@ type gMessage struct {
 
 const metadataQuery = "format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc" +
 	"&metadataHeaders=Reply-To&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-ID" +
-	"&metadataHeaders=In-Reply-To&metadataHeaders=References&metadataHeaders=Content-Type"
+	"&metadataHeaders=In-Reply-To&metadataHeaders=References&metadataHeaders=Content-Type" +
+	"&metadataHeaders=List-Unsubscribe&metadataHeaders=List-Unsubscribe-Post"
 
 func (c *Client) toMessage(g gMessage) mail.Message {
 	h := &g.Payload
 	m := mail.Message{
-		RemoteID:   g.ID,
-		ThreadID:   g.ThreadID,
-		From:       mailmime.ParseAddress(h.header("From")),
-		To:         mailmime.ParseAddressList(h.header("To")),
-		Cc:         mailmime.ParseAddressList(h.header("Cc")),
-		Bcc:        mailmime.ParseAddressList(h.header("Bcc")),
-		ReplyTo:    mailmime.ParseAddressList(h.header("Reply-To")),
-		Subject:    mailmime.DecodeHeader(h.header("Subject")),
-		Snippet:    htmlUnescape(g.Snippet),
-		MessageID:  strings.TrimSpace(h.header("Message-ID")),
-		InReplyTo:  strings.TrimSpace(h.header("In-Reply-To")),
-		References: strings.Join(strings.Fields(h.header("References")), " "),
+		RemoteID:    g.ID,
+		ThreadID:    g.ThreadID,
+		From:        mailmime.ParseAddress(h.header("From")),
+		To:          mailmime.ParseAddressList(h.header("To")),
+		Cc:          mailmime.ParseAddressList(h.header("Cc")),
+		Bcc:         mailmime.ParseAddressList(h.header("Bcc")),
+		ReplyTo:     mailmime.ParseAddressList(h.header("Reply-To")),
+		Subject:     mailmime.DecodeHeader(h.header("Subject")),
+		Snippet:     htmlUnescape(g.Snippet),
+		MessageID:   strings.TrimSpace(h.header("Message-ID")),
+		InReplyTo:   strings.TrimSpace(h.header("In-Reply-To")),
+		References:  strings.Join(strings.Fields(h.header("References")), " "),
+		Unsubscribe: mailmime.ParseListUnsubscribe(h.header("List-Unsubscribe"), h.header("List-Unsubscribe-Post")),
 	}
 	if ms, err := strconv.ParseInt(g.InternalDate, 10, 64); err == nil && ms > 0 {
 		m.Date = time.UnixMilli(ms).UTC()
@@ -304,13 +307,18 @@ func (c *Client) listIDs(ctx context.Context, labelID, q string, limit int) ([]s
 
 // fetchMetadata fetches message metadata with a bounded worker pool. Ids
 // that no longer exist are returned in gone.
-func (c *Client) fetchMetadata(ctx context.Context, ids []string) (msgs []mail.Message, gone []string, err error) {
+func (c *Client) fetchMetadata(ctx context.Context, ids []string, progress ...func(done, total int)) (msgs []mail.Message, gone []string, err error) {
 	var mu sync.Mutex
+	done := 0
 	err = provider.Parallel(ctx, workers, ids, func(ctx context.Context, id string) error {
 		var g gMessage
 		err := c.api.JSON(ctx, http.MethodGet, "messages/"+url.PathEscape(id)+"?"+metadataQuery, nil, &g)
 		mu.Lock()
 		defer mu.Unlock()
+		done++
+		for _, p := range progress {
+			p(done, len(ids))
+		}
 		if httpx.StatusOf(err) == http.StatusNotFound {
 			gone = append(gone, id)
 			return nil
@@ -340,10 +348,11 @@ func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncR
 		}
 		// History too old: fall back to a full sync.
 	}
-	return c.initial(ctx, req.Limits.WithDefaults())
+	return c.initial(ctx, req)
 }
 
-func (c *Client) initial(ctx context.Context, lim provider.Limits) (mail.SyncResult, error) {
+func (c *Client) initial(ctx context.Context, req provider.SyncRequest) (mail.SyncResult, error) {
+	lim := req.Limits.WithDefaults()
 	var p gProfile
 	if err := c.api.JSON(ctx, http.MethodGet, "profile", nil, &p); err != nil {
 		return mail.SyncResult{}, err
@@ -359,7 +368,8 @@ func (c *Client) initial(ctx context.Context, lim provider.Limits) (mail.SyncRes
 	}
 	seen := map[string]bool{}
 	var ids []string
-	for _, s := range specs {
+	for i, s := range specs {
+		req.Report("listing", i, len(specs))
 		list, err := c.listIDs(ctx, s.label, s.q, max(1, s.n))
 		if err != nil {
 			return mail.SyncResult{}, err
@@ -371,7 +381,7 @@ func (c *Client) initial(ctx context.Context, lim provider.Limits) (mail.SyncRes
 			}
 		}
 	}
-	msgs, _, err := c.fetchMetadata(ctx, ids)
+	msgs, _, err := c.fetchMetadata(ctx, ids, func(done, total int) { req.Report("fetching", done, total) })
 	if err != nil {
 		return mail.SyncResult{}, err
 	}
@@ -489,12 +499,13 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 		return nil, err
 	}
 	b := &mail.Body{
-		MessageID:  strings.TrimSpace(g.Payload.header("Message-ID")),
-		InReplyTo:  strings.TrimSpace(g.Payload.header("In-Reply-To")),
-		References: strings.Join(strings.Fields(g.Payload.header("References")), " "),
-		Cc:         mailmime.ParseAddressList(g.Payload.header("Cc")),
-		Bcc:        mailmime.ParseAddressList(g.Payload.header("Bcc")),
-		ReplyTo:    mailmime.ParseAddressList(g.Payload.header("Reply-To")),
+		MessageID:   strings.TrimSpace(g.Payload.header("Message-ID")),
+		InReplyTo:   strings.TrimSpace(g.Payload.header("In-Reply-To")),
+		References:  strings.Join(strings.Fields(g.Payload.header("References")), " "),
+		Cc:          mailmime.ParseAddressList(g.Payload.header("Cc")),
+		Bcc:         mailmime.ParseAddressList(g.Payload.header("Bcc")),
+		ReplyTo:     mailmime.ParseAddressList(g.Payload.header("Reply-To")),
+		Unsubscribe: mailmime.ParseListUnsubscribe(g.Payload.header("List-Unsubscribe"), g.Payload.header("List-Unsubscribe-Post")),
 	}
 	var walk func(p *gPart, depth int)
 	walk = func(p *gPart, depth int) {
@@ -703,9 +714,46 @@ func (c *Client) SetLabel(ctx context.Context, ids []string, name string, add bo
 	return c.batchModify(ctx, ids, nil, []string{id})
 }
 
-// ---- send ----
+// ---- send & drafts ----
 
-func (c *Client) Send(ctx context.Context, out mail.Outgoing) error {
+// forwardAttachments loads (and briefly caches) the original attachments
+// for forwards; draft autosaves would otherwise download them each time.
+func (c *Client) forwardAttachments(ctx context.Context, remoteID string) ([]mailmime.Attachment, error) {
+	c.mu.Lock()
+	if c.fwdCache == nil {
+		c.fwdCache = map[string][]mailmime.Attachment{}
+	}
+	if atts, ok := c.fwdCache[remoteID]; ok {
+		c.mu.Unlock()
+		return atts, nil
+	}
+	c.mu.Unlock()
+	body, err := c.Body(ctx, remoteID)
+	if err != nil {
+		return nil, fmt.Errorf("could not load the original attachments: %w", err)
+	}
+	var atts []mailmime.Attachment
+	for _, a := range body.Attachments {
+		if a.Inline {
+			continue
+		}
+		data, err := c.Attachment(ctx, remoteID, a.ID)
+		if err != nil {
+			return nil, fmt.Errorf("could not load attachment %s: %w", a.Filename, err)
+		}
+		atts = append(atts, mailmime.Attachment{Filename: a.Filename, MimeType: a.MimeType, Data: data})
+	}
+	c.mu.Lock()
+	if len(c.fwdCache) > 4 {
+		c.fwdCache = map[string][]mailmime.Attachment{}
+	}
+	c.fwdCache[remoteID] = atts
+	c.mu.Unlock()
+	return atts, nil
+}
+
+// build renders out as raw MIME and returns the Gmail thread id.
+func (c *Client) build(ctx context.Context, out mail.Outgoing) ([]byte, string, error) {
 	m := mailmime.Message{
 		From: out.From, To: out.To, Cc: out.Cc, Bcc: out.Bcc, IncludeBcc: true,
 		Subject: out.Subject, Text: out.Text, HTML: out.HTML,
@@ -721,39 +769,52 @@ func (c *Client) Send(ctx context.Context, out mail.Outgoing) error {
 			m.References = mailmime.ReferencesFor(o.References, o.MessageID)
 			threadID = o.ThreadID
 		case "forward":
-			// Include the original's attachments.
-			body, err := c.Body(ctx, o.RemoteID)
+			atts, err := c.forwardAttachments(ctx, o.RemoteID)
 			if err != nil {
-				return fmt.Errorf("could not load the original attachments: %w", err)
+				return nil, "", err
 			}
-			for _, a := range body.Attachments {
-				if a.Inline {
-					continue
-				}
-				data, err := c.Attachment(ctx, o.RemoteID, a.ID)
-				if err != nil {
-					return fmt.Errorf("could not load attachment %s: %w", a.Filename, err)
-				}
-				m.Attachments = append(m.Attachments, mailmime.Attachment{Filename: a.Filename, MimeType: a.MimeType, Data: data})
-			}
+			m.Attachments = append(m.Attachments, atts...)
 		}
 	}
 	raw, err := mailmime.Build(m)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	if len(raw) > 35<<20 {
-		return errors.New("the message is larger than Gmail's 35 MB limit")
+		return nil, "", errors.New("the message is larger than Gmail's 35 MB limit")
 	}
+	return raw, threadID, nil
+}
+
+// upload posts a message resource ({raw, threadId}, optionally wrapped in a
+// draft) to a Gmail endpoint, using the multipart upload API for large ones.
+func (c *Client) upload(ctx context.Context, method, path string, raw []byte, threadID, draftID string, out any) error {
+	msg := map[string]string{}
+	if threadID != "" {
+		msg["threadId"] = threadID
+	}
+	isDraft := strings.HasPrefix(path, "drafts")
 	if len(raw) < 4<<20 {
-		body := map[string]string{"raw": base64.RawURLEncoding.EncodeToString(raw)}
-		if threadID != "" {
-			body["threadId"] = threadID
+		msg["raw"] = base64.RawURLEncoding.EncodeToString(raw)
+		var body any = msg
+		if isDraft {
+			d := map[string]any{"message": msg}
+			if draftID != "" {
+				d["id"] = draftID
+			}
+			body = d
 		}
-		return c.api.JSON(ctx, http.MethodPost, "messages/send", body, nil)
+		return c.api.JSON(ctx, method, path, body, out)
 	}
-	// Large messages go through the multipart upload endpoint.
-	meta, _ := json.Marshal(map[string]string{"threadId": threadID})
+	var metaObj any = msg
+	if isDraft {
+		d := map[string]any{"message": msg}
+		if draftID != "" {
+			d["id"] = draftID
+		}
+		metaObj = d
+	}
+	meta, _ := json.Marshal(metaObj)
 	boundary := "gomail-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	var buf strings.Builder
 	buf.WriteString("--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n")
@@ -761,15 +822,174 @@ func (c *Client) Send(ctx context.Context, out mail.Outgoing) error {
 	buf.WriteString("\r\n--" + boundary + "\r\nContent-Type: message/rfc822\r\n\r\n")
 	buf.Write(raw)
 	buf.WriteString("\r\n--" + boundary + "--")
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
 	resp, err := c.api.Do(ctx, httpx.Request{
-		Method: http.MethodPost, Path: c.base + "/upload/gmail/v1/users/me/messages/send?uploadType=multipart",
+		Method: method, Path: c.base + "/upload/gmail/v1/users/me/" + path + sep + "uploadType=multipart",
 		Body: []byte(buf.String()), ContentType: "multipart/related; boundary=" + boundary,
 	})
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
 	return nil
+}
+
+func (c *Client) Send(ctx context.Context, out mail.Outgoing) error {
+	raw, threadID, err := c.build(ctx, out)
+	if err != nil {
+		return err
+	}
+	return c.upload(ctx, http.MethodPost, "messages/send", raw, threadID, "", nil)
+}
+
+func (c *Client) SaveDraft(ctx context.Context, out mail.Outgoing, draftID string) (string, error) {
+	raw, threadID, err := c.build(ctx, out)
+	if err != nil {
+		return "", err
+	}
+	var d struct {
+		ID string `json:"id"`
+	}
+	if draftID != "" {
+		err = c.upload(ctx, http.MethodPut, "drafts/"+url.PathEscape(draftID), raw, threadID, draftID, &d)
+		if httpx.StatusOf(err) != http.StatusNotFound {
+			if err != nil {
+				return "", err
+			}
+			return d.ID, nil
+		}
+		// The draft was sent or deleted elsewhere: create a new one.
+	}
+	if err := c.upload(ctx, http.MethodPost, "drafts", raw, threadID, "", &d); err != nil {
+		return "", err
+	}
+	return d.ID, nil
+}
+
+func (c *Client) SendDraft(ctx context.Context, out mail.Outgoing, draftID string) error {
+	id, err := c.SaveDraft(ctx, out, draftID)
+	if err != nil {
+		return err
+	}
+	return c.api.JSON(ctx, http.MethodPost, "drafts/send", map[string]string{"id": id}, nil)
+}
+
+func (c *Client) DeleteDraft(ctx context.Context, draftID string) error {
+	err := c.api.JSON(ctx, http.MethodDelete, "drafts/"+url.PathEscape(draftID), nil, nil)
+	if httpx.StatusOf(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
+func (c *Client) DraftID(ctx context.Context, messageRemoteID string) (string, error) {
+	page := ""
+	for i := 0; i < 20; i++ {
+		v := url.Values{"maxResults": {"500"}}
+		if page != "" {
+			v.Set("pageToken", page)
+		}
+		var resp struct {
+			Drafts []struct {
+				ID      string `json:"id"`
+				Message struct {
+					ID string `json:"id"`
+				} `json:"message"`
+			} `json:"drafts"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := c.api.JSON(ctx, http.MethodGet, "drafts?"+v.Encode(), nil, &resp); err != nil {
+			return "", err
+		}
+		for _, d := range resp.Drafts {
+			if d.Message.ID == messageRemoteID {
+				return d.ID, nil
+			}
+		}
+		if resp.NextPageToken == "" {
+			break
+		}
+		page = resp.NextPageToken
+	}
+	return "", errors.New("that draft no longer exists")
+}
+
+// ---- older mail & search ----
+
+func (c *Client) ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error) {
+	label, q := folder.RemoteID, ""
+	if folder.RemoteID == AllMail {
+		label, q = "", "-in:inbox -in:spam -in:trash"
+	}
+	if !before.IsZero() {
+		q = strings.TrimSpace(q + " before:" + strconv.FormatInt(before.Unix(), 10))
+	}
+	ids, err := c.listIDs(ctx, label, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	msgs, _, err := c.fetchMetadata(ctx, ids)
+	return msgs, err
+}
+
+func gmailQuote(s string) string {
+	s = strings.ReplaceAll(s, `"`, "")
+	if strings.ContainsAny(s, " \t()") {
+		return `"` + s + `"`
+	}
+	return s
+}
+
+// SearchString renders a query in Gmail search syntax.
+func SearchString(q mail.SearchQuery) string {
+	var parts []string
+	for _, t := range q.Terms {
+		parts = append(parts, gmailQuote(t))
+	}
+	for _, v := range q.From {
+		parts = append(parts, "from:"+gmailQuote(v))
+	}
+	for _, v := range q.To {
+		parts = append(parts, "to:"+gmailQuote(v))
+	}
+	for _, v := range q.Subject {
+		parts = append(parts, "subject:"+gmailQuote(v))
+	}
+	if q.Unread != nil {
+		parts = append(parts, map[bool]string{true: "is:unread", false: "is:read"}[*q.Unread])
+	}
+	if q.Starred != nil && *q.Starred {
+		parts = append(parts, "is:starred")
+	}
+	if q.HasAttachment {
+		parts = append(parts, "has:attachment")
+	}
+	if !q.After.IsZero() {
+		parts = append(parts, "after:"+strconv.FormatInt(q.After.Unix(), 10))
+	}
+	if !q.Before.IsZero() {
+		parts = append(parts, "before:"+strconv.FormatInt(q.Before.Unix(), 10))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (c *Client) Search(ctx context.Context, q mail.SearchQuery, limit int) ([]mail.Message, error) {
+	qs := SearchString(q)
+	if qs == "" {
+		return nil, nil
+	}
+	ids, err := c.listIDs(ctx, "", qs, limit)
+	if err != nil {
+		return nil, err
+	}
+	msgs, _, err := c.fetchMetadata(ctx, ids)
+	return msgs, err
 }
 
 var _ provider.Provider = (*Client)(nil)

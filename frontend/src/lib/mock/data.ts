@@ -462,6 +462,7 @@ export function buildMessage(t: Tpl, date: number, threadId?: string, overrides:
         : { labelId, source: 'manual', confidence: 1 }),
     cc: t.cc ?? [], bcc: [], replyTo: [], bodyHtml: t.html ?? '', bodyText: t.text ?? '', attachments: atts,
     messageId: `<${id}@mock.gomail>`, inReplyTo: '', references: '', hasRemoteContent: /src=["']https?:/i.test(t.html ?? ''),
+    unsubscribe: t.cat === 'newsletters' ? { url: `https://example.com/unsubscribe?m=${id}`, mailto: '', oneClick: true } : null,
     ...overrides,
   }
 }
@@ -567,3 +568,6 @@ export function buildStressMessages(n: number): Message[] {
   }
   return out
 }
+
+export const SAMPLE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAKAAAAAwCAIAAAAZy+Y5AAABtUlEQVR42u3R5zoQABiGYQfR3ntPSdLeKho0hNLQIu1xRpEVES8RWRERERFxJn3vWfTjua77DO6EOXob5lrJPJXMt9IFKl2od2GRlS1W2RIrX6ryZaoIy61yhSpXWtUqVa3W+7DGqteqep3VrFfNBn0IG612k2o3W90W1W3Vx7DN6rerfoc17FRDohR2WWOSGndbU7Ka9uhTSLHmvWpOtZZ9atmvz+GAtR5U6yFrO6y2I/oSjlr7MbUft44T6jipznDKutLUddq6z6j7rL6GdOvJUM856z2v3gv6Fi5aX6b6sqz/kvov63u4YgNXNZBtg9c0mKMfIdeG8jR03YZvaDhfP8NNG7mlkds2ekejBfoV7trYPY3dt/EHGn+o36HQJoo08cgmizX5WH/CE5t6qqlnNv1c0y/0N7y0mVeaeW2zbzSbQDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBBNMMMEEE0wwwQQTTDDBBP/vwf8AB4iVzZGG2gIAAAAASUVORK5CYII='
+export const SAMPLE_PDF = 'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA0MjAgMjk3XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMzggPj4Kc3RyZWFtCkJUIC9GMSAyMiBUZiA0MCAyMzAgVGQgKE1vY2sgYXR0YWNobWVudCBwcmV2aWV3KSBUaiBFVApCVCAvRjEgMTIgVGYgNDAgMjAwIFRkIChSZW5kZXJlZCBmcm9tIEdldEF0dGFjaG1lbnREYXRhIGluIHRoZSBicm93c2VyIG1vY2suKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDQzMCAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjUwMAolJUVPRgo='

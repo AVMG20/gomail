@@ -7,7 +7,7 @@ import ProviderIcon from './ProviderIcon.vue'
 const props = withDefaults(defineProps<{ account: Account; size?: number; glyph?: boolean; active?: boolean }>(), {
   size: 36, glyph: true, active: false,
 })
-const label = computed(() => initials(props.account.displayName || props.account.email))
+const label = computed(() => initials(props.account.displayName, props.account.email))
 </script>
 
 <template>

@@ -3,12 +3,12 @@
 // enough that every screen can be demoed and tested.
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
-  EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
+  AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
   SearchQuery, SearchResult, Settings,
 } from '../types'
 import {
   DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, PROVIDER_LABELS, SEED_ACCOUNTS, SEED_SETTINGS,
-  asTemplateAccount, buildMessage, buildSeedMessages, buildStressMessages, buildWelcome, foldersFor,
+  asTemplateAccount, buildMessage, buildSeedMessages, buildStressMessages, buildWelcome, foldersFor, SAMPLE_PDF, SAMPLE_PNG,
 } from './data'
 
 type Listener = (payload: unknown) => void
@@ -113,6 +113,11 @@ class MockBackend {
     const stress = typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get('stress') || 0) : 0
     const seed = stress ? buildStressMessages(stress === 1 ? 20000 : stress) : buildSeedMessages()
     for (const m of seed) this.messages.set(m.id, m)
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('reauth')) {
+      const work = this.accounts.find((a) => a.id === 'acc_work')
+      if (work) work.needsReauth = true
+    }
+    for (const a of this.accounts) this.remoteOlder.set(a.id, 2)
   }
 
   // ---------------------------------------------------------------- events
@@ -246,6 +251,9 @@ class MockBackend {
   }
 
   private version = 0
+  /** Remaining "older pages" on the fake server per account (LoadOlder). */
+  private remoteOlder = new Map<string, number>()
+  private drafts = new Map<string, string>()
   private filterCache = new Map<string, { version: number; result: Message[] }>()
 
   private filter(q: Partial<ListQuery>): Message[] {
@@ -384,6 +392,92 @@ class MockBackend {
     })
   }
 
+  private threadSizes: { version: number; map: Map<string, number> } | null = null
+  private threadSize(m: Message): number {
+    if (!this.threadSizes || this.threadSizes.version !== this.version) {
+      const map = new Map<string, number>()
+      for (const x of this.messages.values()) map.set(`${x.accountId}:${x.threadId}`, (map.get(`${x.accountId}:${x.threadId}`) ?? 0) + 1)
+      this.threadSizes = { version: this.version, map }
+    }
+    return this.threadSizes.map.get(`${m.accountId}:${m.threadId}`) ?? 1
+  }
+
+  async LoadOlder(q: ListQuery): Promise<number> {
+    await sleep(900)
+    const ids = q.accountId ? [q.accountId] : this.accounts.map((a) => a.id)
+    let added = 0
+    for (const id of ids) {
+      const left = this.remoteOlder.get(id) ?? 0
+      if (!left) continue
+      this.remoteOlder.set(id, left - 1)
+      const oldest = [...this.messages.values()].filter((m) => m.accountId === id).reduce((t, m) => Math.min(t, Date.parse(m.date)), Date.now())
+      const pool = [...this.messages.values()].filter((m) => m.accountId === id && m.folderIds.includes(`${id}:inbox`) && !m.threadId.startsWith('thr_old')).slice(0, 8)
+      pool.forEach((src, i) => {
+        const nid = `old_${id}_${left}_${i}`
+        this.messages.set(nid, { ...clone(src), id: nid, threadId: `thr_old_${nid}`, unread: false, subject: `${src.subject.replace(/^Re: /, '')} (archive copy)`, date: new Date(oldest - (i + 1) * 36 * 3600_000).toISOString() })
+        added++
+      })
+    }
+    this.changed(q.accountId)
+    return added
+  }
+
+  async ReauthAccount(id: string): Promise<Account> {
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, 2500)
+      this.addAccountCancel = () => { clearTimeout(t); reject(new Error('cancelled')) }
+    })
+    this.addAccountCancel = null
+    const a = this.accounts.find((x) => x.id === id)
+    if (!a) throw new Error('account not found')
+    a.needsReauth = false
+    a.syncError = ''
+    this.emit('accounts:changed', { accountId: id })
+    return clone(a)
+  }
+
+  async Unsubscribe(id: string): Promise<{ method: string; url: string }> {
+    await sleep(700)
+    const m = this.messages.get(id)
+    if (!m?.unsubscribe) throw new Error('This sender does not support unsubscribing')
+    return m.unsubscribe.oneClick ? { method: 'oneClick', url: '' } : { method: 'url', url: m.unsubscribe.url }
+  }
+
+  async GetMessageWithRemoteContent(id: string): Promise<Message> {
+    return this.GetMessage(id)
+  }
+
+  async GetAttachmentData(messageId: string, attachmentId: string): Promise<AttachmentData> {
+    await sleep(250)
+    const att = this.messages.get(messageId)?.attachments.find((a) => a.id === attachmentId)
+    if (!att) throw new Error('attachment not found')
+    if (att.mimeType.startsWith('image/')) return { mimeType: 'image/png', dataBase64: SAMPLE_PNG }
+    if (att.mimeType === 'application/pdf') return { mimeType: 'application/pdf', dataBase64: SAMPLE_PDF }
+    return { mimeType: 'text/plain', dataBase64: btoa(`Preview of ${att.filename}\n(mock data)`) }
+  }
+
+  async SaveDraft(req: ComposeRequest, draftId: string): Promise<string> {
+    await latency(80, 200)
+    const id = draftId || `draft_${Date.now().toString(36)}`
+    const acc = this.accounts.find((a) => a.id === req.accountId)
+    if (!acc) return id
+    const msgId = this.drafts.get(id)
+    if (msgId) this.messages.delete(msgId)
+    const m = buildMessage({ acc: acc.id, from: { name: 'Alex Morgan', email: acc.email }, to: req.to, subject: req.subject || '(no subject)', html: req.bodyHtml, text: req.bodyText, folder: 'drafts', read: true }, Date.now())
+    this.messages.set(m.id, m)
+    this.drafts.set(id, m.id)
+    this.changed(acc.id)
+    return id
+  }
+
+  async DeleteDraft(id: string): Promise<void> {
+    await latency(40, 100)
+    const msgId = this.drafts.get(id)
+    if (msgId) this.messages.delete(msgId)
+    this.drafts.delete(id)
+    this.changed()
+  }
+
   /** Thread-level actions apply to every message of the conversation. */
   private withThreads(ids: string[]): string[] {
     const threads = new Set(ids.map((id) => this.messages.get(id)).filter(Boolean).map((m) => `${m!.accountId}:${m!.threadId}`))
@@ -395,7 +489,8 @@ class MockBackend {
   async ListMessages(q: ListQuery): Promise<MessagePage> {
     await latency(90, 260)
     const filtered = this.filter(q)
-    let all = this.threadCache.get(filtered)
+    const conv = this.settings.conversationView !== false
+    let all = conv ? this.threadCache.get(filtered) : filtered
     if (!all) {
       all = this.latestPerThread(filtered)
       this.threadCache.set(filtered, all)
@@ -417,10 +512,13 @@ class MockBackend {
     const page = all.slice(start, start + limit)
     const last = page[page.length - 1]
     const more = start + limit < all.length
+    const kind = q.folderId ? this.kindOf(q.folderId) : q.folderKind
+    const remote = (q.accountId ? [q.accountId] : this.accounts.map((a) => a.id)).some((id) => (this.remoteOlder.get(id) ?? 0) > 0)
     return {
-      messages: page.map((m) => this.summary(m)),
+      messages: page.map((m) => ({ ...this.summary(m), threadCount: conv ? this.threadSize(m) : 1 })),
       nextCursor: more && last ? btoa(`${last.date}|${last.id}`) : '',
       total: all.length,
+      hasMoreRemote: !more && kind === 'inbox' && !q.search && remote,
     }
   }
 
@@ -510,7 +608,13 @@ class MockBackend {
       this.emit('sync:started', { accountId: a.id })
     }
     void (async () => {
-      await sleep(1200 + Math.random() * 800)
+      for (const a of targets) {
+        for (let step = 1; step <= 4; step++) {
+          await sleep(220)
+          this.emit('sync:progress', { accountId: a.id, phase: step < 3 ? 'headers' : 'labels', done: step * 25, total: 100 })
+        }
+      }
+      await sleep(300 + Math.random() * 300)
       for (const a of targets) {
         let newMessages = 0
         // Every other sync of the first target brings in one new message.

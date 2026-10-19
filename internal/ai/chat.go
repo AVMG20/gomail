@@ -20,9 +20,6 @@ Rules:
 const summaryPrompt = `Summarize the email for a busy reader in 2 to 4 short bullet points, each starting with "- ".
 Write in the same language as the email. Mention action items, deadlines and amounts if present. No preamble, no closing remarks.`
 
-const draftPrompt = `You write email replies on behalf of the user. Write only the body of the reply as plain text: no subject line, no placeholders like [Name] unless unavoidable, no explanations.
-Reply in the language of the email unless the instructions say otherwise. Keep it concise and natural, and end with a short sign-off without a name.`
-
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -114,17 +111,4 @@ func (c *Client) ImproveGrammar(ctx context.Context, model, systemPrompt, text s
 func (c *Client) Summarize(ctx context.Context, model, email string) (string, error) {
 	out, err := c.Chat(ctx, model, summaryPrompt, email, 0.2)
 	return strings.TrimSpace(out), err
-}
-
-// DraftReply drafts a plain-text reply to an email.
-func (c *Client) DraftReply(ctx context.Context, model, email, instructions string) (string, error) {
-	user := "Email to reply to:\n\n" + email
-	if strings.TrimSpace(instructions) != "" {
-		user += "\n\nInstructions for the reply: " + strings.TrimSpace(instructions)
-	}
-	out, err := c.Chat(ctx, model, draftPrompt, user, 0.5)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(cleanRewrite("", out)), nil
 }
