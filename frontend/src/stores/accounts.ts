@@ -1,0 +1,98 @@
+import { defineStore } from 'pinia'
+import { computed, ref, shallowRef } from 'vue'
+import { useDebounceFn } from '@vueuse/core'
+import { api } from '@/lib/api'
+import type { Account, Folder, LabelCount } from '@/lib/types'
+
+export const SYSTEM_ORDER = ['inbox', 'starred', 'sent', 'drafts', 'archive', 'spam', 'trash']
+
+export const useAccountsStore = defineStore('accounts', () => {
+  const accounts = ref<Account[]>([])
+  const folders = shallowRef<Record<string, Folder[]>>({})
+  const labelCounts = shallowRef<Map<string, LabelCount>>(new Map())
+  const loaded = ref(false)
+  const syncing = ref<Set<string>>(new Set())
+
+  const accountMap = computed(() => new Map(accounts.value.map((a) => [a.id, a])))
+  const anySyncing = computed(() => syncing.value.size > 0 || accounts.value.some((a) => a.syncing))
+  const folderMap = computed(() => {
+    const m = new Map<string, Folder>()
+    for (const list of Object.values(folders.value)) for (const f of list) m.set(f.id, f)
+    return m
+  })
+
+  function sortFolders(list: Folder[]): Folder[] {
+    return [...list].sort((a, b) => {
+      const ia = SYSTEM_ORDER.indexOf(a.kind)
+      const ib = SYSTEM_ORDER.indexOf(b.kind)
+      if (ia !== ib) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+      return a.name.localeCompare(b.name)
+    })
+  }
+
+  async function loadFolders(ids = accounts.value.map((a) => a.id)) {
+    const results = await Promise.all(ids.map(async (id) => [id, sortFolders(await api.getFolders(id))] as const))
+    const next = { ...folders.value }
+    for (const [id, list] of results) next[id] = list
+    for (const id of Object.keys(next)) if (!accounts.value.some((a) => a.id === id)) delete next[id]
+    folders.value = next
+  }
+
+  async function loadLabelCounts() {
+    try {
+      const counts = await api.getLabelCounts('')
+      labelCounts.value = new Map(counts.map((c) => [c.labelId, c]))
+    } catch {
+      /* optional binding */
+    }
+  }
+
+  async function load() {
+    accounts.value = await api.getAccounts()
+    await Promise.all([loadFolders(), loadLabelCounts()])
+    loaded.value = true
+  }
+
+  async function reloadAccounts() {
+    accounts.value = await api.getAccounts()
+  }
+
+  /** Counts (folder unread, label counts, account unread) after mail changes. */
+  const refreshCounts = useDebounceFn(async () => {
+    await Promise.all([reloadAccounts(), loadFolders(), loadLabelCounts()])
+  }, 400)
+
+  function folderOf(accountId: string, kind: string): Folder | undefined {
+    return folders.value[accountId]?.find((f) => f.kind === kind)
+  }
+
+  function unifiedUnread(kind: string): number {
+    let n = 0
+    for (const a of accounts.value) n += folderOf(a.id, kind)?.unread ?? 0
+    return n
+  }
+
+  function setSyncing(id: string, on: boolean) {
+    const s = new Set(syncing.value)
+    if (on) s.add(id)
+    else s.delete(id)
+    syncing.value = s
+  }
+
+  async function sync(id = '') {
+    const ids = id ? [id] : accounts.value.map((a) => a.id)
+    ids.forEach((x) => setSyncing(x, true))
+    try {
+      if (id) await api.syncNow(id)
+      else await Promise.all(ids.map((x) => api.syncNow(x)))
+    } catch (e) {
+      ids.forEach((x) => setSyncing(x, false))
+      throw e
+    }
+  }
+
+  return {
+    accounts, folders, labelCounts, loaded, syncing, accountMap, anySyncing, folderMap,
+    load, loadFolders, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
+  }
+})
