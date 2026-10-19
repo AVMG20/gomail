@@ -10,7 +10,9 @@ import (
 )
 
 // IsMailto reports whether s looks like a mailto: URI.
-func IsMailto(s string) bool { return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "mailto:") }
+func IsMailto(s string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "mailto:")
+}
 
 // Parse turns a mailto: URI into composer fields. Headers other than to,
 // cc, bcc, subject and body are ignored (RFC 6068 lets clients do so).

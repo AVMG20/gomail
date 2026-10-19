@@ -120,7 +120,7 @@ export const USED_METHODS = [
   'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate']
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose']
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -294,6 +294,8 @@ export const api = {
   /** AI spend so far (next backend pass). */
   getAIUsage: () => call<AIUsage>('GetAIUsage'),
   checkForUpdate: () => call<UpdateInfo>('CheckForUpdate'),
+  /** A mailto: link that launched the app before the UI was ready (returned once), or null. */
+  getPendingCompose: () => call<EventPayloads['compose:open'] | null>('GetPendingCompose'),
   updateAccountSignature: (id: string, html: string) => call<void>('UpdateAccountSignature', id, html),
   /** Frequency-ranked contacts from all mail (backend pass 3). */
   searchContacts: async (query: string, limit = 8): Promise<Contact[]> => (await call<Contact[] | null>('SearchContacts', query, limit)) ?? [],

@@ -130,7 +130,7 @@ function openDocs(anchor = '') {
           <p class="text-muted-foreground text-sm leading-relaxed">
             With an OpenRouter key, gomail can sort mail into your labels with the Jev decision model and fix grammar while you write. Mail is only sent to the model when it’s labeled or improved.
           </p>
-          <div v-if="settings.aiReady" class="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400"><CheckIcon class="size-4" /> OpenRouter is connected.</div>
+          <div v-if="settings.aiReady" class="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-400"><CheckIcon class="size-4" /> OpenRouter is connected.</div>
           <form v-else class="flex items-center gap-2" @submit.prevent="key.trim() && saveKey()">
             <div class="relative flex-1">
               <KeyRoundIcon class="text-muted-foreground absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />

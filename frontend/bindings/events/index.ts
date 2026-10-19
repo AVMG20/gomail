@@ -29,6 +29,11 @@ export const ClassifyFinished = "classify:finished";
 export const ClassifyProgress = "classify:progress";
 
 /**
+ * Name of the custom event "compose:open".
+ */
+export const ComposeOpen = "compose:open";
+
+/**
  * Name of the custom event "database:status".
  */
 export const DatabaseStatus = "database:status";
@@ -77,4 +82,9 @@ export const SyncProgress = "sync:progress";
  * Name of the custom event "sync:started".
  */
 export const SyncStarted = "sync:started";
+
+/**
+ * Name of the custom event "update:available".
+ */
+export const UpdateAvailable = "update:available";
 

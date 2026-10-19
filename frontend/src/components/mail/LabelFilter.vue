@@ -29,10 +29,12 @@ const activeCount = computed(() => mail.labelFilter.labels.length + (mail.labelF
   <Popover v-model:open="open">
     <PopoverTrigger as-child>
       <Tip label="Filter by label">
-        <Button variant="ghost" size="sm" :class="['text-muted-foreground gap-1.5 px-2', activeCount && 'text-foreground bg-muted']" aria-label="Filter by label">
+        <Button variant="ghost" size="sm" :class="['text-muted-foreground gap-1.5 px-2', activeCount && 'text-foreground bg-muted']">
           <ListFilterIcon class="size-4" />
-          <span class="hidden text-xs font-medium @[440px]:inline">Labels</span>
-          <span v-if="activeCount" class="bg-primary text-primary-foreground min-w-4 rounded-full px-1 text-[10px] leading-4 font-semibold">{{ activeCount }}</span>
+          <span class="sr-only">Filter by</span>
+          <span class="sr-only text-xs font-medium @[440px]:not-sr-only">Labels</span>
+          <span v-if="activeCount" class="sr-only">, {{ activeCount }} active</span>
+          <span v-if="activeCount" aria-hidden="true" class="bg-primary text-primary-foreground min-w-4 rounded-full px-1 text-[10px] leading-4 font-semibold">{{ activeCount }}</span>
         </Button>
       </Tip>
     </PopoverTrigger>

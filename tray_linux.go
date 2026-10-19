@@ -21,3 +21,16 @@ func trayAvailable() bool {
 	err = conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, "org.kde.StatusNotifierWatcher").Store(&owner)
 	return err == nil && owner != ""
 }
+
+// sessionBusAvailable reports whether a D-Bus session bus can be reached
+// without auto-launching one. Single-instance mode needs it on Linux; without
+// it (minimal window managers, containers) gomail still starts, just without
+// focusing an already running instance.
+func sessionBusAvailable() bool {
+	conn, err := dbus.SessionBusPrivateNoAutoStartup()
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	return conn.Auth(nil) == nil && conn.Hello() == nil
+}

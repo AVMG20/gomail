@@ -58,7 +58,7 @@ type gmailHistory struct {
 // drafts and the multipart upload endpoint.
 type Gmail struct {
 	Server *httptest.Server
-	Email  string
+	email  string
 	Auth   func(token string) bool
 
 	mu        sync.Mutex
@@ -69,13 +69,19 @@ type Gmail struct {
 	drafts    map[string]string // draft id -> message id
 	sent      []*GmailMessage
 	seq       int
-	Requests  int
-	Uploads   int
+	uploads   int
+}
+
+// Uploads counts calls to the multipart upload endpoint.
+func (g *Gmail) Uploads() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.uploads
 }
 
 // NewGmail starts a fake mailbox for email. auth validates bearer tokens.
 func NewGmail(email string, auth func(string) bool) *Gmail {
-	g := &Gmail{Email: email, Auth: auth, msgs: map[string]*GmailMessage{}, drafts: map[string]string{}, historyID: 1000}
+	g := &Gmail{email: email, Auth: auth, msgs: map[string]*GmailMessage{}, drafts: map[string]string{}, historyID: 1000}
 	for _, id := range []string{"INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "STARRED", "UNREAD", "IMPORTANT"} {
 		g.labels = append(g.labels, gmailLabel{ID: id, Name: id, Type: "system"})
 	}
@@ -98,6 +104,13 @@ func (g *Gmail) record(h gmailHistory) {
 	g.historyID++
 	h.id = g.historyID
 	g.history = append(g.history, h)
+}
+
+// SetEmail changes the mailbox address (e.g. to sign in as someone else).
+func (g *Gmail) SetEmail(email string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.email = email
 }
 
 // AddLabel creates a user label and returns its id.
@@ -211,9 +224,6 @@ func (g *Gmail) modify(m *GmailMessage, add, remove []string) bool {
 }
 
 func (g *Gmail) serve(w http.ResponseWriter, r *http.Request) {
-	g.mu.Lock()
-	g.Requests++
-	g.mu.Unlock()
 	if g.Auth != nil && !g.Auth(bearer(r)) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"code": 401, "message": "Request had invalid authentication credentials.", "status": "UNAUTHENTICATED"}})
 		return
@@ -261,7 +271,7 @@ func (g *Gmail) serveUpload(w http.ResponseWriter, r *http.Request, p string) {
 	raw, _ := io.ReadAll(rawPart)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.Uploads++
+	g.uploads++
 	g.route(w, r, p, meta, raw)
 }
 
@@ -272,7 +282,7 @@ func (g *Gmail) route(w http.ResponseWriter, r *http.Request, p string, body map
 	seg := strings.Split(p, "/")
 	switch {
 	case p == "profile":
-		writeJSON(w, 200, map[string]any{"emailAddress": g.Email, "messagesTotal": len(g.msgs), "historyId": strconv.Itoa(g.historyID)})
+		writeJSON(w, 200, map[string]any{"emailAddress": g.email, "messagesTotal": len(g.msgs), "historyId": strconv.Itoa(g.historyID)})
 	case p == "labels" && r.Method == http.MethodGet:
 		var out []map[string]any
 		for _, l := range g.labels {

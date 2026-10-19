@@ -10,8 +10,8 @@ defineProps<{ account: Account }>()
   <button
     type="button"
     class="hover:bg-sidebar-accent flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    :aria-label="`Account menu for ${account.email}`"
   >
+    <span class="sr-only">Account menu:</span>
     <AccountAvatar :account="account" :size="28" :glyph="false" />
     <span class="min-w-0 flex-1">
       <span class="block truncate text-[13px] font-semibold">{{ account.displayName || account.email }}</span>

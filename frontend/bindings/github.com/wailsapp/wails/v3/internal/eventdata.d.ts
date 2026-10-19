@@ -16,6 +16,7 @@ declare module "@wailsio/runtime" {
             "ai:budget": models$0.AIBudgetEvent;
             "classify:finished": models$0.ClassifyProgress;
             "classify:progress": models$0.ClassifyProgress;
+            "compose:open": models$0.ComposeOpen;
             "database:status": models$0.DatabaseStatus;
             "labels:changed": models$0.AccountEvent;
             "mail:new": models$0.NewMailEvent;
@@ -26,6 +27,7 @@ declare module "@wailsio/runtime" {
             "sync:finished": models$0.SyncEvent;
             "sync:progress": models$0.SyncProgress;
             "sync:started": models$0.SyncEvent;
+            "update:available": models$0.UpdateInfo;
         }
     }
 }

@@ -530,8 +530,16 @@ func sanitizeFilename(n string) string {
 		}
 		return r
 	}, n)
-	if n == "" || n == "." || n == ".." {
-		n = "attachment"
+	// Windows: no trailing dots/spaces, no device names (CON, NUL.txt, ...).
+	n = strings.TrimRight(n, ". ")
+	if n == "" {
+		return "attachment"
+	}
+	stem, _, _ := strings.Cut(n, ".")
+	switch u := strings.ToUpper(strings.TrimSpace(stem)); {
+	case u == "CON" || u == "PRN" || u == "AUX" || u == "NUL",
+		len(u) == 4 && (strings.HasPrefix(u, "COM") || strings.HasPrefix(u, "LPT")) && u[3] >= '0' && u[3] <= '9':
+		n = "_" + n
 	}
 	return n
 }

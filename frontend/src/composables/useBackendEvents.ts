@@ -17,7 +17,7 @@ export function useBackendEvents() {
   const ai = useAiStore()
   const settings = useSettingsStore()
   const compose = useComposeStore()
-  const addrs = (v: string | Address[] | undefined): Address[] => (Array.isArray(v) ? v : v ? parseAddressList(v) : [])
+  const addrs = (v: string | Address[] | null | undefined): Address[] => (Array.isArray(v) ? v : v ? parseAddressList(v) : [])
   const refreshLabels = useDebounceFn(() => {
     void settings.refreshLabels()
     void accounts.loadLabelCounts()

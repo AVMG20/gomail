@@ -89,6 +89,32 @@ notarization aren't set up yet; see the TODO at the end.
    grant it tenant-wide from the consent URL or in Enterprise applications.
 4. No client secret is used; gomail is a public client with PKCE.
 
+## Desktop integration files
+
+`build/linux/gomail.desktop` registers gomail as a `mailto:` handler
+(`MimeType=x-scheme-handler/mailto;`, `Exec=gomail %u`, category
+`Network;Email;`). The Linux build regenerates the file in
+`build/linux/Taskfile.yml` (`generate:dotdesktop`), so the task has to pass
+the same values or each build overwrites it:
+
+```yaml
+  generate:dotdesktop:
+    cmds:
+      - mkdir -p {{.ROOT_DIR}}/build/linux/appimage
+      - wails3 generate .desktop -name "{{.APP_NAME}}" -exec "{{.EXEC}}" -icon "{{.ICON}}" -outputfile "{{.ROOT_DIR}}/build/linux/{{.APP_NAME}}.desktop" -categories "{{.CATEGORIES}}" -genericname "Mail Client" -comment "Fast desktop mail client for Gmail and Outlook" -mimetype "x-scheme-handler/mailto;" -keywords "mail;email;gmail;outlook;"
+    vars:
+      EXEC: '{{.APP_NAME}} %u'
+      CATEGORIES: 'Network;Email;'
+```
+
+The generator has no `StartupWMClass` flag, so a generated file lacks that
+line; it is optional.
+
+`build/darwin/Info.plist` declares the `mailto` URL scheme
+(`CFBundleURLTypes`, rank `Alternate`). The release workflow runs
+`wails3 update build-assets`, which merges its keys into the existing plist,
+so this entry survives. That step also leaves `gomail.desktop` untouched.
+
 ## Pre-release checklist
 
 - [ ] CI green on all platforms; `go test -race ./...` passes locally.
@@ -98,10 +124,26 @@ notarization aren't set up yet; see the TODO at the end.
 - [ ] `docs/BACKEND.md` matches the contract (methods, settings, events).
 - [ ] Demo mode works, and adding a real Gmail and a real Outlook account works with the
       baked-in clients.
+- [ ] `build/linux/gomail.desktop` still has the `mailto` MimeType after the Linux build.
+- [ ] The update check sees the new tag: run `CheckForUpdate` from an older build, or
+      check `https://api.github.com/repos/AVMG20/gomail/releases/latest`. Drafts and
+      pre-releases are not returned by that endpoint.
 
 ## TODO
 
 - macOS signing and notarization: an Apple Developer ID certificate plus `notarytool`
   secrets.
 - Windows Authenticode signing.
-- Auto-update channel.
+- Auto-update: the app only checks GitHub and links to the release page; it doesn't
+  download or install anything.
+- Windows `mailto:` registration. The NSIS installer should write the Default Programs
+  keys:
+  - `HKCU\Software\Clients\Mail\gomail\Capabilities\URLAssociations` with
+    `mailto` = `gomail.mailto`;
+  - `HKCU\Software\Classes\gomail.mailto\shell\open\command` with
+    `"<install dir>\gomail.exe" "%1"`;
+  - `HKCU\Software\RegisteredApplications` with `gomail` =
+    `Software\Clients\Mail\gomail\Capabilities`.
+
+  The uninstaller removes them. Users then pick gomail under Settings → Default apps.
+  The app already handles a `mailto:` argument.

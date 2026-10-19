@@ -402,7 +402,7 @@ export interface EventPayloads {
   /** Database health: integrity problems / repair. */
   'database:status': { ok: boolean; message: string }
   /** mailto: handler: open compose prefilled (next backend pass). */
-  'compose:open': { to?: string | Address[]; cc?: string | Address[]; bcc?: string | Address[]; subject?: string; body?: string }
+  'compose:open': { to?: string | Address[] | null; cc?: string | Address[] | null; bcc?: string | Address[] | null; subject?: string; body?: string }
   /** A newer release exists (next backend pass). */
   'update:available': UpdateInfo
   'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }

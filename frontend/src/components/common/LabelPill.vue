@@ -27,15 +27,11 @@ const tooltip = computed(() => {
   <Tip :label="tooltip">
     <span
       :class="cn(
-        'inline-flex max-w-36 shrink-0 items-center gap-1 rounded-full border font-medium whitespace-nowrap',
+        'gm-pill inline-flex max-w-36 shrink-0 items-center gap-1 rounded-full border font-medium whitespace-nowrap',
         size === 'xs' ? 'h-[18px] px-1.5 text-[10.5px]' : 'h-6 px-2 text-xs',
         props.class,
       )"
-      :style="{
-        color: `color-mix(in oklab, ${label.color} 78%, var(--foreground))`,
-        background: `color-mix(in oklab, ${label.color} 12%, transparent)`,
-        borderColor: `color-mix(in oklab, ${label.color} 22%, transparent)`,
-      }"
+      :style="{ '--pill': label.color }"
     >
       <span v-if="!isAi" class="size-1.5 shrink-0 rounded-full" :style="{ background: label.color }" />
       <SparklesIcon v-else class="size-2.5 shrink-0" />

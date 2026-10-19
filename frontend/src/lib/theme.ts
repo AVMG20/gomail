@@ -1,5 +1,5 @@
 import { shallowRef } from 'vue'
-import { readableForeground, shade } from './color'
+import { hexToRgb, luminance, readableForeground, shade } from './color'
 import type { Settings } from './types'
 
 export const THEME_CACHE_KEY = 'gomail.theme.v1'
@@ -14,8 +14,10 @@ export interface ThemeCache {
 }
 
 function buildVars(primary: string, radius: number, dark: boolean): Record<string, string> {
-  // In dark mode lift very dark accents so they stay visible on near-black surfaces.
-  const base = dark && readableForeground(primary) === '#ffffff' ? shade(primary, 0.12) : primary
+  // In dark mode lift only very dark accents (navy, near-black) so they stay visible on
+  // near-black surfaces; mid-tone accents keep white text at AA contrast.
+  const rgb = hexToRgb(primary)
+  const base = dark && rgb && luminance(rgb) < 0.06 ? shade(primary, 0.2) : primary
   const fg = readableForeground(base)
   return {
     '--primary': base,

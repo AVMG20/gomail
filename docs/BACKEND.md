@@ -217,6 +217,45 @@ elsewhere). Its menu has Open gomail, Check mail and Quit.
   over D-Bus); otherwise the window closes normally.
 - Missing D-Bus or notification daemons are logged and ignored.
 
+**Desktop integration.**
+
+- *Single instance.* One gomail runs per data directory (id
+  `com.avmg20.gomail`, plus a hash of the directory for custom profiles).
+  A second launch focuses the running window, forwards its arguments and
+  exits. On Linux this goes over the D-Bus session bus. Without a session
+  bus, gomail starts anyway with single-instance mode off (a note goes to
+  stderr), because Wails would otherwise refuse to start.
+- *Launch at login.* `launchAtLogin` (default false) registers gomail with
+  the OS: a HKCU `Run` value on Windows, a LaunchAgent on macOS, and an
+  XDG autostart `.desktop` file on Linux. Custom profiles never register.
+  The login entry passes `--minimized`, so gomail starts hidden in the tray.
+  When there is no tray (`showInTray` off, or no StatusNotifier host on
+  Linux), the window is shown anyway. On macOS 13+ a bundled app is
+  registered with SMAppService, which can't pass arguments, so there it
+  starts with its window open.
+- *mailto: links.* A `mailto:` URL on the command line, forwarded from a
+  second instance, or delivered by macOS as an open-URL event is parsed
+  (RFC 6068: to, cc, bcc, subject, body) and emitted as
+  `compose:open {to, cc, bcc, subject, body}`. Addresses are `Address`
+  lists. A link that arrives before the UI subscribed is kept, and the UI
+  collects it once with `GetPendingCompose()`, which returns `null` when
+  there is none. Registering as the handler:
+  - Linux: `MimeType=x-scheme-handler/mailto;` in `build/linux/gomail.desktop`,
+    with `Exec=gomail %u`. Users pick gomail with
+    `xdg-mime default gomail.desktop x-scheme-handler/mailto`.
+  - macOS: `CFBundleURLTypes` with the `mailto` scheme in
+    `build/darwin/Info.plist` (rank Alternate). Users pick gomail as the
+    default mail app in Mail's settings.
+  - Windows: not registered yet (see docs/RELEASING.md, TODO).
+- *Update check.* `CheckForUpdate()` asks
+  `api.github.com/repos/AVMG20/gomail/releases/latest` and returns
+  `UpdateInfo {current, latest, url, notes, available}`. Versions are
+  compared as semver, so a pre-release sorts before its release. A `dev`
+  build never reports an update. With `checkUpdates` (default true), the
+  backend checks one minute after start and then once every 24 h, and
+  emits `update:available` (an `UpdateInfo`) once per new version. Nothing
+  is downloaded; the UI links to `url`.
+
 **Actions** (read, star, archive, trash, move) update SQLite first, emit
 `messages:changed`, then go to the provider. Gmail uses `batchModify`
 (1000 ids per call) and Graph uses JSON `$batch` (20 per call). If the
@@ -300,9 +339,12 @@ so their `<style>` rules cannot affect the app.
 
 | OS      | Default                                   |
 |---------|-------------------------------------------|
-| Linux   | `~/.config/gomail`                        |
+| Linux   | `$XDG_CONFIG_HOME/gomail`, default `~/.config/gomail` |
 | macOS   | `~/Library/Application Support/gomail`    |
-| Windows | `%AppData%\gomail`                        |
+| Windows | `%AppData%\gomail` (roaming profile)       |
+
+These come from Go's `os.UserConfigDir`. `GOMAIL_DATA_DIR` overrides them,
+and demo mode uses a `demo` subdirectory.
 
 The directory contains:
 
@@ -313,9 +355,28 @@ The directory contains:
 - `secrets.enc` and `secrets.key`: the encrypted fallback secret store,
   created only when the OS keyring can't be used.
 
-OAuth refresh tokens and the OpenRouter key go into the OS keyring
-(Keychain, Credential Manager or Secret Service). They fall back to the
-encrypted file when no keyring is available or a value is too large for it.
+OAuth refresh tokens and the OpenRouter key go into the OS keyring:
+
+- macOS: the login Keychain (service `gomail`).
+- Windows: Credential Manager. A credential holds at most 2.5 KB, and
+  Microsoft refresh tokens can be bigger, so values over 2,000 bytes are
+  split into numbered chunks (`<key>#0`, `<key>#1`, ...) and the main
+  entry records how many there are.
+- Linux: the Secret Service (GNOME Keyring, KWallet).
+
+When no keyring is available or a write fails, the value goes to the
+AES-GCM encrypted file instead, and any stale keyring copy is deleted. The
+file's key is protected with DPAPI on Windows, where file modes don't
+restrict access. On macOS and Linux it is a mode-0600 file in the
+mode-0700 data directory. Keys written by older versions are upgraded in
+place.
+
+File names in the data directory are lower-case hex or fixed names, so
+case-insensitive file systems (the default on macOS and Windows) can't
+make two cache entries collide. Attachment names offered in the save
+dialog are cleaned for Windows: reserved characters, trailing dots and
+spaces, and device names such as `CON` or `NUL.txt`. Built messages always
+use CRLF line endings, whatever the input or the platform.
 
 **Webview storage.** The webview's localStorage and cache live under
 `<data dir>/webview`, so profiles don't share them:
@@ -423,12 +484,47 @@ wails3 generate bindings -clean=true -ts -i   # after changing MailService or mo
 go test -run xxx -bench . -benchtime 3x ./internal/store ./internal/core
 ```
 
+**Tests.** `internal/fakes` has stateful in-process fakes of the external
+services: OAuth token endpoints (PKCE is checked, refresh tokens can be
+revoked), the Gmail REST API (labels, history, batchModify, drafts and the
+upload endpoint), Microsoft Graph (delta queries, `$batch` with
+sub-request headers, createReply/createForward, attachments and upload
+sessions, categories) and OpenRouter (Decisions, models, chat).
+`app_e2e_test.go` drives the bound `MailService` against them and
+exercises the production code below the Wails bridge:
+
+- signing in through the real loopback flow;
+- syncing both providers and listing conversations;
+- bodies and attachments;
+- optimistic actions and label write-back;
+- AI labels;
+- sending with attachments;
+- saving and deleting drafts;
+- incremental sync;
+- a revoked sign-in (401, then the refresh fails with `invalid_grant`,
+  then `needsReauth`) followed by `ReauthAccount`.
+
+Coverage (`go test -cover ./...`):
+
+| Package | Coverage |
+|---|---|
+| store | 76% |
+| ai | 79% |
+| provider/gmail | 70% |
+| provider/outlook | 70% |
+| mailmime | 85% |
+| syncer | 88% |
+| core | 72% |
+| auth | 78% |
+| demo | 94% |
+| secrets | 67% |
+
 Benchmarks on the reference box, a 4-vCPU Xeon:
 
 | Operation | Time |
 |---|---|
-| Storing 5,000 synced messages | 1.9 s |
-| Initial sync of a 5,000-message demo account, end to end | 2.2 s |
+| Storing 5,000 synced messages | 1.3 s (folder kinds computed in the upsert, membership diffs, batched contacts and vocabulary) |
+| Initial sync of a 5,000-message demo account, end to end | 1.7 s |
 | `ListMessages` on a 50k inbox, conversation view | 7 ms (maintained `folder_threads` counters) |
 | `ListMessages` on a 50k inbox, message view | 3 ms |
 | Cold start to the first page with 50k messages | 25 ms (open: 3 ms) |

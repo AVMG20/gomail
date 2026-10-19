@@ -202,3 +202,40 @@ func TestParseListUnsubscribe(t *testing.T) {
 		t.Fatalf("%+v", p.Unsubscribe)
 	}
 }
+
+// TestBuildUsesCRLF: every line break of a built message is CRLF, whatever
+// the platform or the line endings of the input (Windows text, Unix text,
+// old Mac text, long lines, binary attachments).
+func TestBuildUsesCRLF(t *testing.T) {
+	raw, err := Build(Message{
+		From: models.Address{Name: "Zoë Example", Email: "zoe@example.com"}, To: []models.Address{{Email: "a@example.com"}},
+		Subject: "Line endings ✓ " + strings.Repeat("long subject ", 10),
+		Text:    "unix\nwindows\r\nold mac\rend " + strings.Repeat("x", 200),
+		HTML:    "<p>unix</p>\n<p>windows</p>\r\n" + strings.Repeat("<b>y</b>", 100),
+		Attachments: []Attachment{{Filename: "notes.txt", MimeType: "text/plain", Data: []byte("a\nb\nc")},
+			{Filename: "bin.dat", MimeType: "application/octet-stream", Data: bytes.Repeat([]byte{0, '\n', 0xff, '\r'}, 300)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range raw {
+		if b == '\n' && (i == 0 || raw[i-1] != '\r') {
+			t.Fatalf("bare LF at byte %d: %q", i, raw[max(0, i-40):i+1])
+		}
+		if b == '\r' && (i+1 == len(raw) || raw[i+1] != '\n') {
+			t.Fatalf("bare CR at byte %d: %q", i, raw[max(0, i-40):i+1])
+		}
+	}
+	for _, line := range bytes.Split(raw, []byte("\r\n")) {
+		if len(line) > 998 {
+			t.Fatalf("line longer than 998 octets: %d", len(line))
+		}
+	}
+	m, err := Parse(raw)
+	if err != nil || !strings.Contains(m.Text, "old mac") || len(m.Attachments) != 2 {
+		t.Fatalf("parse back: %v %+v", err, m)
+	}
+	if got := m.Attachments[1].Data; !bytes.Equal(got, bytes.Repeat([]byte{0, '\n', 0xff, '\r'}, 300)) {
+		t.Fatal("binary attachment changed")
+	}
+}

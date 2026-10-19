@@ -15,6 +15,7 @@ export type {
     ClassifyEstimate,
     ClassifyJob,
     ClassifyProgress,
+    ComposeOpen,
     ComposeRequest,
     Contact,
     DatabaseStatus,
@@ -38,5 +39,6 @@ export type {
     SyncEvent,
     SyncProgress,
     Unsubscribe,
-    UnsubscribeResult
+    UnsubscribeResult,
+    UpdateInfo
 } from "./models.js";

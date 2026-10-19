@@ -49,8 +49,7 @@ function badge(n: number) {
       <button
         type="button"
         class="group relative flex size-11 items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        :aria-label="`${acc.displayName || acc.email} (${acc.email})${acc.needsReauth ? ', sign-in expired' : acc.unreadCount ? `, ${acc.unreadCount} unread` : ''}`"
-        :aria-current="active === acc.id ? 'page' : undefined"
+                :aria-current="active === acc.id ? 'page' : undefined"
         @click="mail.switchAccount(acc.id)"
       >
         <span
@@ -58,6 +57,7 @@ function badge(n: number) {
           :class="active === acc.id ? 'h-6 opacity-100' : 'h-2 opacity-0 group-hover:opacity-50'"
           :style="{ background: acc.color }"
         />
+        <span class="sr-only">{{ acc.displayName || acc.email }} ({{ acc.email }}){{ acc.needsReauth ? ', sign-in expired' : acc.unreadCount ? `, ${acc.unreadCount} unread` : '' }}</span>
         <AccountAvatar :account="acc" :size="34" :active="active === acc.id" class="transition-transform group-active:scale-95" />
         <span v-if="acc.needsReauth" class="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white ring-2 ring-sidebar" aria-hidden="true">!</span>
         <span v-else-if="acc.unreadCount" aria-hidden="true" class="absolute -top-0.5 -right-0.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-semibold text-white ring-2 ring-sidebar" :style="{ background: '#dc2626' }">{{ badge(acc.unreadCount) }}</span>

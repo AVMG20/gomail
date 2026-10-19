@@ -104,7 +104,7 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.215 0.004 260);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: #3b78ef;
+  --primary: #2563eb;
   --primary-foreground: #ffffff;
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
@@ -295,3 +295,11 @@ html[data-chrome='mac'] [data-drag] { --wails-draggable: drag; }
 html[data-chrome='mac'] [data-drag] :is(button, a, input, textarea, select, label, summary, [role='button'], [role='tab'], [role='checkbox'], [role='menuitem'], [role='combobox'], [role='listbox'], [role='option'], [contenteditable='true'], [data-no-drag]) {
   --wails-draggable: no-drag;
 }
+
+/* Label pills: tinted background, text mixed toward the foreground for WCAG AA contrast at 10.5px. */
+.gm-pill {
+  color: color-mix(in oklab, var(--pill) 52%, var(--foreground));
+  background: color-mix(in oklab, var(--pill) 12%, transparent);
+  border-color: color-mix(in oklab, var(--pill) 24%, transparent);
+}
+.dark .gm-pill { color: color-mix(in oklab, var(--pill) 62%, var(--foreground)); }

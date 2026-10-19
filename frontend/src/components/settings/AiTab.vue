@@ -81,7 +81,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
     <SettingSection title="OpenRouter" description="AI features are optional and use your own OpenRouter key. Mail is sent to the model only when labeling or improving text.">
       <SettingRow title="API key" stacked>
         <template #description>
-          <span v-if="s.openRouterKeySet" class="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><CheckCircle2Icon class="size-3.5" /> A key is set. It is stored in your system keychain and never shown again.</span>
+          <span v-if="s.openRouterKeySet" class="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><CheckCircle2Icon class="size-3.5" /> A key is set. It is stored in your system keychain and never shown again.</span>
           <span v-else>Get a key at openrouter.ai/keys.</span>
         </template>
         <div class="flex items-center gap-2">

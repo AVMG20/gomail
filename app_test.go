@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -37,5 +38,22 @@ func TestServiceDemoSmoke(t *testing.T) {
 	}
 	if p := m.GetDefaultPrompts(); p.Grammar == "" || p.Classify == "" {
 		t.Fatal("prompts")
+	}
+}
+
+// TestInstanceIDIsValidDBusName: every element of the single-instance id
+// must be a valid D-Bus name element (no leading digit), for any profile.
+func TestInstanceIDIsValidDBusName(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		t.Setenv("GOMAIL_DATA_DIR", t.TempDir())
+		id := instanceID()
+		if !strings.HasPrefix(id, "com.avmg20.gomail.p") {
+			t.Fatalf("custom profile id %q", id)
+		}
+		for _, el := range strings.Split(id, ".") {
+			if el == "" || (el[0] >= '0' && el[0] <= '9') {
+				t.Fatalf("invalid D-Bus element %q in %q", el, id)
+			}
+		}
 	}
 }

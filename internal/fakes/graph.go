@@ -73,10 +73,16 @@ type Graph struct {
 	categories []string
 	uploads    map[string]*uploadSession
 
-	// MissingImmutableID counts requests (incl. $batch sub-requests) that
-	// did not ask for immutable ids.
-	MissingImmutableID int
-	Batches            int
+	missingImmutable int
+	batches          int
+}
+
+// Stats returns the number of $batch calls and of requests (including
+// batch sub-requests) that did not ask for immutable ids.
+func (g *Graph) Stats() (batches, missingImmutableID int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.batches, g.missingImmutable
 }
 
 // NewGraph starts a fake mailbox.
@@ -258,7 +264,7 @@ func (g *Graph) serve(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !strings.Contains(r.Header.Get("Prefer"), `IdType="ImmutableId"`) {
-		g.MissingImmutableID++
+		g.missingImmutable++
 	}
 	g.route(w, r, p, body)
 }
@@ -270,7 +276,7 @@ func (g *Graph) batch(w http.ResponseWriter, r *http.Request, body map[string]an
 		return
 	}
 	g.mu.Lock()
-	g.Batches++
+	g.batches++
 	g.mu.Unlock()
 	var out []map[string]any
 	for _, x := range reqs {

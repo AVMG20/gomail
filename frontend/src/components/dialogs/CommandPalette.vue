@@ -245,7 +245,10 @@ function onKeydown(e: KeyboardEvent) {
 // Strong local matches (an action/mailbox name) beat purely typo-tolerant mail hits.
 const order = computed(() => {
   const weakMail = results.value.length > 0 && results.value.every((r) => r.fuzzy)
-  return weakMail || !results.value.length ? ['actions', 'labels', 'mailboxes', 'mail'] : ['labels', 'mail', 'mailboxes', 'actions']
+  // A command whose title starts with the typed word ("mark" → "Mark as read") beats mail hits.
+  const word = q.value.toLowerCase()
+  const actionHit = word.length >= 3 && actions.value.some((a) => a.title.toLowerCase().startsWith(word))
+  return weakMail || actionHit || !results.value.length ? ['actions', 'labels', 'mailboxes', 'mail'] : ['labels', 'mail', 'mailboxes', 'actions']
 })
 
 const activeLabels = computed(() => mail.labelFilter.labels.map((id) => settings.labelMap.get(id)).filter((l): l is Label => !!l))

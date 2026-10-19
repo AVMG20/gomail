@@ -72,8 +72,9 @@ func instanceID() string {
 	id := "com.avmg20.gomail"
 	if config.CustomProfile() {
 		if dir, err := config.DataDir(); err == nil {
+			// D-Bus name elements must not start with a digit.
 			sum := sha256.Sum256([]byte(dir))
-			id += "." + hex.EncodeToString(sum[:6])
+			id += ".p" + hex.EncodeToString(sum[:6])
 		}
 	}
 	return id
@@ -87,22 +88,29 @@ func main() {
 	svc.startMinimized = slices.Contains(args, minimizedArg)
 	svc.handleArgs(args)
 
-	app := application.New(application.Options{
-		Name:        "gomail",
-		Description: "A fast desktop mail client for Gmail and Outlook with AI labels",
-		// The notification service is started by MailService so a missing
-		// notification daemon (minimal Linux desktops) can't stop the app.
-		Services: []application.Service{application.NewService(svc)},
-		Assets:   application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
-		Mac:      application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
-		Windows:  application.WindowsOptions{WebviewUserDataPath: webviewDir},
-		SingleInstance: &application.SingleInstanceOptions{
+	var single *application.SingleInstanceOptions
+	if sessionBusAvailable() {
+		single = &application.SingleInstanceOptions{
 			UniqueID: instanceID(),
 			OnSecondInstanceLaunch: func(d application.SecondInstanceData) {
 				svc.showWindow()
 				svc.handleArgs(d.Args)
 			},
-		},
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "gomail: no D-Bus session bus; single-instance mode is off")
+	}
+
+	app := application.New(application.Options{
+		Name:        "gomail",
+		Description: "A fast desktop mail client for Gmail and Outlook with AI labels",
+		// The notification service is started by MailService so a missing
+		// notification daemon (minimal Linux desktops) can't stop the app.
+		Services:       []application.Service{application.NewService(svc)},
+		Assets:         application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
+		Mac:            application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
+		Windows:        application.WindowsOptions{WebviewUserDataPath: webviewDir},
+		SingleInstance: single,
 	})
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{

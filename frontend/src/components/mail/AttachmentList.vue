@@ -61,7 +61,7 @@ const total = computed(() => visible.value.reduce((n, a) => n + a.size, 0))
         :key="a.id"
         class="group border-border hover:bg-muted/60 flex max-w-64 items-center gap-2.5 rounded-lg border py-2 pr-1.5 pl-2.5 transition-colors"
       >
-        <button type="button" class="flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none focus-visible:underline" :aria-label="previewable(a) ? `Preview ${a.filename}` : `Save ${a.filename}`" @click="open(a)">
+        <button type="button" class="flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none focus-visible:underline" @click="open(a)"><span class="sr-only">{{ previewable(a) ? 'Preview' : 'Save' }}</span>
           <span class="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
             <component :is="iconFor(a)" class="size-4" />
           </span>

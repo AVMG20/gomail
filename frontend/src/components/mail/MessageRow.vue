@@ -139,21 +139,21 @@ const date = computed(() => listDate(props.message.date))
       @click.stop
     >
       <Tip label="Archive" shortcut="e">
-        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" aria-label="Archive" @click="emit('archive')"><ArchiveIcon class="size-4" /></button>
+        <span role="presentation" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 cursor-default items-center justify-center rounded" @click="emit('archive')"><ArchiveIcon class="size-4" /></span>
       </Tip>
       <Tip label="Delete" shortcut="#">
-        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" aria-label="Delete" @click="emit('trash')"><Trash2Icon class="size-4" /></button>
+        <span role="presentation" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 cursor-default items-center justify-center rounded" @click="emit('trash')"><Trash2Icon class="size-4" /></span>
       </Tip>
       <Tip :label="message.unread ? 'Mark as read' : 'Mark as unread'" shortcut="u">
-        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" :aria-label="message.unread ? 'Mark as read' : 'Mark as unread'" @click="emit('read', message.unread)">
+        <span role="presentation" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 cursor-default items-center justify-center rounded" @click="emit('read', message.unread)">
           <MailOpenIcon v-if="message.unread" class="size-4" />
           <MailIcon v-else class="size-4" />
-        </button>
+        </span>
       </Tip>
       <Tip :label="message.starred ? 'Unstar' : 'Star'" shortcut="s">
-        <button type="button" tabindex="-1" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded" :aria-label="message.starred ? 'Unstar' : 'Star'" @click="emit('star', !message.starred)">
+        <span role="presentation" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 cursor-default items-center justify-center rounded" @click="emit('star', !message.starred)">
           <StarIcon class="size-4" :class="message.starred && 'fill-amber-400 text-amber-400'" />
-        </button>
+        </span>
       </Tip>
     </div>
   </div>

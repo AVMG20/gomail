@@ -234,6 +234,17 @@ export interface ClassifyProgress {
     "error": string;
 }
 
+/**
+ * ComposeOpen asks the UI to open the composer (mailto: links).
+ */
+export interface ComposeOpen {
+    "to": Address[] | null;
+    "cc": Address[] | null;
+    "bcc": Address[] | null;
+    "subject": string;
+    "body": string;
+}
+
 export interface ComposeRequest {
     "accountId": string;
     "to": Address[] | null;
@@ -689,6 +700,16 @@ export interface Settings {
      * automatic labeling pauses when reached (default 1.00, 0 = unlimited)
      */
     "aiDailyBudgetUsd": number;
+
+    /**
+     * start gomail at login, minimized to the tray when enabled (default false)
+     */
+    "launchAtLogin": boolean;
+
+    /**
+     * check GitHub releases once a day (default true)
+     */
+    "checkUpdates": boolean;
     "googleClientId": string;
     "googleClientSecret": string;
     "microsoftClientId": string;
@@ -806,4 +827,23 @@ export interface UnsubscribeResult {
      */
     "method": string;
     "url": string;
+}
+
+/**
+ * UpdateInfo describes the latest GitHub release.
+ */
+export interface UpdateInfo {
+    "current": string;
+    "latest": string;
+
+    /**
+     * release page
+     */
+    "url": string;
+
+    /**
+     * release notes (markdown)
+     */
+    "notes": string;
+    "available": boolean;
 }

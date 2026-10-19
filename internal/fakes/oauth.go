@@ -27,9 +27,17 @@ type OAuth struct {
 	codes      map[string]string // code -> PKCE challenge
 	access     map[string]bool   // valid access tokens
 	refresh    map[string]bool   // valid refresh tokens
-	Exchanges  int
-	Refreshes  int
-	PKCEFailed int
+	exchanges  int
+	refreshes  int
+	pkceFailed int
+}
+
+// Stats returns how many code exchanges, refreshes and PKCE failures the
+// token endpoint saw.
+func (o *OAuth) Stats() (exchanges, refreshes, pkceFailed int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.exchanges, o.refreshes, o.pkceFailed
 }
 
 // NewOAuth starts the server.
@@ -128,17 +136,17 @@ func (o *OAuth) serve(w http.ResponseWriter, r *http.Request) {
 		delete(o.codes, r.Form.Get("code"))
 		sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
 		if base64.RawURLEncoding.EncodeToString(sum[:]) != challenge {
-			o.PKCEFailed++
+			o.pkceFailed++
 			fail("invalid_grant")
 			return
 		}
-		o.Exchanges++
+		o.exchanges++
 	case "refresh_token":
 		if !o.refresh[r.Form.Get("refresh_token")] {
 			fail("invalid_grant")
 			return
 		}
-		o.Refreshes++
+		o.refreshes++
 	default:
 		fail("unsupported_grant_type")
 		return

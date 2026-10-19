@@ -10,7 +10,7 @@ import Onboarding from '@/components/dialogs/Onboarding.vue'
 import TooltipLayer from '@/components/common/TooltipLayer.vue'
 import { useBackendEvents } from '@/composables/useBackendEvents'
 import { useShortcuts } from '@/composables/useShortcuts'
-import { api, errorMessage, isWails, missingMethods, readLocal } from '@/lib/api'
+import { api, errorMessage, hasMethod, isWails, missingMethods, readLocal } from '@/lib/api'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useComposeStore } from '@/stores/compose'
@@ -62,6 +62,14 @@ onMounted(async () => {
     mail.ensureValidMailbox()
     await accounts.loadLabelCounts(mail.mailbox.accountId)
     void mail.reload()
+    // mailto: link that started the app (compose:open fired before we were listening).
+    if (hasMethod('GetPendingCompose')) {
+      void api.getPendingCompose().then((p) => {
+        if (!p) return
+        const list = (v: unknown) => (Array.isArray(v) ? v : [])
+        compose.composeWith({ to: list(p.to), cc: list(p.cc), bcc: list(p.bcc), subject: p.subject ?? '', body: p.body ?? '' })
+      }).catch(() => {})
+    }
   } catch (e) {
     bootError.value = errorMessage(e)
   } finally {

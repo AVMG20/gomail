@@ -51,6 +51,13 @@ export function CancelClassify(jobID: string): $CancellablePromise<void> {
 }
 
 /**
+ * CheckForUpdate checks GitHub for a newer release now.
+ */
+export function CheckForUpdate(): $CancellablePromise<models$0.UpdateInfo> {
+    return $Call.ByID(3859057848);
+}
+
+/**
  * ClassifyMessages labels the given messages (max 200) and returns the
  * per-message results.
  */
@@ -159,6 +166,14 @@ export function GetMessage(id: string): $CancellablePromise<models$0.Message> {
  */
 export function GetMessageWithRemoteContent(id: string): $CancellablePromise<models$0.Message> {
     return $Call.ByID(519860792, id);
+}
+
+/**
+ * GetPendingCompose returns (once) a mailto: link that opened the app
+ * before the UI was ready, or nil.
+ */
+export function GetPendingCompose(): $CancellablePromise<models$0.ComposeOpen | null> {
+    return $Call.ByID(3026075279);
 }
 
 export function GetSettings(): $CancellablePromise<models$0.Settings> {

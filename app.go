@@ -242,13 +242,22 @@ func (m *MailService) applyAutostart(want bool) {
 	var err error
 	switch {
 	case want && !enabled:
-		err = m.app.Autostart.EnableWithOptions(application.AutostartOptions{Identifier: "gomail", Arguments: []string{minimizedArg}})
+		err = m.app.Autostart.EnableWithOptions(application.AutostartOptions{Identifier: autostartID(), Arguments: []string{minimizedArg}})
 	case !want && enabled:
 		err = m.app.Autostart.Disable()
 	}
 	if err != nil {
 		slog.Warn("updating launch at login failed", "err", err)
 	}
+}
+
+// autostartID names the login item: a launchd label on macOS, the HKCU Run
+// value on Windows and the autostart .desktop file name on Linux.
+func autostartID() string {
+	if runtime.GOOS == "darwin" {
+		return "com.avmg20.gomail"
+	}
+	return "gomail"
 }
 
 // handleArgs looks for a mailto: link (command line, second instance or
