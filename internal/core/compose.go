@@ -297,6 +297,45 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 	return h.String(), nil
 }
 
+// flushPendingDrafts writes every coalesced draft save now (shutdown),
+// waiting at most wait.
+func (s *Service) flushPendingDrafts(wait time.Duration) {
+	s.drafts.mu.Lock()
+	var keys []string
+	for k, e := range s.drafts.entries {
+		if e.timer != nil {
+			e.timer.Stop()
+			e.timer = nil
+		}
+		if e.pending != nil {
+			keys = append(keys, k)
+		}
+	}
+	s.drafts.mu.Unlock()
+	if len(keys) == 0 {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var wg sync.WaitGroup
+		for _, k := range keys {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer safe.Recover("draft flush")
+				s.flushDraft(k)
+			}()
+		}
+		wg.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(wait):
+		slog.Warn("saving drafts at shutdown took too long", "drafts", len(keys))
+	}
+}
+
 func (s *Service) flushDraft(key string) {
 	s.drafts.mu.Lock()
 	e, ok := s.drafts.entries[key]

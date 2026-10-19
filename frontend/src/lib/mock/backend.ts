@@ -457,7 +457,10 @@ class MockBackend {
     await sleep(700)
     const m = this.messages.get(id)
     if (!m?.unsubscribe) throw new Error('This sender does not support unsubscribing')
-    return m.unsubscribe.oneClick ? { method: 'oneClick', url: '' } : { method: 'url', url: m.unsubscribe.url }
+    if (m.unsubscribe.oneClick) return { method: 'oneClick', url: '' }
+    // Like the Go backend: "url" means the page was opened in the browser already.
+    if (m.unsubscribe.url) void this.OpenExternalURL(m.unsubscribe.url)
+    return { method: 'url', url: m.unsubscribe.url ?? '' }
   }
 
   async GetMessageWithRemoteContent(id: string): Promise<Message> {

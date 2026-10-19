@@ -73,7 +73,9 @@ export function useShortcuts() {
     }
 
     const typing = isEditableTarget(e.target)
-    if (typing || ui.anyDialogOpen()) return
+    // Focus inside the compose window, an open menu or a popover owns the keyboard.
+    const inWidget = !!(e.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="menubar"], [data-no-shortcuts]')
+    if (typing || inWidget || ui.anyDialogOpen()) return
 
     if (mod && key.toLowerCase() === 'b') {
       e.preventDefault()

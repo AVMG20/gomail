@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { ChevronDownIcon, CornerUpLeftIcon, PaperclipIcon } from '@lucide/vue'
 import SenderAvatar from '@/components/common/SenderAvatar.vue'
 import Tip from '@/components/common/Tip.vue'
-import { displayName, formatAddress, listDate, longDate, parseAddress } from '@/lib/format'
+import { displayName, formatAddress, listDate, longDate, parseMailto } from '@/lib/format'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { useComposeStore } from '@/stores/compose'
@@ -28,16 +28,13 @@ async function unsubscribe() {
   try {
     if (hasMethod('Unsubscribe')) {
       const r = await api.unsubscribe(props.message.id)
-      if (r.method === 'url') {
-        if (r.url || u.url) await api.openExternal(r.url || u.url)
-        toast('Opened the unsubscribe page in your browser')
-      }
+      // "url": the backend already opened the page in the browser (don't open it twice).
+      if (r.method === 'url') toast('Opened the unsubscribe page in your browser')
       else toast.success(`Unsubscribed from ${displayName(props.message.from)}`, { description: r.method === 'mailto' ? 'An unsubscribe email was sent.' : 'It can take a few days for mail to stop.' })
     } else if (u.url) {
       await api.openExternal(u.url)
     } else if (u.mailto) {
-      const addr = parseAddress(decodeURIComponent(u.mailto.replace(/^mailto:/, '').split('?')[0]))
-      if (addr) void compose.compose([addr])
+      void compose.composeWith(parseMailto(u.mailto.startsWith('mailto:') ? u.mailto : `mailto:${u.mailto}`))
     }
   } catch (e) {
     toast.error('Couldn’t unsubscribe', { description: errorMessage(e) })

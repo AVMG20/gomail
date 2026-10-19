@@ -6,6 +6,8 @@ import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
   EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
 } from './types'
+import { isSafeExternalUrl } from './format'
+import { LABEL_COLORS as LABEL_FALLBACK, safeColor } from './color'
 import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
 
 type AnyFn = (...args: unknown[]) => Promise<unknown>
@@ -198,8 +200,8 @@ export function normSettings(s: Settings): Settings {
     theme: s.theme || 'system',
     density: s.density || 'comfortable',
     syncIntervalMinutes: s.syncIntervalMinutes || 5,
-    labels: s.labels ?? legacy ?? [],
-    primaryColor: s.primaryColor || DEFAULT_PRIMARY,
+    labels: (s.labels ?? legacy ?? []).map((l, i) => ({ ...l, name: l.name ?? '', description: l.description ?? '', color: safeColor(l.color, LABEL_FALLBACK[i % LABEL_FALLBACK.length]) })),
+    primaryColor: /^#[0-9a-f]{6}$/i.test(s.primaryColor ?? '') ? s.primaryColor : DEFAULT_PRIMARY,
     radius: typeof s.radius === 'number' && s.radius > 0 ? s.radius : s.radius === 0 ? 0 : DEFAULT_RADIUS,
     classifierModel: s.classifierModel || 'typesafe/jev-1.13',
     classifyThreshold: typeof s.classifyThreshold === 'number' && s.classifyThreshold > 0 ? s.classifyThreshold : 0.5,
@@ -261,7 +263,7 @@ function normQuery(q: Partial<ListQuery>): ListQuery {
 
 export const api = {
   // ---- accounts
-  getAccounts: async () => (await call<Account[] | null>('GetAccounts')) ?? [],
+  getAccounts: async () => ((await call<Account[] | null>('GetAccounts')) ?? []).map((a) => ({ ...a, color: safeColor(a.color, '#64748b') })),
   addAccount: (provider: string) => call<Account>('AddAccount', provider),
   cancelAddAccount: () => call<void>('CancelAddAccount'),
   removeAccount: (id: string) => call<void>('RemoveAccount', id),
@@ -284,6 +286,7 @@ export const api = {
   saveAttachment: (messageId: string, attachmentId: string) => call<void>('SaveAttachment', messageId, attachmentId),
   syncNow: (accountId: string) => call<void>('SyncNow', accountId),
   openExternal: async (url: string) => {
+    if (!isSafeExternalUrl(url)) throw new Error('This link can’t be opened (only http and https links are allowed)')
     if (isWails()) {
       if (boundFn('OpenExternalURL')) return call<void>('OpenExternalURL', url)
       return runtime?.Browser.OpenURL(url)
@@ -358,7 +361,7 @@ export const api = {
       const legacy = r as unknown as { label?: string; confidence?: number }
       const added = r.added ?? (legacy.label ? [legacy.label] : [])
       const scores = r.scores ?? (legacy.label ? { [legacy.label]: legacy.confidence ?? 0 } : {})
-      return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0, error: r.error ?? '' }
+      return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0, error: r.error ?? '', skipped: !!r.skipped }
     }),
   addLabel: (ids: string[], labelId: string) => call<void>('AddLabel', ids, labelId),
   removeLabel: (ids: string[], labelId: string) => call<void>('RemoveLabel', ids, labelId),

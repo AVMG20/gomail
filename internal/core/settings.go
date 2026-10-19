@@ -1,7 +1,9 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -18,7 +20,14 @@ const dismissedLabelsKey = "dismissedProviderLabels"
 func (s *Service) loadSettings() error {
 	st := config.DefaultSettings()
 	if err := s.store.GetSetting(settingsKey, &st); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
+		var syn *json.SyntaxError
+		var typ *json.UnmarshalTypeError
+		if !errors.As(err, &syn) && !errors.As(err, &typ) {
+			return err
+		}
+		// Damaged settings must not keep gomail from starting: keep every
+		// field that still decodes, default the rest, and save a copy.
+		st = s.salvageSettings()
 	}
 	config.Normalize(&st)
 	s.settingsMu.Lock()
@@ -27,6 +36,30 @@ func (s *Service) loadSettings() error {
 	s.store.SetLabels(st.Labels)
 	s.store.SetHideProviderLabels(!st.ImportProviderLabels)
 	return nil
+}
+
+// salvageSettings decodes the stored settings field by field.
+func (s *Service) salvageSettings() models.Settings {
+	st := config.DefaultSettings()
+	data, err := s.store.RawSetting(settingsKey)
+	if err != nil {
+		return st
+	}
+	_ = s.store.PutRawSetting(settingsKey+".damaged", data)
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil {
+		slog.Error("settings are damaged; using defaults (a copy was kept as settings.damaged)")
+		return st
+	}
+	bad := 0
+	for k, v := range fields {
+		one, _ := json.Marshal(map[string]json.RawMessage{k: v})
+		if json.Unmarshal(one, &st) != nil {
+			bad++
+		}
+	}
+	slog.Warn("some settings were damaged and reset to defaults", "fields", bad)
+	return st
 }
 
 // Settings returns a copy of the current settings (without key status).

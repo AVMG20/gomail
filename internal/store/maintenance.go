@@ -27,6 +27,24 @@ func IsCorrupt(err error) bool {
 	return strings.Contains(msg, "malformed") || strings.Contains(msg, "not a database") || strings.Contains(msg, "corrupt")
 }
 
+// IsDiskFull reports SQLite's "database or disk is full" (SQLITE_FULL).
+func IsDiskFull(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "disk is full") || strings.Contains(msg, "sqlite_full") || strings.Contains(msg, "no space left on device")
+}
+
+// IsBusy reports a locked database (another writer held it too long).
+func IsBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy")
+}
+
 // QuickCheck runs PRAGMA quick_check; nil means healthy.
 func (s *Store) QuickCheck() error {
 	rows, err := s.db.Query(`PRAGMA quick_check`)

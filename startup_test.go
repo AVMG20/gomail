@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -79,5 +81,26 @@ func TestPresetStartup(t *testing.T) {
 	defer m.ServiceShutdown()
 	if info := m.GetAppInfo(); info.DataDir != st.dir || info.LogFile != st.logFile {
 		t.Fatalf("info %+v", info)
+	}
+}
+
+func TestUIErrorIsReadable(t *testing.T) {
+	for in, want := range map[error]string{
+		errors.New("saving synced mail: database or disk is full (13)"): "disk is full",
+		errors.New("database is locked (5) (SQLITE_BUSY)"):              "busy",
+		errors.New("database disk image is malformed (11)"):             "damaged",
+		errors.New("sql: Scan error on column index 2"):                 "local mail cache",
+		context.Canceled: "cancelled",
+		errors.New("Couldn't move messages on a@b.c: denied"): "Couldn't move messages on a@b.c: denied",
+	} {
+		if got := uiError(in); got == nil || !strings.Contains(got.Error(), want) || strings.Contains(got.Error(), "(13)") {
+			t.Errorf("uiError(%v) = %v, want %q", in, got, want)
+		}
+	}
+	if uiError(nil) != nil {
+		t.Fatal("nil")
+	}
+	if v, err := uiResult(3, nil); v != 3 || err != nil {
+		t.Fatal("uiResult")
 	}
 }

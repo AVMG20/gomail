@@ -126,6 +126,8 @@ export const useMailStore = defineStore('mail', () => {
 
   // ------------------------------------------------------------ loading
   let token = 0
+  /** Bumped by every optimistic local change; a refresh that started before one is stale. */
+  let mutations = 0
 
   function learnAddresses(list: MessageSummary[]) {
     const book = new Map(addressBook.value)
@@ -171,10 +173,16 @@ export const useMailStore = defineStore('mail', () => {
   async function softRefresh() {
     if (status.value === 'loading') return
     const t = ++token
+    const m0 = mutations
     try {
       const limit = Math.min(Math.max(PAGE, messages.value.length), 500)
       const page = await api.listMessages({ ...query.value, limit })
       if (t !== token) return
+      if (m0 !== mutations) {
+        // An optimistic update happened while this was in flight: its data predates it.
+        setTimeout(() => void softRefresh(), 150)
+        return
+      }
       // Keep object identity for unchanged rows so only changed rows re-render.
       const prev = byId.value
       messages.value = page.messages.map((m) => {
@@ -191,6 +199,8 @@ export const useMailStore = defineStore('mail', () => {
         const next = new Set([...selection.value].filter((id) => ids.has(id)))
         if (next.size !== selection.value.size) selection.value = next
       }
+      // A refresh that superseded a keep-list reload also ends its "refreshing" state.
+      refreshing.value = false
     } catch {
       /* transient; next event retries */
     }
@@ -210,7 +220,7 @@ export const useMailStore = defineStore('mail', () => {
       total.value = page.total
       learnAddresses(page.messages)
     } catch (e) {
-      toast.error('Could not load more messages', { description: errorMessage(e) })
+      if (t === token) toast.error('Could not load more messages', { description: errorMessage(e) })
     } finally {
       loadingMore.value = false
     }
@@ -220,12 +230,15 @@ export const useMailStore = defineStore('mail', () => {
   async function loadOlder() {
     if (loadingOlder.value || !hasMoreRemote.value || !hasMethod('LoadOlder')) return
     loadingOlder.value = true
+    const key = JSON.stringify(query.value)
     try {
       const added = await api.loadOlder({ ...query.value, cursor: '' })
+      if (key !== JSON.stringify(query.value)) return // the view changed meanwhile
       if (!added) hasMoreRemote.value = false
       await softRefresh()
       if (nextCursor.value) await loadMore()
     } catch (e) {
+      if (key !== JSON.stringify(query.value)) return
       hasMoreRemote.value = false
       toast.error('Couldn’t load older mail', { description: errorMessage(e) })
     } finally {
@@ -414,7 +427,10 @@ export const useMailStore = defineStore('mail', () => {
       changed = true
       return { ...m, ...(typeof patch === 'function' ? patch(m) : patch) }
     })
-    if (changed) messages.value = next
+    if (changed) {
+      messages.value = next
+      mutations++
+    }
     for (const id of ids) {
       const thread = [...threadCache.values()].find((t) => t.some((x) => x.id === id))
       if (thread) {
@@ -435,6 +451,7 @@ export const useMailStore = defineStore('mail', () => {
       openId.value = after?.id ?? null
     }
     messages.value = list.filter((m) => !set.has(m.id))
+    mutations++
     total.value = Math.max(0, total.value - ids.length)
     if (selection.value.size) selection.value = new Set([...selection.value].filter((id) => !set.has(id)))
   }
@@ -448,6 +465,7 @@ export const useMailStore = defineStore('mail', () => {
     const merged = [...messages.value, ...items.filter((m) => !set.has(m.id))]
     merged.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     messages.value = merged
+    mutations++
   }
 
   /** Folder id to send messages back to on undo. */
@@ -538,15 +556,16 @@ export const useMailStore = defineStore('mail', () => {
 
   async function setStarred(ids: string[], starred: boolean) {
     if (!ids.length) return
+    const before = snapshot(ids).map((m) => [m.id, m.starred] as const)
     patchLocal(ids, { starred })
     try {
       await api.setStarred(actionIds(ids), starred)
       announce(`${plural(ids.length, 'message')} ${starred ? 'starred' : 'unstarred'}`)
+      if (mailbox.value.kind === 'starred' && !starred) removeLocal(ids)
     } catch (e) {
-      patchLocal(ids, { starred: !starred })
+      for (const [id, was] of before) patchLocal([id], { starred: was })
       toast.error('Could not update', { description: errorMessage(e) })
     }
-    if (mailbox.value.kind === 'starred' && !starred) removeLocal(ids)
   }
 
   async function addLabel(ids: string[], labelId: string, quiet = false) {
@@ -598,6 +617,11 @@ export const useMailStore = defineStore('mail', () => {
     return thread
   }
 
+  /** Synchronous cache lookup (the reading pane renders cached threads without a loading frame). */
+  function cachedThread(id: string): Message[] | undefined {
+    return threadCache.get(id)
+  }
+
   function invalidateThread(id?: string) {
     if (id) threadCache.delete(id)
     else threadCache.clear()
@@ -623,6 +647,6 @@ export const useMailStore = defineStore('mail', () => {
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, open, move, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
-    archive, trash, setRead, setStarred, addLabel, removeLabel, loadThread, invalidateThread, suggestAddresses,
+    archive, trash, setRead, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
   }
 })

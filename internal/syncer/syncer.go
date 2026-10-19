@@ -278,6 +278,9 @@ func (e *Engine) SyncNow(ctx context.Context, accountID string) error {
 		}
 		e.setOnline(true)
 	}
+	if e.ctx.Err() != nil {
+		return errStopped
+	}
 	e.wg.Add(1)
 	defer e.wg.Done()
 	ctx, cancel := mergeCancel(ctx, e.ctx)
@@ -295,12 +298,24 @@ func dedupe(errs []string) string {
 	return strings.Join(out, "; ")
 }
 
-// mergeCancel returns a context cancelled when either parent is.
+// errStopped is returned for work requested after Stop (shutdown).
+var errStopped = errors.New("gomail is shutting down")
+
+// mergeCancel returns a context cancelled when either parent is. A b that is
+// already done cancels the result immediately (AfterFunc alone would do it
+// asynchronously, letting work start after shutdown began).
 func mergeCancel(a, b context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(a)
+	if b.Err() != nil {
+		cancel()
+		return ctx, cancel
+	}
 	stop := context.AfterFunc(b, cancel)
 	return ctx, func() { stop(); cancel() }
 }
+
+// DiskFullMessage is shown when the local database can't grow.
+const DiskFullMessage = "Your disk is full, so gomail can't save mail. Free up some space; syncing resumes automatically."
 
 const offlineMessage = "You're offline. gomail will sync again when the connection is back."
 
@@ -341,6 +356,8 @@ func HumanError(acct models.Account, err error) string {
 		service = "the mail server"
 	}
 	switch {
+	case store.IsDiskFull(err):
+		return DiskFullMessage
 	case IsReauthError(err):
 		return fmt.Sprintf("The sign-in for %s has expired or was revoked. Sign in again to keep syncing.", acct.Email)
 	case errors.Is(err, context.Canceled):

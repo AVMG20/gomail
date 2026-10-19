@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"html"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -68,7 +69,30 @@ var styleProps = []string{
 
 var dangerousCSS = regexp.MustCompile(`(?i)(expression\s*\(|javascript:|vbscript:|behavior\s*:|-moz-binding|@import)`)
 
-func safeCSSValue(v string) bool { return !dangerousCSS.MatchString(v) }
+// safeCSSValue rejects dangerous constructs. CSS escapes ("expr\65ssion",
+// "u\72l(") are rejected outright in inline styles: legitimate mail doesn't
+// need them there, and they would hide constructs from these checks.
+func safeCSSValue(v string) bool { return !strings.Contains(v, "\\") && !dangerousCSS.MatchString(v) }
+
+var cssEscapeRe = regexp.MustCompile(`\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?|\\(.)`)
+
+// cssUnescape decodes CSS escapes so that checks see the real text.
+func cssUnescape(css string) string {
+	if !strings.Contains(css, "\\") {
+		return css
+	}
+	return cssEscapeRe.ReplaceAllStringFunc(css, func(m string) string {
+		sm := cssEscapeRe.FindStringSubmatch(m)
+		if sm[1] != "" {
+			n, err := strconv.ParseUint(sm[1], 16, 32)
+			if err != nil || n == 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF) {
+				return "\uFFFD"
+			}
+			return string(rune(n))
+		}
+		return sm[2]
+	})
+}
 
 func emailPolicy() *bluemonday.Policy {
 	policyOnce.Do(func() {
@@ -80,8 +104,11 @@ func emailPolicy() *bluemonday.Policy {
 		p.AllowAttrs("color", "face", "size").OnElements("font")
 		p.AllowAttrs("start", "type").OnElements("ol", "ul", "li")
 		p.AllowStyles(styleProps...).MatchingHandler(safeCSSValue).Globally()
+		// data: is only allowed for base64 raster/SVG images (AllowDataURIImages);
+		// listing "data" in AllowURLSchemes would override that check and let
+		// data:text/html links through.
+		p.AllowURLSchemes("http", "https", "mailto", "tel", "cid")
 		p.AllowDataURIImages()
-		p.AllowURLSchemes("http", "https", "mailto", "tel", "cid", "data")
 		p.AllowAttrs("src", "alt", "width", "height").OnElements("img")
 		p.AllowAttrs("srcset").Matching(safeSrcset).OnElements("img")
 		p.AllowAttrs("sizes").Matching(regexp.MustCompile(`^[a-zA-Z0-9 ()%.,:-]+$`)).OnElements("img")
@@ -97,7 +124,7 @@ func emailPolicy() *bluemonday.Policy {
 	return policy
 }
 
-var styleBlockRe = regexp.MustCompile(`(?is)<style[^>]*>(.*?)</style>`)
+var styleBlockRe = regexp.MustCompile(`(?is)<style[^>]*>(.*?)(?:</style\s*>|$)`)
 
 // safeSrcset accepts only http(s) image candidates.
 var safeSrcset = regexp.MustCompile(`^\s*https?://[^\s,"'<>]+(\s+\d+(\.\d+)?[wx])?(\s*,\s*https?://[^\s,"'<>]+(\s+\d+(\.\d+)?[wx])?)*\s*$`)
@@ -106,18 +133,25 @@ var safeSrcset = regexp.MustCompile(`^\s*https?://[^\s,"'<>]+(\s+\d+(\.\d+)?[wx]
 // iframe): scripts, iframes, forms, objects and event handlers are removed;
 // layout markup, inline styles and images are kept.
 func SanitizeHTML(s string) string {
-	s = styleBlockRe.ReplaceAllStringFunc(s, func(block string) string {
+	s = scrubStyleBlocks(s)
+	// Scrub again after sanitizing: the parser may see style blocks the
+	// regex didn't (e.g. "</style >" or an unclosed <style>), and its output
+	// is normalized.
+	return strings.TrimSpace(scrubStyleBlocks(emailPolicy().Sanitize(s)))
+}
+
+func scrubStyleBlocks(s string) string {
+	return styleBlockRe.ReplaceAllStringFunc(s, func(block string) string {
 		m := styleBlockRe.FindStringSubmatch(block)
-		css := m[1]
-		css = dangerousCSS.ReplaceAllString(css, "/*removed*/")
+		css := dangerousCSS.ReplaceAllString(cssUnescape(m[1]), "/*removed*/")
 		css = strings.ReplaceAll(css, "<", "")
 		return "<style>" + css + "</style>"
 	})
-	return strings.TrimSpace(emailPolicy().Sanitize(s))
 }
 
 var (
-	remoteRe      = regexp.MustCompile(`(?i)\b(src|background|srcset)\s*=\s*["']?[^"'>]*?\bhttps?:|url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//`)
+	remoteRe      = regexp.MustCompile(`(?i)\b(src|background|srcset)\s*=\s*["']?[^"'>]*?\bhttps?:|url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//|image-set\(`)
+	imageSetRe    = regexp.MustCompile(`(?i)(-webkit-)?image-set\([^)]*\)`)
 	remoteAttrRe  = regexp.MustCompile(`(?i)\s(src|background)\s*=\s*"\s*(https?:)?//[^"]*"`)
 	remoteSetRe   = regexp.MustCompile(`(?i)\ssrcset\s*=\s*"[^"]*"`)
 	remoteURLFnRe = regexp.MustCompile(`(?i)url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//[^)]*\)`)
@@ -137,6 +171,7 @@ func BlockRemoteContent(s string) (string, bool) {
 	out := remoteAttrRe.ReplaceAllString(s, ` data-gomail-blocked=""`)
 	out = remoteSetRe.ReplaceAllString(out, "")
 	out = remoteURLFnRe.ReplaceAllString(out, "none")
+	out = imageSetRe.ReplaceAllString(out, "none")
 	return out, out != s
 }
 

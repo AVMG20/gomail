@@ -75,32 +75,46 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null
-  let pending: Promise<void> | null = null
+  /** Callers waiting for the next save (every debounced update resolves, not just the last). */
+  let waiters: (() => void)[] = []
+  /** Saves run one at a time and always send the latest state, so the last write wins. */
+  let inflight: Promise<void> = Promise.resolve()
+
+  async function save() {
+    const done = waiters
+    waiters = []
+    saving.value = true
+    try {
+      await api.saveSettings(settings.value!)
+    } catch (e) {
+      toast.error('Could not save settings', { description: errorMessage(e) })
+    } finally {
+      saving.value = !!saveTimer
+      done.forEach((r) => r())
+    }
+  }
 
   /** Merge a patch locally (instantly) and persist it with a short debounce. */
   function update(patch: Partial<Settings>, delay = 350): Promise<void> {
     if (!settings.value) return Promise.resolve()
     settings.value = { ...settings.value, ...patch }
     if (saveTimer) clearTimeout(saveTimer)
-    pending = new Promise<void>((resolve) => {
-      saveTimer = setTimeout(async () => {
-        saveTimer = null
-        saving.value = true
-        try {
-          await api.saveSettings(settings.value!)
-        } catch (e) {
-          toast.error('Could not save settings', { description: errorMessage(e) })
-        } finally {
-          saving.value = false
-          resolve()
-        }
-      }, delay)
-    })
-    return pending
+    const p = new Promise<void>((resolve) => waiters.push(resolve))
+    saveTimer = setTimeout(() => {
+      saveTimer = null
+      inflight = inflight.then(save)
+    }, delay)
+    return p
   }
 
+  /** Wait until every pending change is written. */
   async function flush() {
-    if (pending) await pending
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+      inflight = inflight.then(save)
+    }
+    await inflight
   }
 
   async function setOpenRouterKey(key: string) {

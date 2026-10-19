@@ -12,13 +12,16 @@ import (
 
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/netguard"
 	"github.com/AVMG20/gomail/internal/syncer"
 )
 
 // unsubscribeClient performs RFC 8058 one-click POSTs: https only, no
-// cookies, bounded redirects that must stay on https.
+// cookies, public addresses only (no requests into the local network),
+// bounded redirects that must stay on https.
 var unsubscribeClient = &http.Client{
-	Timeout: 15 * time.Second,
+	Timeout:   15 * time.Second,
+	Transport: netguard.Transport(),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return errors.New("too many redirects")
@@ -79,6 +82,9 @@ func oneClick(ctx context.Context, link string) error {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", "gomail")
 	resp, err := unsubscribeClient.Do(req)
+	if errors.Is(err, netguard.ErrBlocked) {
+		return errors.New("the unsubscribe link points to a local network address, so gomail didn't follow it")
+	}
 	if err != nil {
 		return fmt.Errorf("couldn't reach the sender's unsubscribe service: %w", err)
 	}

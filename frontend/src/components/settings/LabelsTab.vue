@@ -10,7 +10,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { LABEL_COLORS } from '@/lib/color'
-import type { Label, Settings } from '@/lib/types'
+import { buildLabelExport, MAX_IMPORT_BYTES, mergeLabelImport } from '@/lib/labelsIO'
+import type { Label } from '@/lib/types'
 import { useAiStore } from '@/stores/ai'
 import { useSettingsStore } from '@/stores/settings'
 import SettingRow from './SettingRow.vue'
@@ -49,15 +50,9 @@ function move(id: string, delta: number) {
 }
 // ---- export / import (share Jev label setups)
 const fileInput = ref<HTMLInputElement | null>(null)
-interface LabelExport { app: 'gomail'; kind: 'labels'; version: 1; labels: { name: string; description: string; color: string }[]; classifyInstructions?: string; grammarSystemPrompt?: string }
 
 async function exportLabels() {
-  const data: LabelExport = {
-    app: 'gomail', kind: 'labels', version: 1,
-    labels: userLabels.value.map(({ name, description, color }) => ({ name, description, color })),
-    classifyInstructions: s.value.classifyInstructions || undefined,
-    grammarSystemPrompt: s.value.grammarSystemPrompt || undefined,
-  }
+  const data = buildLabelExport(userLabels.value, s.value)
   const json = JSON.stringify(data, null, 2)
   await api.clipboardSet(json)
   // Also offer a file where the webview supports downloads (browsers; harmless elsewhere).
@@ -74,43 +69,20 @@ async function exportLabels() {
 }
 
 function importLabels(text: string) {
-  let data: Partial<LabelExport>
-  try {
-    data = JSON.parse(text) as Partial<LabelExport>
-  } catch {
-    toast.error('That file isn’t valid JSON')
+  const stamp = Date.now().toString(36)
+  const r = mergeLabelImport(text, settings.labels, (i) => `lbl_${stamp}${i}`)
+  if (!r.ok) {
+    toast.error(r.error)
     return
   }
-  if (!Array.isArray(data.labels)) {
-    toast.error('No labels found in that file')
-    return
-  }
-  // Merge by name (case-insensitive): update description/color, add the rest.
-  const next = [...settings.labels]
-  let added = 0
-  let updated = 0
-  for (const l of data.labels) {
-    if (!l?.name || typeof l.name !== 'string') continue
-    const i = next.findIndex((x) => x.name.trim().toLowerCase() === l.name.trim().toLowerCase())
-    const color = /^#[0-9a-f]{3,8}$/i.test(l.color ?? '') ? l.color : LABEL_COLORS[next.length % LABEL_COLORS.length]
-    if (i >= 0) {
-      next[i] = { ...next[i], description: l.description ?? next[i].description, color }
-      updated++
-    } else {
-      next.push({ id: `lbl_${Date.now().toString(36)}${added}`, name: l.name.trim(), description: l.description ?? '', color, source: 'user' })
-      added++
-    }
-  }
-  const patch: Partial<Settings> = { labels: next }
-  if (typeof data.classifyInstructions === 'string') patch.classifyInstructions = data.classifyInstructions
-  if (typeof data.grammarSystemPrompt === 'string') patch.grammarSystemPrompt = data.grammarSystemPrompt
-  void settings.update(patch, 0)
-  toast.success(`Imported labels: ${added} added, ${updated} updated`)
+  void settings.update(r.patch, 0)
+  toast.success(`Imported labels: ${r.added} added, ${r.updated} updated`, r.skipped ? { description: `${r.skipped} skipped (empty or duplicate names)` } : undefined)
 }
 
 async function onImportFile(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) importLabels(await file.text())
+  if (file && file.size > MAX_IMPORT_BYTES) toast.error('That file is too large to be a label export')
+  else if (file) importLabels(await file.text())
   if (fileInput.value) fileInput.value.value = ''
 }
 

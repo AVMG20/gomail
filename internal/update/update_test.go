@@ -46,3 +46,18 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("dev build: %+v", info)
 	}
 }
+
+func TestReleaseURLIsTrusted(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://github.com/AVMG20/gomail/releases/tag/v1.2.0": "https://github.com/AVMG20/gomail/releases/tag/v1.2.0",
+		"https://evil.example/AVMG20/gomail/releases/tag/v1":   ReleasesPage + "/tag/v1.2.0",
+		"javascript:alert(1)":                              ReleasesPage + "/tag/v1.2.0",
+		"http://github.com/AVMG20/gomail/releases/tag/v1":  ReleasesPage + "/tag/v1.2.0",
+		"https://user@github.com/AVMG20/gomail/releases/x": ReleasesPage + "/tag/v1.2.0",
+		"https://github.com/other/repo/releases/tag/v1":    ReleasesPage + "/tag/v1.2.0",
+	} {
+		if got := releaseURL(raw, "v1.2.0"); got != want {
+			t.Errorf("releaseURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

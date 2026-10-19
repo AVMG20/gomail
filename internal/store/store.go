@@ -225,6 +225,22 @@ func (s *Store) GetSetting(key string, v any) error {
 	return json.Unmarshal([]byte(raw), v)
 }
 
+// RawSetting returns the stored JSON of a setting.
+func (s *Store) RawSetting(key string) ([]byte, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return []byte(raw), err
+}
+
+// PutRawSetting stores data as is (e.g. a copy of a damaged setting).
+func (s *Store) PutRawSetting(key string, data []byte) error {
+	_, err := s.db.Exec(`INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(data))
+	return err
+}
+
 // SetSetting stores v as JSON under key.
 func (s *Store) SetSetting(key string, v any) error {
 	b, err := json.Marshal(v)

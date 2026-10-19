@@ -10,6 +10,11 @@ export function hexToRgb(hex: string): RGB | null {
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
 }
 
+/** Colors from providers, files or the backend end up in inline styles: only #rgb / #rrggbb / #rrggbbaa pass. */
+export function safeColor(value: unknown, fallback: string): string {
+  return typeof value === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim()) ? value.trim() : fallback
+}
+
 export function rgbToHex({ r, g, b }: RGB): string {
   return `#${[r, g, b].map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('')}`
 }

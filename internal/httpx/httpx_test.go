@@ -119,3 +119,22 @@ func TestGoogleQuota403IsRetried(t *testing.T) {
 		t.Fatalf("%v calls=%d", err, calls)
 	}
 }
+
+func TestErrorBodiesAreReadable(t *testing.T) {
+	for body, want := range map[string]string{
+		"<html><body><h1>502 Bad Gateway</h1></body></html>": "Bad Gateway",
+		`{"weird": true}`:  "Bad Gateway",
+		"upstream timeout": "upstream timeout",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(502)
+			w.Write([]byte(body))
+		}))
+		c := &Client{BaseURL: srv.URL, Service: "Gmail", MaxRetries: -1}
+		err := c.JSON(context.Background(), "GET", "x", nil, nil)
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "<") || strings.Contains(err.Error(), "{") {
+			t.Errorf("body %q -> %v", body, err)
+		}
+	}
+}

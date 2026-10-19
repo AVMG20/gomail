@@ -110,6 +110,16 @@ export function parseAddressList(input: string): Address[] {
     .filter((a): a is Address => !!a)
 }
 
+/** Only plain web links may leave the app (never javascript:, file:, data:, custom schemes). */
+export function isSafeExternalUrl(url: string): boolean {
+  try {
+    const u = new URL(url.trim())
+    return (u.protocol === 'https:' || u.protocol === 'http:') && !!u.hostname
+  } catch {
+    return false
+  }
+}
+
 /** mailto:a@b.c,d@e.f?cc=…&subject=…&body=… → compose fields. */
 export function parseMailto(href: string): { to: Address[]; cc: Address[]; bcc: Address[]; subject: string; body: string } {
   const raw = href.replace(/^mailto:/i, '')

@@ -77,6 +77,8 @@ func EncodeHeader(s string) string {
 	return s
 }
 
+var headerBreaks = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ", "\x00", "")
+
 func randomToken(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
@@ -108,6 +110,9 @@ func Build(m Message) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	h := func(k, v string) {
+		// No value may end the header line: CR/LF (from a hostile original's
+		// Message-ID/References, or a crafted address) would inject headers.
+		v = headerBreaks.Replace(v)
 		if v != "" {
 			buf.WriteString(k + ": " + v + "\r\n")
 		}

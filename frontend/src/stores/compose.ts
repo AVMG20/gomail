@@ -38,6 +38,8 @@ export interface Draft {
   savedAt?: number
   /** Server-side draft id once SaveDraft has run (backend pass 2). */
   remoteId?: string
+  /** Restored after the app closed during the undo-send delay (never sent). */
+  interrupted?: boolean
 }
 
 const DRAFTS_KEY = 'gomail.drafts.v1'
@@ -50,7 +52,8 @@ function loadDrafts(): Draft[] {
     // They come back minimised; anything that was mid-send becomes a normal draft again.
     const list = (Array.isArray(raw) ? raw : []).filter((d) => d && Array.isArray(d.to) && draftHasContent(d))
     if (list.length !== (Array.isArray(raw) ? raw.length : 0)) localStorage.setItem(DRAFTS_KEY, JSON.stringify(list))
-    return list.map((d) => ({ ...d, cc: d.cc ?? [], bcc: d.bcc ?? [], attachments: d.attachments ?? [], minimized: true, expanded: false, sending: false, queued: false }))
+    // Sends still waiting out the undo delay when the app closed come back as drafts, flagged.
+    return list.map((d) => ({ ...d, cc: d.cc ?? [], bcc: d.bcc ?? [], attachments: d.attachments ?? [], minimized: true, expanded: false, interrupted: !!(d.queued || d.sending), sending: false, queued: false }))
   } catch {
     return []
   }
@@ -79,30 +82,42 @@ export const useComposeStore = defineStore('compose', () => {
 
   // Local-first autosave (the backend has no SaveDraft yet).
   let saveTimer: ReturnType<typeof setTimeout> | null = null
-  watch(drafts, () => {
+  // Watch what is persisted, not bookkeeping like savedAt (persist() writes that,
+  // and watching it re-triggered persist every 600 ms forever).
+  watch(() => JSON.stringify(drafts.value.map(({ savedAt: _s, interrupted: _i, ...rest }) => rest)), () => {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(persist, 600)
-  }, { deep: true })
+  })
 
   // Server drafts (when the backend supports them), throttled per draft.
   const remoteTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const lastRemote = new Map<string, string>()
+  /** SaveDraft calls in flight: sending waits for them so the server draft is replaced, not orphaned. */
+  const remoteInflight = new Map<string, Promise<void>>()
+  const scheduledRemote = new Map<string, string>()
   function scheduleRemote(d: Draft) {
     if (!hasMethod('SaveDraft') || d.queued || d.sending || !draftHasContent(d)) return
     const sig = JSON.stringify([d.accountId, d.to, d.cc, d.bcc, d.subject, d.html, d.attachments.length])
-    if (lastRemote.get(d.id) === sig) return
+    if (lastRemote.get(d.id) === sig || scheduledRemote.get(d.id) === sig) return
+    scheduledRemote.set(d.id, sig)
     const t = remoteTimers.get(d.id)
     if (t) clearTimeout(t)
     remoteTimers.set(d.id, setTimeout(async () => {
       remoteTimers.delete(d.id)
+      scheduledRemote.delete(d.id)
       const cur = drafts.value.find((x) => x.id === d.id)
       if (!cur || cur.queued || cur.sending) return
-      try {
-        cur.remoteId = await api.saveDraft(toRequest(cur), cur.remoteId ?? '')
-        lastRemote.set(d.id, sig)
-      } catch {
-        /* keep the local copy; retry on the next edit */
-      }
+      const run = (async () => {
+        try {
+          cur.remoteId = await api.saveDraft(toRequest(cur), cur.remoteId ?? '')
+          lastRemote.set(d.id, sig)
+        } catch {
+          /* keep the local copy; retry on the next edit */
+        }
+      })()
+      remoteInflight.set(d.id, run)
+      await run
+      if (remoteInflight.get(d.id) === run) remoteInflight.delete(d.id)
     }, 3000))
   }
 
@@ -247,8 +262,35 @@ export const useComposeStore = defineStore('compose', () => {
   async function deliver(d: Draft) {
     const t = remoteTimers.get(d.id)
     if (t) clearTimeout(t)
-    // The backend removes the server draft (draftId) once the message is sent.
+    remoteTimers.delete(d.id)
+    // Let a SaveDraft in flight finish so its id goes out with the send; the
+    // backend then removes that server draft instead of leaving an orphan.
+    await remoteInflight.get(d.id)
     await api.sendMessage(toRequest(d))
+  }
+
+  /** The window is going away during an undo-send delay: send now rather than drop it. */
+  function flushQueued() {
+    for (const [id, t] of timers) {
+      clearTimeout(t)
+      timers.delete(id)
+      void reallySend(id)
+    }
+    persist()
+  }
+  if (typeof window !== 'undefined') window.addEventListener('pagehide', flushQueued)
+
+  // Tell the user about sends the previous session couldn't finish.
+  const interrupted = drafts.value.filter((d) => d.interrupted)
+  if (interrupted.length && typeof window !== 'undefined') {
+    setTimeout(() => {
+      toast.warning(interrupted.length === 1 ? 'A message wasn’t sent before gomail closed' : `${interrupted.length} messages weren’t sent before gomail closed`, {
+        description: 'They are back in your drafts.',
+        duration: 15000,
+        action: { label: 'Review', onClick: () => interrupted.forEach((d) => focus(d.id)) },
+      })
+      interrupted.forEach((d) => (d.interrupted = false))
+    }, 1500)
   }
 
   async function send(id: string, delaySeconds = 0) {

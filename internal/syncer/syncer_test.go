@@ -554,3 +554,25 @@ func TestHumanErrorUnknownService(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// TestMergeCancelDoneParent: a done parent cancels synchronously, so no
+// work starts after Stop (this used to race and was the flaky
+// "sync after stop" failure).
+func TestMergeCancelDoneParent(t *testing.T) {
+	b, cancelB := context.WithCancel(context.Background())
+	cancelB()
+	for i := 0; i < 1000; i++ {
+		ctx, cancel := mergeCancel(context.Background(), b)
+		if ctx.Err() == nil {
+			t.Fatal("merged context not cancelled right away")
+		}
+		cancel()
+	}
+	a, cancelA := context.WithCancel(context.Background())
+	ctx, cancel := mergeCancel(a, context.Background())
+	defer cancel()
+	cancelA()
+	if ctx.Err() == nil {
+		t.Fatal("first parent not propagated")
+	}
+}

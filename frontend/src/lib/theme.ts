@@ -31,7 +31,8 @@ function buildVars(primary: string, radius: number, dark: boolean): Record<strin
 }
 
 export function themeFromSettings(s: Pick<Settings, 'theme' | 'density' | 'primaryColor' | 'radius'>): ThemeCache {
-  const primary = /^#[0-9a-f]{3,6}$/i.test(s.primaryColor ?? '') ? s.primaryColor : DEFAULT_PRIMARY
+  // #rrggbb only: buildVars mixes it, and it is written into inline CSS variables.
+  const primary = /^#[0-9a-f]{6}$/i.test(s.primaryColor ?? '') ? s.primaryColor : DEFAULT_PRIMARY
   const radius = typeof s.radius === 'number' && s.radius >= 0 && s.radius <= 1.5 ? s.radius : DEFAULT_RADIUS
   return {
     theme: s.theme || 'system',

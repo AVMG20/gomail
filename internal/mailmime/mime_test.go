@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AVMG20/gomail/internal/models"
 )
@@ -237,5 +238,87 @@ func TestBuildUsesCRLF(t *testing.T) {
 	}
 	if got := m.Attachments[1].Data; !bytes.Equal(got, bytes.Repeat([]byte{0, '\n', 0xff, '\r'}, 300)) {
 		t.Fatal("binary attachment changed")
+	}
+}
+
+// TestSanitizeBypasses collects known sanitizer bypass attempts.
+func TestSanitizeBypasses(t *testing.T) {
+	png := "data:image/png;base64,iVBORw0KGgo="
+	cases := []struct {
+		in       string
+		mustNot  []string
+		mustHave []string
+	}{
+		{`<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">x</a>`, []string{"data:text/html", "href"}, []string{"x"}},
+		{`<a href="javascript:alert(1)">x</a><a href="vbscript:x">y</a>`, []string{"javascript:", "vbscript:"}, nil},
+		{`<img src="` + png + `">`, nil, []string{png}},
+		{`<img src="data:text/html,<script>alert(1)</script>">`, []string{"data:text/html", "<script"}, nil},
+		{`<svg onload="alert(1)"><script>alert(1)</script></svg>`, []string{"<svg", "onload", "<script"}, nil},
+		{`<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>`, []string{"<img", "<math", "<mglyph"}, nil}, // the rest is inert CSS text
+		{`<base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example">`, []string{"<base", "<meta", "refresh"}, nil},
+		{`<form action="https://evil.example"><input name="password"><button formaction="https://e">go</button></form>`, []string{"<form", "<input", "formaction", "action="}, nil},
+		{`<iframe src="https://evil.example"></iframe><object data="x"></object><embed src="x">`, []string{"<iframe", "<object", "<embed"}, nil},
+		{`<style>@import url(https://t.example/a.css); p{color:red}</style >`, []string{"@import"}, []string{"color:red"}},
+		{`<style>@\69mport "https://t.example/a.css"; b{x:expr\65ssion(alert(1))}</style>`, []string{"@import", "expression(", `\69`}, nil},
+		{`<style>p{color:red}`, nil, []string{"color:red"}},
+		{`<p style="background:url(javascript:alert(1))">x</p>`, []string{"javascript"}, nil},
+		{`<p style="width:expr\65ssion(alert(1))">x</p>`, []string{"expr"}, nil},
+		{`<div onclick="alert(1)" onmouseover=x>y</div>`, []string{"onclick", "onmouseover"}, []string{">y</div>"}},
+	}
+	for _, c := range cases {
+		out := SanitizeHTML(c.in)
+		for _, bad := range c.mustNot {
+			if strings.Contains(strings.ToLower(out), strings.ToLower(bad)) {
+				t.Errorf("SanitizeHTML(%q) = %q, contains %q", c.in, out, bad)
+			}
+		}
+		for _, good := range c.mustHave {
+			if !strings.Contains(out, good) {
+				t.Errorf("SanitizeHTML(%q) = %q, lost %q", c.in, out, good)
+			}
+		}
+	}
+	// Remote loads hidden in image-set() are blocked too.
+	in := SanitizeHTML(`<p style="background-image:image-set(&#34;https://t.example/p.png&#34; 1x)">x</p><style>b{background:-webkit-image-set("https://t.example/q.png" 1x)}</style>`)
+	out, blocked := BlockRemoteContent(in)
+	if !blocked || strings.Contains(out, "t.example") {
+		t.Fatalf("image-set not blocked: %q", out)
+	}
+}
+
+func TestBuildHeaderInjection(t *testing.T) {
+	raw, err := Build(Message{
+		From:       models.Address{Name: "Eve\r\nBcc: victim@example.com", Email: "eve@example.com"},
+		To:         []models.Address{{Name: "x", Email: "a@example.com\r\nBcc: v2@example.com"}},
+		Subject:    "Hi\r\nBcc: v3@example.com",
+		InReplyTo:  "<id@x>\r\nBcc: v4@example.com",
+		References: "<a@x>\nX-Evil: 1",
+		Text:       "body",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _, _ := strings.Cut(string(raw), "\r\n\r\n")
+	for _, line := range strings.Split(head, "\r\n") {
+		if strings.HasPrefix(strings.ToLower(line), "bcc:") || strings.HasPrefix(line, "X-Evil") {
+			t.Fatalf("header injected: %q\n%s", line, head)
+		}
+	}
+}
+
+func TestParseDateInTheWild(t *testing.T) {
+	want := time.Date(2006, 1, 2, 20, 4, 5, 0, time.UTC)
+	for _, s := range []string{
+		"Mon, 2 Jan 2006 15:04:05 -0500", "Mon,  2 Jan 2006 15:04:05 -0500 (EST)", "Mon, 02 Jan 06 15:04:05 EST",
+		"Monday, 2 January 2006 15:04:05 -0500", "2006-01-02T15:04:05-05:00", "Mon, 2 Jan 2006 20:04:05",
+		"Mon, 2 Jan 2006 20:04:05 GMT", "Mon, 2 Jan 2006 12:04:05 PST", "Mon Jan 2 20:04:05 2006",
+	} {
+		got := ParseDate(s)
+		if !got.Equal(want) || got.Location() != time.UTC {
+			t.Errorf("ParseDate(%q) = %v, want %v", s, got, want)
+		}
+	}
+	if !ParseDate("not a date").IsZero() {
+		t.Fatal("garbage parsed")
 	}
 }

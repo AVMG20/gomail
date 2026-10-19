@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // TokenSource supplies bearer tokens. Invalidate forces the next Token call
@@ -277,9 +278,11 @@ func readError(resp *http.Response, service string) *Error {
 		}
 	}
 	if e.Message == "" {
-		e.Message = strings.TrimSpace(string(data))
-		if len(e.Message) > 200 {
-			e.Message = e.Message[:200]
+		// Only short plain-text bodies are worth showing; HTML error pages
+		// (proxies, load balancers) and JSON we couldn't read are not.
+		txt := strings.TrimSpace(string(data))
+		if txt != "" && len(txt) <= 200 && !strings.ContainsAny(txt, "<>{}\n") && utf8.ValidString(txt) {
+			e.Message = txt
 		}
 	}
 	return e

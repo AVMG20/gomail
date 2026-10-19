@@ -36,8 +36,12 @@ export const useAccountsStore = defineStore('accounts', () => {
     })
   }
 
+  let foldersSeq = 0
+  let countsSeq = 0
   async function loadFolders(ids = accounts.value.map((a) => a.id)) {
+    const seq = ++foldersSeq
     const results = await Promise.all(ids.map(async (id) => [id, sortFolders(await api.getFolders(id))] as const))
+    if (seq !== foldersSeq) return // a newer load is on its way (out-of-order responses)
     const next = { ...folders.value }
     for (const [id, list] of results) next[id] = list
     for (const id of Object.keys(next)) if (!accounts.value.some((a) => a.id === id)) delete next[id]
@@ -46,9 +50,10 @@ export const useAccountsStore = defineStore('accounts', () => {
 
   async function loadLabelCounts(scope = labelScope.value) {
     labelScope.value = scope
+    const seq = ++countsSeq
     try {
       const counts = await api.getLabelCounts(scope)
-      if (scope !== labelScope.value) return
+      if (scope !== labelScope.value || seq !== countsSeq) return
       labelCounts.value = new Map(counts.map((c) => [c.labelId, c]))
     } catch {
       /* optional binding */

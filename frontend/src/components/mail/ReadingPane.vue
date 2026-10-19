@@ -43,6 +43,17 @@ const scroller = ref<HTMLElement | null>(null)
 let token = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 
+function applyThread(id: string, list: Message[]) {
+  thread.value = list
+  const last = list[list.length - 1]
+  // Expand the newest message plus any unread ones, like most mail apps.
+  expanded.value = new Set([id, last?.id, ...list.filter((m) => m.unread).map((m) => m.id)].filter(Boolean) as string[])
+  scroller.value?.scrollTo({ top: 0 })
+}
+
+/** The loaded thread belongs to the open message (never show another conversation's body). */
+const threadMatches = computed(() => !!mail.openId && thread.value.some((m) => m.id === mail.openId))
+
 async function load(id: string) {
   const t = ++token
   loading.value = true
@@ -50,11 +61,8 @@ async function load(id: string) {
   try {
     const list = await mail.loadThread(id)
     if (t !== token) return
-    thread.value = list
-    const last = list[list.length - 1]
-    // Expand the newest message plus any unread ones, like most mail apps.
-    expanded.value = new Set([id, last?.id, ...list.filter((m) => m.unread).map((m) => m.id)].filter(Boolean) as string[])
-    scroller.value?.scrollTo({ top: 0 })
+    if (!list.some((m) => m.id === id)) throw new Error('This message is no longer available. It may have been moved or deleted.')
+    applyThread(id, list)
   } catch (e) {
     if (t !== token) return
     error.value = errorMessage(e)
@@ -66,9 +74,19 @@ async function load(id: string) {
 
 watch(() => mail.openId, (id) => {
   summary.value = null
+  error.value = ''
   if (timer) clearTimeout(timer)
   if (!id) {
+    token++
     thread.value = []
+    return
+  }
+  // Cached conversations render immediately (no flash while holding j/k).
+  const cached = mail.cachedThread(id)
+  if (cached) {
+    token++
+    loading.value = false
+    applyThread(id, cached)
     return
   }
   // Tiny debounce so holding j/k does not fire a request per row.
@@ -92,8 +110,11 @@ const labelPills = computed(() => {
 async function loadImages(threadId: string) {
   remoteAllowed.value = new Set([...remoteAllowed.value, threadId])
   if (!hasMethod('GetMessageWithRemoteContent')) return
+  const t = token
+  const source = thread.value
   try {
-    const updated = await Promise.all(thread.value.map((m) => (m.remoteContentBlocked || m.hasRemoteContent ? api.getMessageWithRemoteContent(m.id) : Promise.resolve(m))))
+    const updated = await Promise.all(source.map((m) => (m.remoteContentBlocked || m.hasRemoteContent ? api.getMessageWithRemoteContent(m.id) : Promise.resolve(m))))
+    if (t !== token || thread.value !== source) return // another message was opened meanwhile
     thread.value = updated
   } catch (e) {
     toast.error('Couldn’t load images', { description: errorMessage(e) })
@@ -226,7 +247,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
 
       <div ref="scroller" class="thin-scroll min-h-0 flex-1 overflow-y-auto">
         <div :class="showBack ? 'mx-auto w-full max-w-4xl' : ''">
-        <div v-if="loading && !thread.length" class="space-y-4 px-6 py-6">
+        <div v-if="!threadMatches && !error" class="space-y-4 px-6 py-6">
           <Skeleton class="h-6 w-2/3" />
           <div class="flex items-center gap-3"><Skeleton class="size-9 rounded-full" /><div class="space-y-2"><Skeleton class="h-3.5 w-40" /><Skeleton class="h-3 w-56" /></div></div>
           <Skeleton class="h-48 w-full" />

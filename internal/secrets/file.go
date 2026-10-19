@@ -52,6 +52,11 @@ func (f *FileStore) key() ([]byte, error) {
 			}
 			return k, nil
 		}
+		// A damaged key file: replacing it would silently make the existing
+		// secrets unreadable, so only do that when there is nothing to lose.
+		if _, serr := os.Stat(f.path); serr == nil {
+			return nil, errors.New("secrets.key is damaged; remove secrets.key and secrets.enc from the data directory and sign in again")
+		}
 	}
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err

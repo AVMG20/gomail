@@ -235,3 +235,48 @@ func TestSanitizeFilenamePortable(t *testing.T) {
 		}
 	}
 }
+
+func TestOneClickRefusesLocalTargets(t *testing.T) {
+	for _, link := range []string{"https://127.0.0.1:9/u", "https://[::1]:9/u", "https://169.254.169.254/latest", "https://10.0.0.1/u"} {
+		err := oneClick(context.Background(), link)
+		if err == nil || !strings.Contains(err.Error(), "local network") {
+			t.Errorf("oneClick(%s) = %v", link, err)
+		}
+	}
+	for _, link := range []string{"http://example.com/u", "javascript:alert(1)", "https:///nohost"} {
+		if err := oneClick(context.Background(), link); err == nil || !strings.Contains(err.Error(), "https") {
+			t.Errorf("oneClick(%s) = %v", link, err)
+		}
+	}
+}
+
+func TestDamagedSettingsDoNotBlockStartup(t *testing.T) {
+	for name, raw := range map[string]string{
+		"syntax": `{"theme": "dark", "zoom": `,
+		"types":  `{"theme": "dark", "syncIntervalMinutes": "often", "labels": 7, "density": "compact"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := New(Options{DataDir: dir, UI: &fakeUI{}, Secrets: secrets.NewMemory()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.store.PutRawSetting(settingsKey, []byte(raw)); err != nil {
+				t.Fatal(err)
+			}
+			s.Close()
+			s, err = New(Options{DataDir: dir, UI: &fakeUI{}, Secrets: secrets.NewMemory()})
+			if err != nil {
+				t.Fatalf("startup with damaged settings: %v", err)
+			}
+			defer s.Close()
+			st := s.GetSettings()
+			if name == "types" && (st.Theme != "dark" || st.Density != "compact" || st.SyncIntervalMinutes != 5 || len(st.Labels) == 0) {
+				t.Fatalf("salvaged %+v", st)
+			}
+			if b, err := s.store.RawSetting(settingsKey + ".damaged"); err != nil || string(b) != raw {
+				t.Fatalf("no copy kept: %q %v", b, err)
+			}
+		})
+	}
+}

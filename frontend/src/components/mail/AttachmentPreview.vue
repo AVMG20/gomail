@@ -20,14 +20,19 @@ onMounted(async () => {
     const data = await api.getAttachmentData(props.messageId, props.attachment.id)
     const mime = data.mimeType || props.attachment.mimeType
     const bytes = Uint8Array.from(atob(data.dataBase64), (c) => c.charCodeAt(0))
-    if (mime.startsWith('text/')) {
+    if (/^text\//i.test(mime)) {
       kind.value = 'text'
       text.value = new TextDecoder().decode(bytes).slice(0, 200_000)
       return
     }
-    // Blob URLs work in every webview and avoid data: URL navigation limits.
-    url.value = URL.createObjectURL(new Blob([bytes], { type: mime }))
-    kind.value = mime.startsWith('image/') ? 'image' : 'pdf'
+    // Blob URLs share the app's origin, so their type is pinned: images only ever
+    // go into <img> (no script, even for SVG) and the iframe only ever gets a PDF.
+    // Anything else (e.g. text/html posing as an attachment) is never rendered.
+    const isImage = /^image\/(png|jpe?g|gif|webp|bmp|avif|svg\+xml)$/i.test(mime)
+    const isPdf = mime.toLowerCase() === 'application/pdf'
+    if (!isImage && !isPdf) throw new Error('This file type can’t be previewed. Save it instead.')
+    url.value = URL.createObjectURL(new Blob([bytes], { type: isPdf ? 'application/pdf' : mime }))
+    kind.value = isImage ? 'image' : 'pdf'
   } catch (e) {
     error.value = errorMessage(e)
   }

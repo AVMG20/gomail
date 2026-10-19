@@ -125,3 +125,28 @@ func mustFile(t *testing.T) *FileStore {
 	}
 	return f
 }
+
+func TestFileStoreDamagedKeyKeepsSecrets(t *testing.T) {
+	dir := t.TempDir()
+	fs, _ := NewFileStore(dir)
+	if err := fs.Set("a", "1"); err != nil {
+		t.Fatal(err)
+	}
+	enc, _ := os.ReadFile(filepath.Join(dir, "secrets.enc"))
+	if err := os.WriteFile(filepath.Join(dir, "secrets.key"), []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.Get("a"); err == nil || !strings.Contains(err.Error(), "damaged") {
+		t.Fatalf("damaged key: %v", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "secrets.enc")); string(after) != string(enc) {
+		t.Fatal("secrets were overwritten")
+	}
+	// Without stored secrets a fresh key is fine.
+	dir2 := t.TempDir()
+	os.WriteFile(filepath.Join(dir2, "secrets.key"), []byte("short"), 0o600)
+	fs2, _ := NewFileStore(dir2)
+	if err := fs2.Set("b", "2"); err != nil {
+		t.Fatal(err)
+	}
+}

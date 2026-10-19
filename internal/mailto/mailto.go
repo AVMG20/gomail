@@ -9,6 +9,12 @@ import (
 	"github.com/AVMG20/gomail/internal/models"
 )
 
+// Limits for links from the command line or other apps.
+const (
+	maxURI        = 256 << 10
+	maxRecipients = 100
+)
+
 // IsMailto reports whether s looks like a mailto: URI.
 func IsMailto(s string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "mailto:")
@@ -19,7 +25,7 @@ func IsMailto(s string) bool {
 func Parse(raw string) (models.ComposeOpen, bool) {
 	out := models.ComposeOpen{To: []models.Address{}, Cc: []models.Address{}, Bcc: []models.Address{}}
 	raw = strings.TrimSpace(raw)
-	if !IsMailto(raw) {
+	if !IsMailto(raw) || len(raw) > maxURI {
 		return out, false
 	}
 	rest := raw[len("mailto:"):]
@@ -30,7 +36,7 @@ func Parse(raw string) (models.ComposeOpen, bool) {
 			return
 		}
 		for _, a := range mailmime.ParseAddressList(v) {
-			if strings.Contains(a.Email, "@") {
+			if strings.Contains(a.Email, "@") && len(*list) < maxRecipients {
 				*list = append(*list, a)
 			}
 		}
@@ -47,7 +53,7 @@ func Parse(raw string) (models.ComposeOpen, bool) {
 			case "bcc":
 				add(&out.Bcc, url.PathEscape(v))
 			case "subject":
-				out.Subject = v
+				out.Subject = strings.Join(strings.Fields(v), " ") // one line
 			case "body":
 				out.Body = strings.ReplaceAll(v, "\r\n", "\n")
 			}

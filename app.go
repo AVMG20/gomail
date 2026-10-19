@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 	"github.com/AVMG20/gomail/internal/mailto"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/safe"
+	"github.com/AVMG20/gomail/internal/store"
+	"github.com/AVMG20/gomail/internal/syncer"
 )
 
 // MailService is the Wails service bound to the frontend. Every exported
@@ -46,6 +49,8 @@ type MailService struct {
 	logCloser      io.Closer
 	dataDir        string // set by main (preset); "" = resolve in ServiceStartup
 	logFile        string
+
+	closed bool // ServiceShutdown ran (guarded by trayMu)
 
 	hooks *testHooks // nil in the app
 }
@@ -115,6 +120,13 @@ func (m *MailService) ServiceStartup(ctx context.Context, _ application.ServiceO
 
 // ServiceShutdown stops background work (Wails lifecycle hook).
 func (m *MailService) ServiceShutdown() error {
+	m.trayMu.Lock()
+	m.closed = true
+	if m.trayTimer != nil {
+		m.trayTimer.Stop()
+		m.trayTimer = nil
+	}
+	m.trayMu.Unlock()
 	if m.svc != nil {
 		m.svc.Close()
 	}
@@ -305,7 +317,7 @@ func (m *MailService) CheckForUpdate() (models.UpdateInfo, error) {
 	if err != nil {
 		return models.UpdateInfo{Current: version}, err
 	}
-	return s.CheckForUpdate()
+	return uiResult(s.CheckForUpdate())
 }
 
 // applyTray syncs the tray icon visibility with the settings.
@@ -345,15 +357,16 @@ func (m *MailService) showWindow() {
 func (m *MailService) scheduleTrayUpdate() {
 	m.trayMu.Lock()
 	defer m.trayMu.Unlock()
-	if m.trayTimer != nil {
+	if m.trayTimer != nil || m.closed {
 		return
 	}
 	m.trayTimer = time.AfterFunc(700*time.Millisecond, func() {
 		defer safe.Recover("tray update")
 		m.trayMu.Lock()
 		m.trayTimer = nil
+		closed := m.closed
 		m.trayMu.Unlock()
-		if m.svc == nil || m.tray == nil {
+		if closed || m.svc == nil || m.tray == nil {
 			return
 		}
 		accts, err := m.svc.Accounts()
@@ -385,7 +398,7 @@ func (m *MailService) GetAccounts() ([]models.Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.Accounts()
+	return uiResult(s.Accounts())
 }
 
 // AddAccount runs the OAuth flow for provider ("gmail" | "outlook") in the
@@ -395,7 +408,7 @@ func (m *MailService) AddAccount(provider string) (models.Account, error) {
 	if err != nil {
 		return models.Account{}, err
 	}
-	return s.AddAccount(provider)
+	return uiResult(s.AddAccount(provider))
 }
 
 // CancelAddAccount aborts a running AddAccount.
@@ -411,7 +424,7 @@ func (m *MailService) RemoveAccount(accountID string) error {
 	if err != nil {
 		return err
 	}
-	return s.RemoveAccount(accountID)
+	return uiError(s.RemoveAccount(accountID))
 }
 
 // UpdateAccount changes an account's display name and color.
@@ -420,7 +433,7 @@ func (m *MailService) UpdateAccount(accountID, displayName, color string) error 
 	if err != nil {
 		return err
 	}
-	return s.UpdateAccount(accountID, displayName, color)
+	return uiError(s.UpdateAccount(accountID, displayName, color))
 }
 
 // SyncNow syncs one account ("" = all) and resolves when done.
@@ -429,7 +442,7 @@ func (m *MailService) SyncNow(accountID string) error {
 	if err != nil {
 		return err
 	}
-	return s.SyncNow(accountID)
+	return uiError(s.SyncNow(accountID))
 }
 
 // ---- Folders & messages ----
@@ -440,7 +453,7 @@ func (m *MailService) GetFolders(accountID string) ([]models.Folder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.Folders(accountID)
+	return uiResult(s.Folders(accountID))
 }
 
 // ListMessages returns one page of messages for the list view.
@@ -449,7 +462,7 @@ func (m *MailService) ListMessages(q models.ListQuery) (models.MessagePage, erro
 	if err != nil {
 		return models.MessagePage{Messages: []models.MessageSummary{}}, err
 	}
-	return s.ListMessages(q)
+	return uiResult(s.ListMessages(q))
 }
 
 // SearchMessages runs a ranked, typo-tolerant search (command palette).
@@ -458,7 +471,7 @@ func (m *MailService) SearchMessages(q models.SearchQuery) ([]models.SearchResul
 	if err != nil {
 		return nil, err
 	}
-	return s.SearchMessages(q)
+	return uiResult(s.SearchMessages(q))
 }
 
 // ResolveQueryIDs returns the ids of all messages matching q (for "select
@@ -468,7 +481,7 @@ func (m *MailService) ResolveQueryIDs(q models.ListQuery, max int) ([]string, er
 	if err != nil {
 		return nil, err
 	}
-	return s.ResolveQueryIDs(q, max)
+	return uiResult(s.ResolveQueryIDs(q, max))
 }
 
 // GetMessage returns a message with its (sanitized) body.
@@ -477,7 +490,7 @@ func (m *MailService) GetMessage(id string) (models.Message, error) {
 	if err != nil {
 		return models.Message{}, err
 	}
-	return s.Message(id)
+	return uiResult(s.Message(id))
 }
 
 // GetThread returns the messages of a conversation, oldest first.
@@ -486,7 +499,7 @@ func (m *MailService) GetThread(id string) ([]models.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.Thread(id)
+	return uiResult(s.Thread(id))
 }
 
 func (m *MailService) MarkRead(ids []string, read bool) error {
@@ -494,7 +507,7 @@ func (m *MailService) MarkRead(ids []string, read bool) error {
 	if err != nil {
 		return err
 	}
-	return s.MarkRead(ids, read)
+	return uiError(s.MarkRead(ids, read))
 }
 
 func (m *MailService) SetStarred(ids []string, starred bool) error {
@@ -502,7 +515,7 @@ func (m *MailService) SetStarred(ids []string, starred bool) error {
 	if err != nil {
 		return err
 	}
-	return s.SetStarred(ids, starred)
+	return uiError(s.SetStarred(ids, starred))
 }
 
 func (m *MailService) Archive(ids []string) error {
@@ -510,7 +523,7 @@ func (m *MailService) Archive(ids []string) error {
 	if err != nil {
 		return err
 	}
-	return s.Archive(ids)
+	return uiError(s.Archive(ids))
 }
 
 func (m *MailService) Trash(ids []string) error {
@@ -518,7 +531,7 @@ func (m *MailService) Trash(ids []string) error {
 	if err != nil {
 		return err
 	}
-	return s.Trash(ids)
+	return uiError(s.Trash(ids))
 }
 
 func (m *MailService) MoveToFolder(ids []string, folderID string) error {
@@ -526,7 +539,7 @@ func (m *MailService) MoveToFolder(ids []string, folderID string) error {
 	if err != nil {
 		return err
 	}
-	return s.MoveToFolder(ids, folderID)
+	return uiError(s.MoveToFolder(ids, folderID))
 }
 
 // SendMessage sends a new message, reply, reply-all or forward.
@@ -535,7 +548,7 @@ func (m *MailService) SendMessage(req models.ComposeRequest) error {
 	if err != nil {
 		return err
 	}
-	return s.Send(req)
+	return uiError(s.Send(req))
 }
 
 // SaveAttachment asks for a location and saves the attachment there.
@@ -544,7 +557,7 @@ func (m *MailService) SaveAttachment(messageID, attachmentID string) error {
 	if err != nil {
 		return err
 	}
-	return s.SaveAttachment(messageID, attachmentID)
+	return uiError(s.SaveAttachment(messageID, attachmentID))
 }
 
 // OpenExternalURL opens an http(s)/mailto link in the system browser.
@@ -553,7 +566,7 @@ func (m *MailService) OpenExternalURL(url string) error {
 	if err != nil {
 		return err
 	}
-	return s.OpenExternalURL(url)
+	return uiError(s.OpenExternalURL(url))
 }
 
 // GetMessageWithRemoteContent returns a message with remote images and
@@ -563,7 +576,7 @@ func (m *MailService) GetMessageWithRemoteContent(id string) (models.Message, er
 	if err != nil {
 		return models.Message{}, err
 	}
-	return s.MessageWithRemoteContent(id)
+	return uiResult(s.MessageWithRemoteContent(id))
 }
 
 // LoadOlder fetches the next page of older mail from the server for the
@@ -574,7 +587,7 @@ func (m *MailService) LoadOlder(q models.ListQuery) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return s.LoadOlder(q)
+	return uiResult(s.LoadOlder(q))
 }
 
 // GetAttachmentData returns attachment bytes (max 15 MB) for previews.
@@ -583,7 +596,7 @@ func (m *MailService) GetAttachmentData(messageID, attachmentID string) (models.
 	if err != nil {
 		return models.AttachmentData{}, err
 	}
-	return s.AttachmentData(messageID, attachmentID)
+	return uiResult(s.AttachmentData(messageID, attachmentID))
 }
 
 // SaveDraft creates (draftID "") or updates a draft and returns its draft
@@ -594,7 +607,7 @@ func (m *MailService) SaveDraft(req models.ComposeRequest, draftID string) (stri
 	if err != nil {
 		return "", err
 	}
-	return s.SaveDraft(req, draftID)
+	return uiResult(s.SaveDraft(req, draftID))
 }
 
 // DeleteDraft discards a draft (draft id or draft message id).
@@ -603,7 +616,7 @@ func (m *MailService) DeleteDraft(id string) error {
 	if err != nil {
 		return err
 	}
-	return s.DeleteDraft(id)
+	return uiError(s.DeleteDraft(id))
 }
 
 // Unsubscribe uses the message's List-Unsubscribe header (one-click POST,
@@ -613,7 +626,7 @@ func (m *MailService) Unsubscribe(messageID string) (models.UnsubscribeResult, e
 	if err != nil {
 		return models.UnsubscribeResult{}, err
 	}
-	return s.Unsubscribe(messageID)
+	return uiResult(s.Unsubscribe(messageID))
 }
 
 // ReauthAccount signs in again for an account with needsReauth, keeping
@@ -623,7 +636,7 @@ func (m *MailService) ReauthAccount(accountID string) (models.Account, error) {
 	if err != nil {
 		return models.Account{}, err
 	}
-	return s.ReauthAccount(accountID)
+	return uiResult(s.ReauthAccount(accountID))
 }
 
 // UpdateAccountSignature sets an account's HTML signature (sanitized).
@@ -632,7 +645,7 @@ func (m *MailService) UpdateAccountSignature(accountID, html string) error {
 	if err != nil {
 		return err
 	}
-	return s.UpdateAccountSignature(accountID, html)
+	return uiError(s.UpdateAccountSignature(accountID, html))
 }
 
 // SearchContacts suggests recipients ranked by frequency and recency.
@@ -641,7 +654,7 @@ func (m *MailService) SearchContacts(query string, limit int) ([]models.Contact,
 	if err != nil {
 		return nil, err
 	}
-	return s.SearchContacts(query, limit)
+	return uiResult(s.SearchContacts(query, limit))
 }
 
 // MarkFolderRead marks every message of a folder read.
@@ -650,7 +663,7 @@ func (m *MailService) MarkFolderRead(folderID string) error {
 	if err != nil {
 		return err
 	}
-	return s.MarkFolderRead(folderID)
+	return uiError(s.MarkFolderRead(folderID))
 }
 
 // EmptyFolder permanently deletes everything in a Trash or Spam folder.
@@ -659,7 +672,7 @@ func (m *MailService) EmptyFolder(folderID string) error {
 	if err != nil {
 		return err
 	}
-	return s.EmptyFolder(folderID)
+	return uiError(s.EmptyFolder(folderID))
 }
 
 // ---- Labels ----
@@ -670,7 +683,7 @@ func (m *MailService) AddLabel(ids []string, labelID string) error {
 	if err != nil {
 		return err
 	}
-	return s.AddLabel(ids, labelID)
+	return uiError(s.AddLabel(ids, labelID))
 }
 
 // RemoveLabel removes a label from messages.
@@ -679,7 +692,7 @@ func (m *MailService) RemoveLabel(ids []string, labelID string) error {
 	if err != nil {
 		return err
 	}
-	return s.RemoveLabel(ids, labelID)
+	return uiError(s.RemoveLabel(ids, labelID))
 }
 
 // GetLabelCounts returns total/unread counts per label (Trash excluded).
@@ -688,7 +701,7 @@ func (m *MailService) GetLabelCounts(accountID string) ([]models.LabelCount, err
 	if err != nil {
 		return nil, err
 	}
-	return s.LabelCounts(accountID)
+	return uiResult(s.LabelCounts(accountID))
 }
 
 // ---- Settings ----
@@ -706,7 +719,7 @@ func (m *MailService) SaveSettings(st models.Settings) error {
 	if err != nil {
 		return err
 	}
-	return s.SaveSettings(st)
+	return uiError(s.SaveSettings(st))
 }
 
 // SetOpenRouterKey stores the key securely ("" removes it). The key is
@@ -716,7 +729,7 @@ func (m *MailService) SetOpenRouterKey(key string) error {
 	if err != nil {
 		return err
 	}
-	return s.SetOpenRouterKey(key)
+	return uiError(s.SetOpenRouterKey(key))
 }
 
 // GetDefaultPrompts returns the built-in grammar prompt and classifier
@@ -747,7 +760,7 @@ func (m *MailService) TestOpenRouter() error {
 	if err != nil {
 		return err
 	}
-	return s.TestOpenRouter()
+	return uiError(s.TestOpenRouter())
 }
 
 // ListAIModels returns all OpenRouter models (cached for an hour).
@@ -756,7 +769,7 @@ func (m *MailService) ListAIModels() ([]models.AIModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.ListAIModels(false)
+	return uiResult(s.ListAIModels(false))
 }
 
 // RefreshAIModels refetches the OpenRouter model list.
@@ -765,7 +778,7 @@ func (m *MailService) RefreshAIModels() ([]models.AIModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.ListAIModels(true)
+	return uiResult(s.ListAIModels(true))
 }
 
 // GetAIUsage returns OpenRouter spending recorded today and this month,
@@ -775,7 +788,7 @@ func (m *MailService) GetAIUsage() (models.AIUsage, error) {
 	if err != nil {
 		return models.AIUsage{}, err
 	}
-	return s.AIUsage()
+	return uiResult(s.AIUsage())
 }
 
 // ClassifyMessages labels the given messages (max 200) and returns the
@@ -785,7 +798,7 @@ func (m *MailService) ClassifyMessages(ids []string) ([]models.ClassificationRes
 	if err != nil {
 		return nil, err
 	}
-	return s.ClassifyMessages(ids)
+	return uiResult(s.ClassifyMessages(ids))
 }
 
 // ClassifyQuery starts a background job labeling every message matching q.
@@ -795,7 +808,7 @@ func (m *MailService) ClassifyQuery(q models.ListQuery, onlyUnlabeled, includeAl
 	if err != nil {
 		return models.ClassifyJob{}, err
 	}
-	return s.ClassifyQuery(q, onlyUnlabeled, includeAllFolders)
+	return uiResult(s.ClassifyQuery(q, onlyUnlabeled, includeAllFolders))
 }
 
 // CancelClassify stops a labeling job ("auto" stops automatic labeling).
@@ -804,7 +817,7 @@ func (m *MailService) CancelClassify(jobID string) error {
 	if err != nil {
 		return err
 	}
-	return s.CancelClassify(jobID)
+	return uiError(s.CancelClassify(jobID))
 }
 
 // EstimateClassify estimates how many messages ClassifyQuery would label
@@ -814,7 +827,7 @@ func (m *MailService) EstimateClassify(q models.ListQuery, onlyUnlabeled, includ
 	if err != nil {
 		return models.ClassifyEstimate{}, err
 	}
-	return s.EstimateClassify(q, onlyUnlabeled, includeAllFolders)
+	return uiResult(s.EstimateClassify(q, onlyUnlabeled, includeAllFolders))
 }
 
 // SummarizeMessage returns short TL;DR bullets for a message.
@@ -823,7 +836,7 @@ func (m *MailService) SummarizeMessage(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return s.SummarizeMessage(id)
+	return uiResult(s.SummarizeMessage(id))
 }
 
 // ImproveGrammar returns text with spelling and grammar corrected (meaning,
@@ -833,5 +846,30 @@ func (m *MailService) ImproveGrammar(text string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return s.ImproveGrammar(text)
+	return uiResult(s.ImproveGrammar(text))
 }
+
+// uiError makes errors that reach the UI readable: database conditions get
+// plain explanations instead of SQLite messages; everything else (already
+// worded for users by core) passes through.
+func uiError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, context.Canceled):
+		return errors.New("the operation was cancelled")
+	case store.IsDiskFull(err):
+		return errors.New(syncer.DiskFullMessage)
+	case store.IsBusy(err):
+		return errors.New("gomail is busy saving mail; please try again in a moment")
+	case store.IsCorrupt(err) && strings.Contains(strings.ToLower(err.Error()), "database"):
+		return errors.New("the local mail cache is damaged; restart gomail to rebuild it (your accounts and settings are kept)")
+	case strings.HasPrefix(err.Error(), "sql: "):
+		slog.Error("database error", "err", err)
+		return errors.New("something went wrong reading the local mail cache; please try again")
+	}
+	return err
+}
+
+// uiResult applies uiError to a (value, error) result.
+func uiResult[T any](v T, err error) (T, error) { return v, uiError(err) }

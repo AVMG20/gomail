@@ -255,6 +255,8 @@ func (s *Service) maintenanceLoop() {
 
 // Close stops background work and closes the database.
 func (s *Service) Close() {
+	// Write coalesced draft autosaves before the network context goes away.
+	s.flushPendingDrafts(5 * time.Second)
 	s.cancel()
 	s.CancelAddAccount()
 	s.jobs.cancelAll()

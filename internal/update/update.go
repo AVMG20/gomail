@@ -4,6 +4,7 @@ package update
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -114,7 +115,28 @@ func Check(ctx context.Context, current string, client *http.Client) (models.Upd
 	if rel.Draft || rel.TagName == "" {
 		return info, nil
 	}
-	info.Latest, info.URL, info.Notes = strings.TrimPrefix(rel.TagName, "v"), rel.HTMLURL, rel.Body
+	latest := strings.TrimPrefix(rel.TagName, "v")
+	if _, ok := parse(latest); !ok {
+		return info, nil // not a version tag
+	}
+	info.Latest, info.URL, info.Notes = latest, releaseURL(rel.HTMLURL, rel.TagName), rel.Body
+	if len(info.Notes) > 20000 {
+		info.Notes = info.Notes[:20000] + "…"
+	}
 	info.Available = Compare(info.Latest, current) > 0
 	return info, nil
+}
+
+// ReleasesPage is where release links must point.
+const ReleasesPage = "https://github.com/AVMG20/gomail/releases"
+
+// releaseURL only trusts links into the project's releases on GitHub; any
+// other value (a compromised or spoofed response) becomes the releases page.
+func releaseURL(raw, tag string) string {
+	u, err := url.Parse(raw)
+	if err == nil && u.Scheme == "https" && u.Host == "github.com" && u.User == nil &&
+		strings.HasPrefix(u.Path, "/AVMG20/gomail/releases/") {
+		return u.String()
+	}
+	return ReleasesPage + "/tag/" + url.PathEscape(tag)
 }

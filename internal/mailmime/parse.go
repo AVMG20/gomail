@@ -10,6 +10,7 @@ import (
 	"mime/quotedprintable"
 	"net/mail"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -131,15 +132,42 @@ func ParseAddress(s string) models.Address {
 
 // ParseDate parses a Date header leniently.
 func ParseDate(s string) time.Time {
+	s = strings.TrimSpace(s)
 	if t, err := mail.ParseDate(s); err == nil {
-		return t
+		return fixObsZone(s, t).UTC()
 	}
-	for _, layout := range []string{time.RFC1123Z, time.RFC1123, "Mon, 2 Jan 2006 15:04:05 -0700 (MST)", "2 Jan 2006 15:04:05 -0700"} {
-		if t, err := time.Parse(layout, strings.TrimSpace(s)); err == nil {
-			return t
+	s = strings.Join(strings.Fields(commentRe.ReplaceAllString(s, " ")), " ")
+	for _, layout := range dateLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return fixObsZone(s, t).UTC()
 		}
 	}
 	return time.Time{}
+}
+
+var commentRe = regexp.MustCompile(`\([^)]*\)`)
+
+// dateLayouts are fallbacks for dates net/mail rejects (seen in the wild).
+var dateLayouts = []string{
+	time.RFC1123Z, time.RFC1123, "Monday, 2 January 2006 15:04:05 -0700", "Monday, 2 Jan 2006 15:04:05 -0700",
+	"Mon, 2 January 2006 15:04:05 -0700", "2 January 2006 15:04:05 -0700", "2 Jan 2006 15:04:05 -0700",
+	"Mon, 2 Jan 2006 15:04:05 -07:00", "Mon, 2 Jan 2006 15:04:05", "Mon, 2 Jan 2006 15:04", "2 Jan 2006 15:04:05",
+	"Mon Jan 2 15:04:05 2006", "Mon Jan 2 15:04:05 -0700 2006", time.RFC3339, "2006-01-02 15:04:05 -0700", "2006-01-02 15:04:05",
+}
+
+// obsZones are the RFC 5322 obsolete US zones; Go parses them with a zero
+// offset when it doesn't know the abbreviation.
+var obsZones = map[string]int{"EST": -5, "EDT": -4, "CST": -6, "CDT": -5, "MST": -7, "MDT": -6, "PST": -8, "PDT": -7}
+
+func fixObsZone(raw string, t time.Time) time.Time {
+	name, off := t.Zone()
+	h, ok := obsZones[strings.ToUpper(name)]
+	if !ok || off != 0 || !strings.HasSuffix(strings.ToUpper(strings.TrimSpace(commentRe.ReplaceAllString(raw, ""))), strings.ToUpper(name)) {
+		return t
+	}
+	y, mo, d := t.Date()
+	hh, mm, ss := t.Clock()
+	return time.Date(y, mo, d, hh, mm, ss, t.Nanosecond(), time.FixedZone(name, h*3600))
 }
 
 // DecodeCharset converts data in the named charset to UTF-8. Unknown

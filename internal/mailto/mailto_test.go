@@ -1,6 +1,9 @@
 package mailto
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParse(t *testing.T) {
 	c, ok := Parse("mailto:alice@example.com,Bob%20B%20%3Cbob@example.com%3E?subject=Hi%20there%20%26%20more&cc=carol@x.com&bcc=dan@x.com&body=Line%201%0D%0ALine%202&x-ignored=1")
@@ -20,5 +23,19 @@ func TestParse(t *testing.T) {
 	}
 	if c, _ := Parse("mailto:not-an-address"); len(c.To) != 0 {
 		t.Fatal(c)
+	}
+}
+
+func TestParseLimits(t *testing.T) {
+	if _, ok := Parse("mailto:a@b.c?body=" + strings.Repeat("x", maxURI)); ok {
+		t.Fatal("oversized link accepted")
+	}
+	c, _ := Parse("mailto:a@b.c?subject=Hi%0D%0ABcc:%20x@y.z")
+	if strings.ContainsAny(c.Subject, "\r\n") {
+		t.Fatalf("subject %q", c.Subject)
+	}
+	c, _ = Parse("mailto:" + strings.Repeat("x@y.z,", 150))
+	if len(c.To) != maxRecipients {
+		t.Fatalf("%d recipients", len(c.To))
 	}
 }

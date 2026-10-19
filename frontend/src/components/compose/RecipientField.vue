@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api, hasMethod } from '@/lib/api'
 import { XIcon } from '@lucide/vue'
 import { displayName, isEmail, parseAddressList } from '@/lib/format'
@@ -24,6 +24,7 @@ watch(text, (q) => {
   if (timer) clearTimeout(timer)
   const query = q.trim()
   if (!query || !hasMethod('SearchContacts')) {
+    token++
     remote.value = []
     return
   }
@@ -36,6 +37,10 @@ watch(text, (q) => {
       if (t === token) remote.value = []
     }
   }, 100)
+})
+onBeforeUnmount(() => {
+  if (timer) clearTimeout(timer)
+  token++
 })
 const suggestions = computed(() => {
   if (!text.value.trim()) return []
