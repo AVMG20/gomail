@@ -134,6 +134,7 @@ class MockBackend {
   }
 
   private changed(accountId = '') {
+    this.version++
     if (this.changedTimer) clearTimeout(this.changedTimer)
     this.changedTimer = setTimeout(() => this.emit('messages:changed', { accountId }), 120)
   }
@@ -244,7 +245,21 @@ class MockBackend {
     return html.replace(/<mark>(<mark>)+/g, '<mark>').replace(/(<\/mark>)+/g, '</mark>')
   }
 
+  private version = 0
+  private filterCache = new Map<string, { version: number; result: Message[] }>()
+
   private filter(q: Partial<ListQuery>): Message[] {
+    // Memoised per query until the next mutation (keeps ?stress paging O(page)).
+    const key = JSON.stringify({ ...q, cursor: '', limit: 0 })
+    const hit = this.filterCache.get(key)
+    if (hit && hit.version === this.version) return hit.result
+    const result = this.filterUncached(q)
+    if (this.filterCache.size > 40) this.filterCache.clear()
+    this.filterCache.set(key, { version: this.version, result })
+    return result
+  }
+
+  private filterUncached(q: Partial<ListQuery>): Message[] {
     const parsed = q.search ? parseSearch(q.search) : null
     const out: Message[] = []
     for (const m of this.messages.values()) {
@@ -375,14 +390,28 @@ class MockBackend {
     return [...this.messages.values()].filter((m) => threads.has(`${m.accountId}:${m.threadId}`)).map((m) => m.id)
   }
 
+  private threadCache = new WeakMap<Message[], Message[]>()
+
   async ListMessages(q: ListQuery): Promise<MessagePage> {
     await latency(90, 260)
-    const all = this.latestPerThread(this.filter(q))
+    const filtered = this.filter(q)
+    let all = this.threadCache.get(filtered)
+    if (!all) {
+      all = this.latestPerThread(filtered)
+      this.threadCache.set(filtered, all)
+    }
     let start = 0
     if (q.cursor) {
       const [date, id] = atob(q.cursor).split('|')
-      start = all.findIndex((m) => m.date < date || (m.date === date && m.id < id))
-      if (start < 0) start = all.length
+      let lo = 0
+      let hi = all.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        const m = all[mid]
+        if (m.date < date || (m.date === date && m.id < id)) hi = mid
+        else lo = mid + 1
+      }
+      start = lo
     }
     const limit = q.limit > 0 ? q.limit : 50
     const page = all.slice(start, start + limit)
@@ -412,6 +441,7 @@ class MockBackend {
   }
 
   private mutate(ids: string[], fn: (m: Message) => void) {
+    this.version++
     const accs = new Set<string>()
     for (const id of ids) {
       const m = this.messages.get(id)
@@ -515,6 +545,7 @@ class MockBackend {
 
   async SaveSettings(s: Settings): Promise<void> {
     await latency(30, 90)
+    this.version++
     const keySet = this.settings.openRouterKeySet
     const incoming = clone(s)
     // Provider/system labels can only change color.
@@ -646,9 +677,11 @@ class MockBackend {
   async GetLabelCounts(accountId: string): Promise<LabelCount[]> {
     await latency(30, 80)
     const counts = new Map<string, LabelCount>()
+    const hidden = new Set(this.settings.importProviderLabels ? [] : this.providerLabels.map((l) => l.id))
     for (const m of this.messages.values()) {
       if (accountId && m.accountId !== accountId) continue
-      for (const l of this.visibleLabels({ ...m }).labels) {
+      for (const l of m.labels) {
+        if (hidden.has(l)) continue
         const c = counts.get(l) ?? { labelId: l, total: 0, unread: 0 }
         c.total++
         if (m.unread) c.unread++
