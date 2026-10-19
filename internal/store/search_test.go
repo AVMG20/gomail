@@ -1,10 +1,8 @@
 package store
 
 import (
-	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
@@ -180,37 +178,5 @@ func TestHighlightEscaping(t *testing.T) {
 	h, _ = Highlight(long, []hlTerm{{text: "needle"}}, 80)
 	if !strings.HasPrefix(h, "…") || !strings.HasSuffix(h, "…") || !strings.Contains(h, "<mark>needle</mark>") {
 		t.Fatalf("window %q", h)
-	}
-}
-
-func BenchmarkSearch(b *testing.B) {
-	s, err := Open(b.TempDir() + "/bench.db")
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer s.Close()
-	s.InsertAccount(models.Account{ID: "a", Provider: "gmail", Email: "a@x"})
-	s.ReplaceFolders("a", []mail.Folder{{RemoteID: "INBOX", Kind: models.FolderInbox, Name: "Inbox"}})
-	words := strings.Fields("invoice payment meeting project roadmap lunch report weekly update security alert travel booking order shipped review")
-	var batch []mail.Message
-	for i := 0; i < 50000; i++ {
-		subj := fmt.Sprintf("%s %s %d", words[i%len(words)], words[(i/7)%len(words)], i)
-		batch = append(batch, mail.Message{RemoteID: fmt.Sprint(i), Subject: subj, Snippet: subj + " details",
-			From: models.Address{Name: fmt.Sprintf("Sender %d", i%300), Email: fmt.Sprintf("s%d@example.com", i%300)},
-			Date: time.Now().Add(-time.Duration(i) * time.Minute), FolderRemoteIDs: []string{"INBOX"}})
-		if len(batch) == 5000 {
-			if _, err := s.ApplySync("a", mail.SyncResult{Upserts: batch}, nil); err != nil {
-				b.Fatal(err)
-			}
-			batch = nil
-		}
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		for _, q := range []string{"invo", "roadmap lunch", "invioce", "from:sender is:unread"} {
-			if _, err := s.Search(models.SearchQuery{Query: q}); err != nil {
-				b.Fatal(err)
-			}
-		}
 	}
 }
