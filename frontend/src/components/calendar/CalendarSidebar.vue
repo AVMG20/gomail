@@ -25,6 +25,22 @@ const cal = useCalendarStore()
 const accounts = useAccountsStore()
 const expanded = ref<Set<string>>(new Set(accounts.accounts.map((a) => a.id)))
 
+/** A right-click (or Ctrl-click, macOS's right-click) opens the calendar's menu; WebKit also
+ *  delivers it as a click on the label, which would toggle the checkbox. */
+function ignoreSecondaryClick(e: MouseEvent) {
+  if (e.button !== 0 || e.ctrlKey) e.preventDefault()
+}
+// Belt and braces: a checkbox change right after the menu opened came from that same click.
+let menuOpenedAt = 0
+function onVisibleChange(id: string, e: Event, visible: boolean) {
+  const box = e.target as HTMLInputElement
+  if (Date.now() - menuOpenedAt < 600) {
+    box.checked = visible
+    return
+  }
+  void cal.setCalendarVisible(id, box.checked)
+}
+
 function toggle(id: string) {
   const next = new Set(expanded.value)
   if (next.has(id)) next.delete(id)
@@ -115,13 +131,15 @@ const busyDays = computed(() => {
                   ]"
                   :title="a.calendarEnabled === false ? `${c.name}\nThis mailbox’s calendar is disabled` : `${c.name}\nShow or hide · Alt-click to show only this calendar`"
                   @click.alt.prevent="a.calendarEnabled !== false && cal.soloCalendar(c.id)"
+                  @click="ignoreSecondaryClick"
+                  @contextmenu="menuOpenedAt = Date.now()"
                 >
                   <input
                     type="checkbox"
                     class="peer sr-only"
                     :checked="c.visible"
                     :disabled="a.calendarEnabled === false"
-                    @change="cal.setCalendarVisible(c.id, ($event.target as HTMLInputElement).checked)"
+                    @change="onVisibleChange(c.id, $event, c.visible)"
                   />
                   <span
                     class="mbx-dot peer-focus-visible:ring-ring flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border-2 transition-colors peer-focus-visible:ring-2"
