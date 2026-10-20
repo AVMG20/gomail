@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/models"
 )
 
@@ -19,13 +20,21 @@ import (
 type labelIndex struct {
 	mu     sync.RWMutex
 	byName map[string][]string
+	// imported is a SQL condition on the "ml" alias leaving out the
+	// imported labels (Gmail labels, Outlook categories), whatever put
+	// them on the mail.
+	imported string
 }
 
 // SetLabels tells the store the current label definitions (used to resolve
 // "label:" search operators by name or id).
 func (s *Store) SetLabels(labels []models.Label) {
 	m := map[string][]string{}
+	var imported []string
 	for _, l := range labels {
+		if l.Source == config.LabelSourceProvider {
+			imported = append(imported, "'"+strings.ReplaceAll(l.ID, "'", "''")+"'")
+		}
 		for _, k := range []string{strings.ToLower(l.ID), strings.ToLower(l.Name)} {
 			if !slices.Contains(m[k], l.ID) {
 				m[k] = append(m[k], l.ID)
@@ -34,6 +43,10 @@ func (s *Store) SetLabels(labels []models.Label) {
 	}
 	s.labels.mu.Lock()
 	s.labels.byName = m
+	s.labels.imported = ""
+	if len(imported) > 0 {
+		s.labels.imported = ` AND ml.label_id NOT IN (` + strings.Join(imported, ",") + `)`
+	}
 	s.labels.mu.Unlock()
 }
 

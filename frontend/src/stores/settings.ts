@@ -25,10 +25,12 @@ export const useSettingsStore = defineStore('settings', () => {
   const labelMap = computed(() => new Map(labels.value.map((l) => [l.id, l])))
   /** Muted mailboxes (no new-mail notifications): their unread count shows on no badge and in no All inboxes total. */
   const mutedMailboxes = computed(() => new Set(settings.value?.mutedMailboxes ?? []))
+  /** The labels that can be offered: imported ones (Gmail labels, Outlook categories) only while they are shown. */
+  const offered = computed(() => (settings.value?.importProviderLabels === false ? labels.value.filter((l) => l.source !== 'provider') : labels.value))
   /** Labels of one mailbox ("" = the unified view: one label per name). Use this wherever labels are offered. */
-  const labelsForAccount = (accountId: string) => forAccount(labels.value, accountId)
+  const labelsForAccount = (accountId: string) => forAccount(offered.value, accountId)
   /** Labels of a selection: its mailbox's, or one per name for mail of several mailboxes. */
-  const labelsForAccounts = (accountIds: Iterable<string>) => forAccounts(labels.value, accountIds)
+  const labelsForAccounts = (accountIds: Iterable<string>) => forAccounts(offered.value, accountIds)
   /** A mailbox's label with the same name as label id (the label itself when it is the mailbox's). */
   const labelInAccountOf = (id: string, accountId: string) => {
     const l = labelMap.value.get(id)

@@ -373,3 +373,38 @@ func TestApplySyncChanged(t *testing.T) {
 		t.Fatal("deleted again: want unchanged")
 	}
 }
+
+// Hiding imported labels hides them however they got on the mail: a
+// category the user (or a rule) set in gomail is "manual", not "provider".
+func TestHideImportedLabelsWhateverTheSource(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{msg(1, "Hi", "Bob", "INBOX", "ALL")}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	id := MessageID("a1", "r001")
+	s.SetLabels([]models.Label{
+		{ID: "work", Name: "Work", Source: "user"},
+		{ID: "categorie-rood", Name: "Categorie Rood", Source: "provider", AccountIDs: []string{"a1"}},
+	})
+	for _, l := range []string{"work", "categorie-rood"} {
+		if err := s.AddLabels([]string{id}, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.SetHideProviderLabels(true)
+	defer s.SetHideProviderLabels(false)
+	if m, _, _ := s.Message(id); fmt.Sprint(m.Labels) != "[work]" {
+		t.Fatalf("labels %v", m.Labels)
+	}
+	if c, _ := s.LabelCounts("a1"); fmt.Sprint(c) != "[{work 1 0}]" {
+		t.Fatalf("counts %v", c)
+	}
+	if p, _ := s.ListMessages(models.ListQuery{Labels: []string{"categorie-rood"}}, ListOptions{}); p.Total != 0 {
+		t.Fatalf("filter on a hidden label %d", p.Total)
+	}
+	s.SetHideProviderLabels(false)
+	if c, _ := s.LabelCounts("a1"); len(c) != 2 {
+		t.Fatalf("shown again %v", c)
+	}
+}

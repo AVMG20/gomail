@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
+import { labelsForAccount } from '@/lib/labelScope'
 import type { LabelRule } from '@/lib/types'
 import { useSettingsStore } from '@/stores/settings'
 import SettingSection from './SettingSection.vue'
@@ -22,7 +23,8 @@ const allRules = computed(() => settings.settings?.labelRules ?? [])
 const rules = computed(() => allRules.value.filter((r) => r.accountId === props.accountId))
 // Labels a rule can add: the mailbox's own labels (the built-in Junk label is the "Move to Junk"
 // action instead).
-const labelOptions = computed(() => settings.labelsForAccount(props.accountId).filter((l) => l.id !== 'junk'))
+// Every label of the mailbox, imported ones included while hidden: their rules still run.
+const labelOptions = computed(() => labelsForAccount(settings.labels, props.accountId).filter((l) => l.id !== 'junk'))
 /** The rule's label exists and belongs to the mailbox. */
 function labelValid(r: LabelRule): boolean {
   return labelOptions.value.some((l) => l.id === r.labelId)

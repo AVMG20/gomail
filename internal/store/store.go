@@ -69,15 +69,19 @@ func (s *Store) cachedCount(q string, args []any) (int, error) {
 	return n, nil
 }
 
-// SetHideProviderLabels hides (true) or shows provider-sourced label
-// assignments in every read path. The data is kept and kept in sync either
-// way, so toggling is instant.
+// SetHideProviderLabels hides (true) or shows the imported labels (Gmail
+// labels, Outlook categories) in every read path: their assignments,
+// including ones a rule, Jev or the user added, and any provider-sourced
+// assignment. The data is kept and kept in sync either way, so toggling is
+// instant.
 func (s *Store) SetHideProviderLabels(hide bool) { s.hideProvider.Store(hide) }
 
 // labelCond returns an extra condition on the "ml" alias for visible labels.
 func (s *Store) labelCond() string {
 	if s.hideProvider.Load() {
-		return ` AND ml.source != 'provider'`
+		s.labels.mu.RLock()
+		defer s.labels.mu.RUnlock()
+		return ` AND ml.source != 'provider'` + s.labels.imported
 	}
 	return ""
 }
