@@ -43,7 +43,12 @@ func (s *Service) Folders(accountID string) ([]models.Folder, error) {
 // Settings.conversationView is on).
 func (s *Service) ListMessages(q models.ListQuery) (models.MessagePage, error) {
 	defer s.markFirstQuery()
-	page, err := s.store.ListMessages(q, store.ListOptions{Conversations: s.Settings().ConversationView})
+	st := s.Settings()
+	opt := store.ListOptions{Conversations: st.ConversationView}
+	if st.SyncDepthDays > 0 {
+		opt.OlderCutoff = time.Now().AddDate(0, 0, -st.SyncDepthDays)
+	}
+	page, err := s.store.ListMessages(q, opt)
 	if err == nil && strings.TrimSpace(q.Search) != "" && len(page.Messages) < remoteSearchBelow {
 		s.remoteSearch(q.Search, q.AccountID)
 	}

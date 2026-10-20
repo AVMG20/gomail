@@ -137,6 +137,31 @@ func TestHasMoreRemote(t *testing.T) {
 	}
 }
 
+// Clearing the inbox must not pull in mail past the sync depth: once the
+// cached mail reaches below the cutoff, older mail is offered, not fetched.
+func TestHasMoreRemoteRespectsSyncDepth(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1") // inbox server total 10
+	s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{msg(1, "x", "A", "INBOX", "ALL")}}, nil)
+	inbox, _ := s.FolderByKind("a1", models.FolderInbox)
+	oldest, _ := s.OldestInFolder(inbox.ID)
+	q := models.ListQuery{FolderID: inbox.ID}
+
+	p, _ := s.ListMessages(q, ListOptions{OlderCutoff: oldest.Add(-time.Hour)})
+	if !p.HasMoreRemote || p.OlderBeyondDepth {
+		t.Fatalf("within the sync depth: %+v", p)
+	}
+	p, _ = s.ListMessages(q, ListOptions{OlderCutoff: oldest.Add(time.Hour)})
+	if p.HasMoreRemote || !p.OlderBeyondDepth {
+		t.Fatalf("past the sync depth: %+v", p)
+	}
+	s.SetOlderDone("a1", inbox.ID, true)
+	p, _ = s.ListMessages(q, ListOptions{OlderCutoff: oldest.Add(time.Hour)})
+	if p.HasMoreRemote || p.OlderBeyondDepth {
+		t.Fatalf("nothing older on the server: %+v", p)
+	}
+}
+
 // TestConversationCountersStayConsistent checks the trigger-maintained
 // folder_threads counters against a full recount after many operations.
 func TestConversationCountersStayConsistent(t *testing.T) {

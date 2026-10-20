@@ -282,6 +282,8 @@ export interface MessagePage {
   total: number
   /** More (older) mail exists on the server beyond the local cache: call LoadOlder. */
   hasMoreRemote?: boolean
+  /** The server only has mail older than the sync depth: fetched on request, never on scroll. */
+  olderBeyondDepth?: boolean
 }
 
 export interface OutgoingAttachment {

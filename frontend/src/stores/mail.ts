@@ -86,6 +86,7 @@ export const useMailStore = defineStore('mail', () => {
   const messages = shallowRef<MessageSummary[]>([])
   const nextCursor = ref('')
   const hasMoreRemote = ref(false)
+  const olderBeyondDepth = ref(false)
   const loadingOlder = ref(false)
   const total = ref(0)
   const status = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -224,6 +225,7 @@ export const useMailStore = defineStore('mail', () => {
       messages.value = page.messages
       nextCursor.value = page.nextCursor
       hasMoreRemote.value = !!page.hasMoreRemote
+      olderBeyondDepth.value = !!page.olderBeyondDepth
       total.value = page.total
       status.value = 'ready'
       learnAddresses(page.messages)
@@ -255,6 +257,7 @@ export const useMailStore = defineStore('mail', () => {
         page.messages.push(...more.messages)
         page.nextCursor = more.nextCursor
         page.hasMoreRemote = more.hasMoreRemote
+        page.olderBeyondDepth = more.olderBeyondDepth
       }
       if (m0 !== mutations) {
         // An optimistic update happened while this was in flight: its data predates it.
@@ -269,6 +272,7 @@ export const useMailStore = defineStore('mail', () => {
       })
       nextCursor.value = page.nextCursor
       hasMoreRemote.value = !!page.hasMoreRemote
+      olderBeyondDepth.value = !!page.olderBeyondDepth
       total.value = page.total
       status.value = 'ready'
       learnAddresses(page.messages)
@@ -296,6 +300,7 @@ export const useMailStore = defineStore('mail', () => {
       messages.value = [...messages.value, ...page.messages.filter((m) => !seen.has(m.id))]
       nextCursor.value = page.nextCursor
       hasMoreRemote.value = !!page.hasMoreRemote
+      olderBeyondDepth.value = !!page.olderBeyondDepth
       total.value = page.total
       learnAddresses(page.messages)
     } catch (e) {
@@ -305,20 +310,21 @@ export const useMailStore = defineStore('mail', () => {
     }
   }
 
-  /** Past the local cache: ask the backend to fetch older mail from the server. */
-  async function loadOlder() {
-    if (loadingOlder.value || !hasMoreRemote.value || !hasMethod('LoadOlder')) return
+  /** Past the local cache: ask the backend to fetch older mail from the server. Mail older than
+   *  the sync depth (Settings → sync) only comes on an explicit request (`beyondDepth`). */
+  async function loadOlder(beyondDepth = false) {
+    if (loadingOlder.value || !(hasMoreRemote.value || (beyondDepth && olderBeyondDepth.value)) || !hasMethod('LoadOlder')) return
     loadingOlder.value = true
     const key = JSON.stringify(query.value)
     try {
       const added = await api.loadOlder({ ...query.value, cursor: '' })
       if (key !== JSON.stringify(query.value)) return // the view changed meanwhile
-      if (!added) hasMoreRemote.value = false
+      if (!added) hasMoreRemote.value = olderBeyondDepth.value = false
       await softRefresh()
       if (nextCursor.value) await loadMore()
     } catch (e) {
       if (key !== JSON.stringify(query.value)) return
-      hasMoreRemote.value = false
+      hasMoreRemote.value = olderBeyondDepth.value = false
       toast.error('Couldn’t load older mail', { description: errorMessage(e) })
     } finally {
       loadingOlder.value = false
@@ -868,7 +874,7 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   return {
-    mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
+    mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, olderBeyondDepth, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,

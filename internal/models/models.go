@@ -208,6 +208,10 @@ type MessagePage struct {
 	// HasMoreRemote is true on the last local page when the server has
 	// older mail for this view: call LoadOlder(query) to fetch the next page.
 	HasMoreRemote bool `json:"hasMoreRemote"`
+	// OlderBeyondDepth is true on the last local page when the server only
+	// has mail older than Settings.syncDepthDays: LoadOlder fetches it, but
+	// only when asked (never automatically on scrolling).
+	OlderBeyondDepth bool `json:"olderBeyondDepth"`
 }
 
 type OutgoingAttachment struct {

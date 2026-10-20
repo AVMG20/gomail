@@ -88,7 +88,7 @@ function groupOf(m: { date: string }): string {
 }
 
 // ---- rows: messages interleaved with light date-group headers
-type Row = { kind: 'header'; key: string; label: string } | { kind: 'msg'; key: string; index: number; group: string } | { kind: 'loader'; key: string } | { kind: 'older'; key: string }
+type Row = { kind: 'header'; key: string; label: string } | { kind: 'msg'; key: string; index: number; group: string } | { kind: 'loader'; key: string } | { kind: 'older'; key: string } | { kind: 'beyond'; key: string }
 const HEADER_H = computed(() => (compact.value ? 26 : 30))
 const rows = computed<Row[]>(() => {
   const out: Row[] = []
@@ -104,6 +104,8 @@ const rows = computed<Row[]>(() => {
   }
   if (mail.hasMore) out.push({ kind: 'loader', key: 'loader' })
   else if (mail.hasMoreRemote && list.length && hasMethod('LoadOlder')) out.push({ kind: 'older', key: 'older' })
+  // Past the sync depth: older mail only on request, so clearing the inbox doesn't pull in years of it.
+  else if (mail.olderBeyondDepth && list.length && hasMethod('LoadOlder')) out.push({ kind: 'beyond', key: 'beyond' })
   return out
 })
 const rowIndexById = computed(() => {
@@ -464,6 +466,13 @@ const emptyState = computed(() => {
               <div v-else-if="rows[it.index]?.kind === 'older'" class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
                 <template v-if="mail.loadingOlder"><RefreshCwIcon class="size-3.5 animate-spin" /> Fetching older mail from the server…</template>
                 <button v-else type="button" class="hover:text-foreground rounded px-2 py-1 font-medium" @click="mail.loadOlder()">Load older messages</button>
+              </div>
+              <div v-else-if="rows[it.index]?.kind === 'beyond'" class="text-muted-foreground flex h-full items-center justify-center gap-1 text-xs">
+                <template v-if="mail.loadingOlder"><RefreshCwIcon class="size-3.5 animate-spin" /> Fetching older mail from the server…</template>
+                <template v-else>
+                  <span>Synced: last {{ settings.settings?.syncDepthDays ?? 90 }} days.</span>
+                  <button type="button" class="hover:text-foreground rounded px-1.5 py-1 font-medium" @click="mail.loadOlder(true)">Load older anyway</button>
+                </template>
               </div>
               <div v-else class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
                 <RefreshCwIcon class="size-3.5 animate-spin" /> Loading more…

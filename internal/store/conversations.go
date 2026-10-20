@@ -18,6 +18,9 @@ type ListOptions struct {
 	// Conversations returns one row per thread (its latest message
 	// matching the query) with thread-level aggregates.
 	Conversations bool
+	// OlderCutoff is the sync depth (Settings.syncDepthDays): older mail is
+	// only fetched on request, so it doesn't set HasMoreRemote. Zero = all.
+	OlderCutoff time.Time
 }
 
 // ConversationPrefix marks conversation ids ("c:<anchor message id>").
@@ -117,7 +120,7 @@ func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.Messag
 		}
 	}
 	if page.NextCursor == "" {
-		page.HasMoreRemote = s.hasMoreRemote(q)
+		page.HasMoreRemote, page.OlderBeyondDepth = s.hasMoreRemote(q, opt.OlderCutoff)
 	}
 	return page, nil
 }
@@ -436,10 +439,12 @@ func (s *Store) SetOlderDone(accountID, folderID string, done bool) error {
 	})
 }
 
-func (s *Store) hasMoreRemote(q models.ListQuery) bool {
+// hasMoreRemote reports whether the server has older mail for the view
+// within the sync depth (more), and whether it has some only past it (beyond).
+func (s *Store) hasMoreRemote(q models.ListQuery, cutoff time.Time) (more, beyond bool) {
 	folders, err := s.QueryFolders(q)
 	if err != nil {
-		return false
+		return false, false
 	}
 	for _, f := range folders {
 		state, _ := s.SyncState(f.AccountID)
@@ -447,11 +452,18 @@ func (s *Store) hasMoreRemote(q models.ListQuery) bool {
 			continue
 		}
 		local, err := s.LocalFolderCount(f.ID)
-		if err == nil && f.Total > local {
-			return true
+		if err != nil || f.Total <= local {
+			continue
 		}
+		if !cutoff.IsZero() {
+			if oldest, err := s.OlderCursor(f.AccountID, f.ID); err == nil && !oldest.IsZero() && oldest.Before(cutoff) {
+				beyond = true
+				continue
+			}
+		}
+		return true, false
 	}
-	return false
+	return false, beyond
 }
 
 // fastConversationCount answers the conversation total of plain folder

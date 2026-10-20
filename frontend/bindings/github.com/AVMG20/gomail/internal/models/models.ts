@@ -848,6 +848,13 @@ export interface MessagePage {
      * older mail for this view: call LoadOlder(query) to fetch the next page.
      */
     "hasMoreRemote": boolean;
+
+    /**
+     * OlderBeyondDepth is true on the last local page when the server only
+     * has mail older than Settings.syncDepthDays: LoadOlder fetches it, but
+     * only when asked (never automatically on scrolling).
+     */
+    "olderBeyondDepth": boolean;
 }
 
 export interface MessageSummary {
