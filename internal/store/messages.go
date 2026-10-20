@@ -665,6 +665,31 @@ func refreshJunk(tx *sql.Tx, ids []string, now int64) error {
 	return nil
 }
 
+// ProviderLabels returns the labels Gmail or Outlook set on each message
+// (labels and categories that came with the mail).
+func (s *Store) ProviderLabels(ids []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	for _, chunk := range chunks(ids, 500) {
+		rows, err := s.db.Query(`SELECT message_id, label_id FROM message_labels WHERE source = 'provider' AND message_id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id, l string
+			if err := rows.Scan(&id, &l); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = append(out[id], l)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // AllLabelIDs returns every label on a message, hidden imported labels
 // included (SetHideProviderLabels).
 func (s *Store) AllLabelIDs(id string) ([]string, error) {

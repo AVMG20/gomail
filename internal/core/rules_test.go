@@ -445,3 +445,39 @@ func TestApplyArchiveActionOnGmail(t *testing.T) {
 		t.Fatalf("still in the inbox: %v", m.FolderIDs)
 	}
 }
+
+// New mail that comes with an imported label set to "→ Junk" (an Outlook
+// category an Outlook rule set) goes to Junk, read.
+func TestNewMailWithAJunkCategoryGoesToJunk(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	acct := demo.OutlookAccountID
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	family := mailboxLabel(t, s, acct, "Family")
+	st := s.Settings()
+	for i := range st.Labels {
+		if st.Labels[i].ID == family {
+			st.Labels[i].Then = "junk"
+		}
+	}
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	remote := e.demos[acct].Deliver("Chain letter", "aunt@example.com")
+	if err := e.demos[acct].SetLabel(context.Background(), []string{remote}, "Family", true); err != nil {
+		t.Fatal(err)
+	}
+	e.demos[acct].Deliver("Plain mail", "bob@example.com")
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	spam, _ := s.store.FolderByKind(acct, models.FolderSpam)
+	if m, ok := labelsOf(t, e, acct, "Chain letter"); !ok || !has(m.FolderIDs, spam.ID) || m.Unread {
+		t.Fatalf("category mail: in Junk %v, unread %v (%v)", has(m.FolderIDs, spam.ID), m.Unread, m.FolderIDs)
+	}
+	if m, _ := labelsOf(t, e, acct, "Plain mail"); has(m.FolderIDs, spam.ID) {
+		t.Fatal("mail without the category went to Junk")
+	}
+}

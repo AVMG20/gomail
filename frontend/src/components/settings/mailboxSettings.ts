@@ -1,16 +1,24 @@
 // Per-mailbox settings that live in the global Settings object, keyed by account id:
 // new-mail notifications (mutedMailboxes: a muted mailbox also shows no unread count), quiet
 // labels (quietLabels), Jev auto-labeling (autoLabelAccounts), AI corrections of imported labels (aiCorrectsOff)
-// and whether the Junk label moves mail to Junk (junkStaysPut).
+// and which labels send mail to Junk (junkStaysPut for the Junk label, Label.then for the others).
 // Shared by the overview lists and each mailbox's own settings page.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { toast } from 'vue-sonner'
+import { api, errorMessage, hasMethod } from '@/lib/api'
 import { labelsForAccount } from '@/lib/labelScope'
+import type { Label } from '@/lib/types'
+import { useAccountsStore } from '@/stores/accounts'
 import { useSettingsStore } from '@/stores/settings'
 
 const JUNK = 'junk'
+const THEN_PLACE: Record<string, string> = { archive: 'the archive', junk: 'Junk', trash: 'Trash' }
+/** Labels whose "When added" is being applied to existing mail right now. */
+const applying = ref(new Set<string>())
 
 export function useMailboxSettings() {
   const settings = useSettingsStore()
+  const accounts = useAccountsStore()
   const quiet = computed(() => settings.settings?.quietLabels ?? {})
   const muted = computed(() => new Set(settings.settings?.mutedMailboxes ?? []))
   const autoOn = computed(() => new Set(settings.settings?.autoLabelAccounts ?? []))
@@ -74,14 +82,55 @@ export function useMailboxSettings() {
     void settings.update({ aiCorrectsOff: [...next] }, 0)
   }
 
-  // ---- the Junk label moves mail to Junk (default), or only labels it (junkStaysPut).
-  const junkMoves = (accountId: string) => !junkStays.value.has(accountId)
-  function setJunkMoves(accountId: string, on: boolean) {
-    const next = new Set(junkStays.value)
-    if (on) next.delete(accountId)
-    else next.add(accountId)
-    void settings.update({ junkStaysPut: [...next] }, 0)
+  // ---- what a label does to mail Jev or a rule gives it (Label.then), and offering to do it
+  // for the mail that already has it.
+  function setThen(l: Label, then: string) {
+    void settings.update({ labels: settings.labels.map((x) => (x.id === l.id ? { ...x, then } : x)) }, 500)
+    if (!then || !hasMethod('ApplyLabelAction') || accounts.labelTotals.get(l.id)?.total === 0) return
+    toast(`“${l.name}” now goes to ${THEN_PLACE[then]}`, {
+      description: 'Mail that already has it stays where it is.',
+      action: { label: 'Move it too', onClick: () => void applyThen(l) },
+    })
+  }
+  async function applyThen(l: Label) {
+    if (applying.value.has(l.id)) return
+    applying.value = new Set([...applying.value, l.id])
+    try {
+      await settings.flush()
+      const n = await api.applyLabelAction(l.id)
+      toast(n ? `${n.toLocaleString()} message${n === 1 ? '' : 's'} moved` : `Nothing to move: mail with “${l.name}” is already there`)
+      accounts.refreshCounts()
+    } catch (e) {
+      toast.error('Couldn’t move the mail', { description: errorMessage(e) })
+    } finally {
+      const next = new Set(applying.value)
+      next.delete(l.id)
+      applying.value = next
+    }
+  }
+  const isApplying = (labelId: string) => applying.value.has(labelId)
+  const placeOf = (then: string) => THEN_PLACE[then] ?? then
+
+  // ---- labels that send mail to Junk: the built-in Junk label (unless junkStaysPut) and the
+  // mailbox's labels set to "→ Junk" (imported ones only while shown: hidden, they don't act).
+  const junkOptions = (accountId: string) => [junkLabel.value as Label, ...settings.labelsForAccount(accountId).filter((l) => l.id !== JUNK)]
+  function junkList(accountId: string): string[] {
+    return junkOptions(accountId)
+      .filter((l) => (l.id === JUNK ? !junkStays.value.has(accountId) : l.then === 'junk'))
+      .map((l) => l.id)
+  }
+  function setGoesToJunk(accountId: string, l: Label, on: boolean) {
+    if (l.id === JUNK) {
+      const next = new Set(junkStays.value)
+      if (on) next.delete(accountId)
+      else next.add(accountId)
+      void settings.update({ junkStaysPut: [...next] }, 0)
+    } else if (on) setThen(l, 'junk')
+    else if (l.then === 'junk') setThen(l, '')
   }
 
-  return { notifies, setNotify, isMuted, setMuted, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel, autoLabels, setAutoLabel, corrects, setCorrects, junkMoves, setJunkMoves }
+  return {
+    notifies, setNotify, isMuted, setMuted, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel,
+    autoLabels, setAutoLabel, corrects, setCorrects, setThen, applyThen, isApplying, placeOf, junkOptions, junkList, setGoesToJunk,
+  }
 }

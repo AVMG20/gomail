@@ -27,6 +27,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUiStore, type MailboxTab } from '@/stores/ui'
 import { useMailboxSettings } from './mailboxSettings'
 import MailboxLabels from './MailboxLabels.vue'
+import JunkLabelChips from './JunkLabelChips.vue'
 import QuietLabelChips from './QuietLabelChips.vue'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
@@ -263,8 +264,8 @@ function labelAll() {
           <SettingRow title="Let AI correct Gmail/Outlook labels" :description="s.aiCorrectsProviderLabels ? 'Removes imported labels it’s sure don’t apply.' : 'Off for all mailboxes in AI settings.'">
             <Switch :model-value="s.aiCorrectsProviderLabels && mb.corrects(a.id)" :disabled="!s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => mb.setCorrects(a!.id, v)" />
           </SettingRow>
-          <SettingRow title="Junk goes to the Junk folder" description="Mail Jev or a rule labels Junk is marked read and moved to Junk. Move it back to teach Jev otherwise.">
-            <Switch :model-value="mb.junkMoves(a.id)" aria-label="Move Junk-labeled mail to the Junk folder" @update:model-value="(v: boolean) => mb.setJunkMoves(a!.id, v)" />
+          <SettingRow title="Labels that go to Junk" description="Mail Jev or a rule gives one of these labels is marked read and moved to Junk. Move it back to teach Jev otherwise." stacked>
+            <JunkLabelChips :account="a" />
           </SettingRow>
           <SettingRow title="Label existing mail" description="Run Jev once on mail already downloaded here.">
             <div class="flex items-center gap-2">
