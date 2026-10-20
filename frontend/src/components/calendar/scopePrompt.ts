@@ -2,7 +2,7 @@
 import { shallowRef } from 'vue'
 import type { RecurrenceScope } from '@/lib/types'
 
-export type ScopeAction = 'edit' | 'move' | 'delete'
+export type ScopeAction = 'edit' | 'move' | 'resize' | 'delete'
 interface Pending { action: ScopeAction; title: string; resolve: (s: RecurrenceScope | null) => void }
 
 export const scopeRequest = shallowRef<Pending | null>(null)

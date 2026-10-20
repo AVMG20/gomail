@@ -2,7 +2,7 @@
 // around today (all-day, multi-day, a recurring standup, a declined meeting) and
 // full CRUD including recurrence scopes ("this" occurrence vs the whole series).
 import {
-  addDays, buildRRule, eventDate, expandOccurrences, fromYmd, overlaps, parseRRule, startOfDay, startOfWeek, toRfc3339, toYmd, type RepeatFreq,
+  addDays, buildRRule, eventDate, expandOccurrences, fromYmd, overlaps, parseRRule, shiftTimes, startOfDay, startOfWeek, toRfc3339, toYmd, type RepeatFreq,
 } from '../calendar'
 import type { Account, AttendeeResponse, Calendar, CalendarEvent, EventInput, EventInvite, Message, RecurrenceScope } from '../types'
 
@@ -233,7 +233,17 @@ export class MockCalendar {
     if (master || scope === 'series') {
       const target = master ?? this.masters.get(masterId)
       if (!target) throw new Error('event not found')
-      Object.assign(target, clone(input), { accountId: cal.accountId, isRecurring: !!input.recurrence })
+      let next = clone(input)
+      if (!master) {
+        // Like the backend: an occurrence's change moves the series from its own first date.
+        const occ = this.get(id)
+        const ds = eventDate(input.start, input.allDay).getTime() - eventDate(occ.start, occ.allDay).getTime()
+        const de = eventDate(input.end, input.allDay).getTime() - eventDate(occ.end, occ.allDay).getTime()
+        next = { ...next, ...shiftTimes(target, ds, de, input.allDay) }
+      }
+      // Like the backend: no rule sent keeps the series' own rule.
+      if (!next.recurrence && target.recurrence) next.recurrence = target.recurrence
+      Object.assign(target, next, { accountId: cal.accountId, isRecurring: !!next.recurrence })
       // Editing the series drops one-off changes, like most calendar apps.
       for (const k of [...this.overrides.keys()]) if (k.startsWith(`${target.id}_`)) this.overrides.delete(k)
       this.onChange(cal.accountId)

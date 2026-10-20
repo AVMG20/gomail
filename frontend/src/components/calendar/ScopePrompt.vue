@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { answerConfirm, answerScope, confirmRequest, scopeRequest } from './scopePrompt'
 
-const verb = computed(() => ({ edit: 'Save changes to', move: 'Move', delete: 'Delete' })[scopeRequest.value?.action ?? 'edit'])
+const verb = computed(() => ({ edit: 'Save changes to', move: 'Move', resize: 'Change the time of', delete: 'Delete' })[scopeRequest.value?.action ?? 'edit'])
 </script>
 
 <template>
@@ -15,7 +15,7 @@ const verb = computed(() => ({ edit: 'Save changes to', move: 'Move', delete: 'D
         <span class="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-full"><RepeatIcon class="size-4" /></span>
         <div class="min-w-0">
           <DialogTitle class="text-base">{{ verb }} a recurring event</DialogTitle>
-          <DialogDescription class="mt-1"><span class="block truncate">“{{ scopeRequest?.title || 'Untitled' }}” repeats.</span><template v-if="scopeRequest?.action === 'delete'"> Deleting can’t be undone.</template></DialogDescription>
+          <DialogDescription class="mt-1"><span class="block truncate">“{{ scopeRequest?.title || 'Untitled event' }}” repeats.</span><template v-if="scopeRequest?.action === 'delete'"> Deleting can’t be undone.</template></DialogDescription>
         </div>
       </div>
       <div class="grid gap-2">

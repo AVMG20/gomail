@@ -18,6 +18,7 @@ import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useCalendarStore } from '@/stores/calendar'
 import MiniMonth from './MiniMonth.vue'
+import { eventDays } from '@/lib/calendar'
 
 defineProps<{ selected: Date; rangeStart?: Date; rangeEnd?: Date }>()
 const emit = defineEmits<{ pick: [Date]; create: [] }>()
@@ -48,11 +49,8 @@ function toggle(id: string) {
   expanded.value = next
 }
 
-const busyDays = computed(() => {
-  const s = new Set<string>()
-  for (const e of cal.visibleEvents) s.add(e.start.slice(0, 10))
-  return s
-})
+// Local days (an event's UTC/offset date can be another day here), every day of multi-day events.
+const busyDays = computed(() => eventDays(cal.visibleEvents))
 </script>
 
 <template>

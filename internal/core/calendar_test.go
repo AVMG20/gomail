@@ -381,9 +381,20 @@ func TestEventReminders(t *testing.T) {
 	if after != before {
 		t.Fatal("reminders while turned off")
 	}
-	if title, body := ReminderText(models.CalendarEvent{Title: "X", Start: time.Now().Add(10 * time.Minute), Location: "Room"}, time.Now()); title != "X" ||
+	if title, body := ReminderText(models.CalendarEvent{Title: "X", Start: time.Now().Add(10 * time.Minute), Location: "Room"}, time.Now(), "auto"); title != "X" ||
 		!strings.HasPrefix(body, "In 10 minutes · ") || !strings.HasSuffix(body, " · Room") {
 		t.Fatalf("%q %q", title, body)
+	}
+	// The Time format setting applies to notifications too.
+	at := time.Date(2026, 10, 20, 13, 5, 0, 0, time.Local)
+	if _, body := ReminderText(models.CalendarEvent{Title: "X", Start: at}, at.Add(-10*time.Minute), "24h"); !strings.HasSuffix(body, " · 13:05") {
+		t.Fatalf("24h: %q", body)
+	}
+	if _, body := ReminderText(models.CalendarEvent{Title: "X", Start: at}, at.Add(-10*time.Minute), "12h"); !strings.HasSuffix(body, " · 1:05 PM") {
+		t.Fatalf("12h: %q", body)
+	}
+	if _, body := ReminderText(models.CalendarEvent{Title: "X", Start: at}, at.Add(-3*time.Hour), "12h"); !strings.HasSuffix(body, " 1:05 PM") || strings.Contains(body, "13:05") {
+		t.Fatalf("12h later: %q", body)
 	}
 }
 

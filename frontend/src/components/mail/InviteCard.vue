@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Compact meeting-invitation card at the top of the reading pane (Message.invite).
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { CalendarDaysIcon, MapPinIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -13,14 +13,32 @@ import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ invite: EventInvite }>()
 const ui = useUiStore()
-// The calendar store applies Settings → Calendar → Time format to every displayed time.
+// Loading the calendar store (and settings) makes every displayed time follow Settings → Time format.
 useCalendarStore()
 const response = ref<AttendeeResponse>(props.invite.myResponse ?? '')
 const busy = ref(false)
+/** You organize the synced event (e.g. this mail is a guest's reply): nothing to answer. */
+const organizer = ref(false)
 const cancelled = computed(() => props.invite.method?.toUpperCase() === 'CANCEL')
-const canRespond = computed(() => !!props.invite.eventId && hasMethod('RespondToEvent') && !cancelled.value)
+/** REPLY / COUNTER etc. are answers to your own invitation, not invitations to you. */
+const answerable = computed(() => !cancelled.value && !organizer.value && !/^(REPLY|COUNTER|DECLINECOUNTER|REFRESH)$/i.test(props.invite.method ?? ''))
+const canRespond = computed(() => !!props.invite.eventId && hasMethod('RespondToEvent') && answerable.value)
 /** Not on a synced calendar yet: show the RSVP buttons disabled with an explanation. */
-const pending = computed(() => !props.invite.eventId && hasMethod('RespondToEvent') && !cancelled.value)
+const pending = computed(() => !props.invite.eventId && hasMethod('RespondToEvent') && answerable.value)
+
+// The backend doesn't put your answer on the invite: read it from the synced event, so the
+// card shows "Accept" pressed after you accepted (here, in the calendar or on another device).
+onMounted(async () => {
+  const id = props.invite.eventId
+  if (!id || props.invite.myResponse || !hasMethod('GetEvent')) return
+  try {
+    const ev = await api.getEvent(id)
+    organizer.value = ev.isOrganizer
+    if (!busy.value && (ev.myResponse === 'accepted' || ev.myResponse === 'tentative' || ev.myResponse === 'declined')) response.value = ev.myResponse
+  } catch {
+    // Not synced (any more): the buttons still work or explain themselves.
+  }
+})
 const OPTIONS: { value: AttendeeResponse; label: string }[] = [
   { value: 'accepted', label: 'Accept' }, { value: 'tentative', label: 'Maybe' }, { value: 'declined', label: 'Decline' },
 ]

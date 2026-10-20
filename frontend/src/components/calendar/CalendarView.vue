@@ -8,7 +8,7 @@ import timeGridPlugin from '@fullcalendar/timegrid'
 import listPlugin from '@fullcalendar/list'
 import interactionPlugin from '@fullcalendar/interaction'
 import allLocales from '@fullcalendar/core/locales-all'
-import type { CalendarApi, CalendarOptions, DateSelectArg, DatesSetArg, EventClickArg, EventContentArg, EventDropArg, EventMountArg, DayHeaderContentArg, Duration } from '@fullcalendar/core'
+import type { CalendarApi, CalendarOptions, DateSelectArg, DatesSetArg, EventClickArg, EventContentArg, EventDropArg, EventMountArg, DayHeaderContentArg } from '@fullcalendar/core'
 import type { EventResizeDoneArg } from '@fullcalendar/interaction'
 import { ChevronLeftIcon, ChevronRightIcon, CalendarOffIcon, LoaderIcon, PanelLeftIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
@@ -17,7 +17,7 @@ import Tip from '@/components/common/Tip.vue'
 import type { AnchorRect } from '@/components/common/FloatingCard.vue'
 import { api, errorMessage } from '@/lib/api'
 import {
-  addDays, addMinutes, eventToInput, localeUses12h, needsScopeChoice, relativeDay, seriesMoveInput, startOfDay, toRfc3339, toYmd, type CalendarViewKind,
+  addDays, addMinutes, needsScopeChoice, relativeDay, startOfDay, uses12h, toRfc3339, toYmd, type CalendarViewKind,
 } from '@/lib/calendar'
 import { escapeHtml } from '@/lib/format'
 import { isEditableTarget } from '@/lib/platform'
@@ -130,40 +130,25 @@ function onEventClick(arg: EventClickArg) {
 
 // ------------------------------------------------------------ drag / resize
 
-function deltaMs(d: Duration): number {
-  return (d.days ?? 0) * 86_400_000 + (d.milliseconds ?? 0) + (d.months ?? 0) * 30 * 86_400_000
-}
-
 async function onMoved(arg: EventDropArg | EventResizeDoneArg, kind: 'drop' | 'resize') {
   const ev = arg.event.extendedProps.ev as CalendarEvent
-  const startDelta = kind === 'drop' ? deltaMs((arg as EventDropArg).delta) : deltaMs((arg as EventResizeDoneArg).startDelta)
-  const endDelta = kind === 'drop' ? deltaMs((arg as EventDropArg).delta) : deltaMs((arg as EventResizeDoneArg).endDelta)
   const allDay = arg.event.allDay
   let scope: RecurrenceScope = 'this'
   if (needsScopeChoice(ev)) {
-    const s = await askScope('move', ev.title)
+    const s = await askScope(kind === 'resize' ? 'resize' : 'move', ev.title)
     if (!s) return arg.revert()
     scope = s
+  }
+  if (scope === 'series' && allDay !== ev.allDay) {
+    arg.revert()
+    toast('Can’t switch a whole series between all-day and timed by dragging', { description: 'Open the event and edit the series instead.' })
+    return
   }
   const start = arg.event.start!
   const end = arg.event.end ?? (allDay ? addDays(start, 1) : addMinutes(start, settings.settings?.calendarDefaultDuration || 30))
   const times = { start: allDay ? toYmd(start) : toRfc3339(start), end: allDay ? toYmd(end) : toRfc3339(end), allDay }
-  if (scope === 'series') {
-    if (allDay !== ev.allDay) {
-      arg.revert()
-      toast('Can’t switch a whole series between all-day and timed by dragging', { description: 'Open the event and edit the series instead.' })
-      return
-    }
-    try {
-      const master = await api.getEvent(ev.seriesId || ev.id)
-      if (!(await cal.move(ev, times, 'series', { next: seriesMoveInput(master, startDelta, endDelta), before: eventToInput(master) }, kind))) arg.revert()
-    } catch (e) {
-      arg.revert()
-      toast.error('Couldn’t move the series', { description: errorMessage(e) })
-    }
-    return
-  }
-  if (!(await cal.move(ev, times, 'this', undefined, kind))) arg.revert()
+  // "series": the backend moves every occurrence by this occurrence's change.
+  if (!(await cal.move(ev, times, scope, kind))) arg.revert()
 }
 
 // ------------------------------------------------------------ rendering hooks
@@ -221,14 +206,17 @@ function onDatesSet(arg: DatesSetArg) {
   void cal.loadRange(arg.start, arg.end)
 }
 
-const hour12 = computed(() => {
-  const f = settings.settings?.calendarTimeFormat
-  return f === '12h' ? true : f === '24h' ? false : localeUses12h(locale)
-})
+// Settings → General → Time format (uses12h follows it, else the locale).
+const hour12 = computed(() => uses12h(locale))
+/** FullCalendar time format. hourCycle h23, not hour12: false (which can render "24:30"). */
+function clockFormat(h12: boolean) {
+  return h12
+    ? ({ hour: 'numeric', minute: '2-digit', omitZeroMinute: true, hour12: true } as const)
+    : ({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' } as const)
+}
 watch(hour12, (h) => {
-  const fmt = { hour: 'numeric', minute: '2-digit', omitZeroMinute: h, hour12: h } as const
-  api$()?.setOption('slotLabelFormat', fmt)
-  api$()?.setOption('eventTimeFormat', fmt)
+  api$()?.setOption('slotLabelFormat', clockFormat(h))
+  api$()?.setOption('eventTimeFormat', clockFormat(h))
 })
 // Working hours by default; follow the clock during the day (computed once, so
 // option updates don't scroll the grid back).
@@ -262,8 +250,11 @@ const options = computed<CalendarOptions>(() => ({
   snapDuration: '00:15:00',
   scrollTime,
   scrollTimeReset: false,
-  slotLabelFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12.value, hour12: hour12.value },
-  eventTimeFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12.value, hour12: hour12.value },
+  slotLabelFormat: clockFormat(hour12.value),
+  eventTimeFormat: clockFormat(hour12.value),
+  // Day numbers and day headers open that day.
+  navLinks: true,
+  navLinkDayClick: (date: Date) => setView('day', date),
   dayHeaderContent,
   eventContent,
   eventDidMount: onMount,
@@ -296,6 +287,12 @@ function go(dir: 1 | -1 | 0) {
 }
 function pickDate(d: Date) {
   api$()?.gotoDate(d)
+  // Narrow window: the sidebar covers the grid; get it out of the way once a day is picked.
+  if (ui.narrow) sidebarOpen.value = false
+}
+function createFromSidebar() {
+  if (ui.narrow) sidebarOpen.value = false
+  openNew()
 }
 
 function openNew() {
@@ -355,8 +352,17 @@ function onKey(e: KeyboardEvent) {
     }
     return
   }
+  // The event chip that has keyboard focus (↑/↓ or Tab), if any.
+  const chip = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>('.gm-fc [data-ev-id]')
   const view = VIEWS.find((v) => v.key === k)
-  if (view) setView(view.id)
+  if (k === 'Escape' && ui.narrow && sidebarOpen.value) sidebarOpen.value = false
+  else if (k === 'e' && chip) {
+    // Straight to the editor for the focused event (Enter shows its details card).
+    const ev = cal.events.find((x) => x.id === chip.dataset.evId)
+    if (!ev) return
+    details.value = null
+    openEditor({ event: ev })
+  } else if (view) setView(view.id)
   else if (k === 't') go(0)
   else if (k === 'ArrowLeft') go(-1)
   else if (k === 'ArrowRight') go(1)
@@ -429,7 +435,7 @@ const consentMissing = computed(() => accounts.accounts.filter((a) => a.calendar
 <template>
   <div :class="['gm-calendar flex min-w-0 flex-1', compact && 'gm-compact']">
     <div v-if="sidebarOpen" :class="ui.narrow ? 'absolute inset-y-0 left-14 z-30 w-64 shadow-2xl' : 'w-64 shrink-0'">
-      <CalendarSidebar :selected="anchorDate" :range-start="visibleRange?.start" :range-end="visibleRange?.end" @pick="pickDate" @create="openNew" />
+      <CalendarSidebar :selected="anchorDate" :range-start="visibleRange?.start" :range-end="visibleRange?.end" @pick="pickDate" @create="createFromSidebar" />
     </div>
     <div v-if="ui.narrow && sidebarOpen" class="absolute inset-y-0 right-0 left-14 z-20 bg-black/10" @click="sidebarOpen = false" />
 
@@ -451,9 +457,10 @@ const consentMissing = computed(() => accounts.accounts.filter((a) => a.calendar
             <button
               type="button"
               :aria-pressed="cal.view === v.id"
-              :class="['rounded-md px-2.5 py-1 text-xs font-medium transition-colors', cal.view === v.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
+              :aria-label="`${v.label} view`"
+              :class="['rounded-md px-2.5 py-1 text-xs font-medium transition-colors max-[720px]:px-2', cal.view === v.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
               @click="setView(v.id)"
-            >{{ v.label }}</button>
+            ><span class="max-[720px]:hidden">{{ v.label }}</span><span class="hidden max-[720px]:inline" aria-hidden="true">{{ v.label[0] }}</span></button>
           </Tip>
         </div>
       </header>
