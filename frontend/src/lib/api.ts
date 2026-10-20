@@ -241,6 +241,8 @@ export function normEvent(raw: CalendarEvent): CalendarEvent {
 
 export interface MoveCheck { allowed: boolean; reason: string; crossAccount: boolean; hasAttendees: boolean; recurring: boolean }
 
+const WIRE_RESPONSES = new Set(['accepted', 'tentative', 'declined'])
+
 /** UI event input → backend EventInput. */
 export async function toWireInput(i: EventInput & { accountId?: string }): Promise<Record<string, unknown>> {
   // Lazy: calendar helpers stay out of the mail bundle.
@@ -260,7 +262,9 @@ export async function toWireInput(i: EventInput & { accountId?: string }): Promi
     meetingUrl: i.meetingUrl?.trim() ?? '',
     addVideoCall: !!i.addVideoCall,
     removeMeetingUrl: !!i.removeMeetingUrl,
-    attendees: i.attendees.map((a) => ({ name: a.name, email: a.email, response: a.response === 'needsAction' ? 'none' : a.response, optional: false })),
+    // Backend vocabulary: none | accepted | tentative | declined. The UI's "needsAction" (and
+    // anything unexpected) goes out as "none", never as Google's raw value.
+    attendees: i.attendees.map((a) => ({ name: a.name, email: a.email, response: WIRE_RESPONSES.has(a.response) ? a.response : 'none', optional: false })),
     recurrence: {
       frequency: rule.freq,
       until: rule.until ? new Date(`${rule.until}T23:59:59`).toISOString() : null,

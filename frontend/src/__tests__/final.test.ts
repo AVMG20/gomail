@@ -184,3 +184,20 @@ describe('emptied draft', () => {
     expect(del).toHaveBeenCalledWith('draft:srv:1')
   })
 })
+
+describe('attendee responses on the wire', () => {
+  it('new guests go out as "none", never as needsAction or another raw value', async () => {
+    const { toWireInput } = await import('@/lib/api')
+    const w = await toWireInput({
+      calendarId: 'c', title: 't', start: '2026-10-20T10:00:00Z', end: '2026-10-20T11:00:00Z', allDay: false, timeZone: '', location: '', description: '',
+      attendees: [
+        { name: '', email: 'new@x.io', response: 'needsAction' },
+        { name: '', email: 'odd@x.io', response: 'NEEDS-ACTION' },
+        { name: '', email: 'yes@x.io', response: 'accepted' },
+        { name: '', email: 'maybe@x.io', response: 'tentative' },
+      ],
+      meetingUrl: '', recurrence: '', reminders: [],
+    } as never)
+    expect((w.attendees as { response: string }[]).map((a) => a.response)).toEqual(['none', 'none', 'accepted', 'tentative'])
+  })
+})
