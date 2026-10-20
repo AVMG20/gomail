@@ -96,6 +96,8 @@ export interface CalendarEvent {
 }
 
 export interface EventInput {
+  /** Mailbox of the calendar (the backend needs it; filled from the calendar when omitted). */
+  accountId?: string
   calendarId: string
   title: string
   start: string
@@ -507,7 +509,8 @@ export interface EventPayloads {
   'sync:progress': SyncProgress
   'network:status': { online: boolean }
   'search:updated': { query: string; accountId: string; added: number }
-  'notification:open': { messageId: string; accountId: string }
+  /** A desktop notification was clicked: a new mail (messageId) or an event reminder (eventId). */
+  'notification:open': { messageId: string; accountId: string; eventId?: string }
   /** Auto-labeling paused (daily AI budget reached) or resumed. */
   'ai:budget': { paused: boolean; todayUsd?: number; budgetUsd?: number }
   /** Database health: integrity problems / repair. */

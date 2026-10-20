@@ -73,8 +73,15 @@ export function useBackendEvents() {
       if (mail.search && (!p?.query || p.query.trim() === mail.search.trim())) void mail.softRefresh()
       window.dispatchEvent(new CustomEvent('gomail:search-updated', { detail: p }))
     }),
-    api.on('notification:open', (p) => {
+    api.on('notification:open', async (p) => {
+      if (p?.eventId) {
+        const { useCalendarStore } = await import('@/stores/calendar')
+        useCalendarStore().openEventId = p.eventId
+        ui.mainView = 'calendar'
+        return
+      }
       if (!p?.messageId) return
+      ui.mainView = 'mail'
       if (p.accountId && p.accountId !== mail.mailbox.accountId) mail.switchAccount(p.accountId)
       setTimeout(() => mail.open(p.messageId), 250)
     }),

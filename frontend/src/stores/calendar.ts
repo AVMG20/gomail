@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import {
@@ -53,6 +53,9 @@ export const useCalendarStore = defineStore('calendar', () => {
   )
   const writableCalendars = computed(() => editableCalendars(calendars.value, accounts.accounts.filter((a) => a.calendarConsent !== false)))
   const defaultCalendar = computed(() => defaultCalendarId(calendars.value, accounts.accounts.filter((a) => a.calendarConsent !== false), lastCalendarId.value))
+
+  // The backend leaves declined invitations out unless asked: refetch when the setting flips.
+  watch(showDeclined, () => void fetchEvents())
 
   function calendarsOf(accountId: string): Calendar[] {
     return calendars.value.filter((c) => c.accountId === accountId)
@@ -139,6 +142,11 @@ export const useCalendarStore = defineStore('calendar', () => {
 
   // ------------------------------------------------------------ CRUD
 
+  /** The backend addresses calendars per mailbox: always send the calendar's account. */
+  function withAccount(input: EventInput): EventInput {
+    return { ...input, accountId: calendarMap.value.get(input.calendarId)?.accountId ?? input.accountId ?? '' }
+  }
+
   function rememberCalendar(id: string) {
     lastCalendarId.value = id
     writeLocal('lastCalendarId', id)
@@ -157,7 +165,7 @@ export const useCalendarStore = defineStore('calendar', () => {
     }
     events.value = [...events.value, temp]
     try {
-      const created = await api.createEvent(input)
+      const created = await api.createEvent(withAccount(input))
       if (created.isRecurring) {
         replaceLocal(temp.id, null)
         void fetchEvents() // occurrences come from the backend
@@ -195,7 +203,7 @@ export const useCalendarStore = defineStore('calendar', () => {
       replaceLocal(ev.id, { ...ev, ...input, accountId: calendarMap.value.get(input.calendarId)?.accountId ?? ev.accountId })
     }
     try {
-      const saved = await api.updateEvent(scopeTargetId(ev, scope), input, scope)
+      const saved = await api.updateEvent(scopeTargetId(ev, scope), withAccount(input), scope)
       if (scope === 'series' && ev.isRecurring) await fetchEvents()
       else replaceLocal(ev.id, saved)
       if (!quiet) toast.success('Event saved')

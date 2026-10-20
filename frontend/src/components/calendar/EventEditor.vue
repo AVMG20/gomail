@@ -139,12 +139,10 @@ async function save() {
         error.value = check.reason || 'This event can’t be moved to that calendar.'
         return
       }
-      if (check?.crossAccount) {
+      if (check?.crossAccount && check.hasAttendees) {
         const ok = await askConfirm(
           'Move to another account?',
-          check.hasAttendees
-            ? 'The event is recreated in the other mailbox’s calendar, and your guests get a new invitation (the old one is cancelled).'
-            : 'The event is recreated in the other mailbox’s calendar and removed from this one.',
+          'The event is recreated in the other mailbox’s calendar. Attendees will receive a new invitation (and a cancellation for the old one).',
           'Move event',
         )
         if (!ok) return

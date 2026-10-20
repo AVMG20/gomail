@@ -54,7 +54,7 @@ function viewInCalendar() {
       <span class="text-[9px] font-semibold uppercase">{{ eventDate(invite.start, invite.allDay).toLocaleDateString(undefined, { month: 'short' }) }}</span>
       <span class="text-foreground text-sm font-semibold">{{ eventDate(invite.start, invite.allDay).getDate() }}</span>
     </div>
-    <div class="min-w-0 flex-1">
+    <div class="min-w-48 flex-1 basis-48">
       <p :class="['truncate text-[13px] font-semibold', cancelled && 'line-through']">{{ invite.title || 'Invitation' }}</p>
       <p class="text-muted-foreground truncate text-xs">
         {{ cancelled ? 'Cancelled · ' : '' }}{{ formatEventWhen(invite) }}

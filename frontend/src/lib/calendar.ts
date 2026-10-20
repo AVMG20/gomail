@@ -319,7 +319,7 @@ export function scopeTargetId(ev: Pick<CalendarEvent, 'id' | 'seriesId'>, scope:
 
 export function eventToInput(ev: CalendarEvent): EventInput {
   return {
-    calendarId: ev.calendarId, title: ev.title, start: ev.start, end: ev.end, allDay: ev.allDay, timeZone: ev.timeZone,
+    accountId: ev.accountId, calendarId: ev.calendarId, title: ev.title, start: ev.start, end: ev.end, allDay: ev.allDay, timeZone: ev.timeZone,
     location: ev.location, description: ev.description, attendees: ev.attendees.map((a) => ({ ...a })), meetingUrl: ev.meetingUrl,
     recurrence: ev.recurrence, reminders: [...ev.reminders],
   }
