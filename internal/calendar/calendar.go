@@ -7,6 +7,9 @@ package calendar
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/mail"
+	"strings"
 	"time"
 	_ "time/tzdata" // IANA zones on systems without zoneinfo (Windows)
 
@@ -51,6 +54,9 @@ type Event struct {
 	// OriginalStart is the occurrence's start before an edit; Update with
 	// ScopeSeries shifts the series by Start - OriginalStart.
 	OriginalStart time.Time
+	// ETag is the provider version; Update/Delete send it as If-Match so a
+	// change made elsewhere isn't overwritten (ErrConflict).
+	ETag string
 }
 
 // SyncRequest asks for the events of a calendar in [Start, End).
@@ -86,13 +92,21 @@ type Provider interface {
 	// Update changes an event; with ScopeSeries the change applies to the
 	// series of an occurrence (id may be an occurrence id).
 	Update(ctx context.Context, cal Calendar, remoteID string, ev Event, scope string) (Event, error)
-	Delete(ctx context.Context, cal Calendar, remoteID, scope string) error
+	// Delete removes an event; a non-empty etag makes it conditional.
+	Delete(ctx context.Context, cal Calendar, remoteID, scope, etag string) error
+	// Move moves an event (or a series master) to another calendar of the
+	// same account and applies ev's fields. The result may have a new id.
+	Move(ctx context.Context, from, to Calendar, remoteID string, ev Event) (Event, error)
 	// Respond answers an invitation: accepted | tentative | declined.
 	Respond(ctx context.Context, cal Calendar, remoteID, response string) error
 }
 
 // ErrNoConsent means the sign-in lacks calendar access (insufficient scope).
 var ErrNoConsent = errors.New("calendar access was not granted for this account")
+
+// ErrConflict means the event changed on the server since it was synced
+// (HTTP 412 on If-Match).
+var ErrConflict = errors.New("this event was changed elsewhere")
 
 // ErrReadOnly is returned for changes to a read-only calendar.
 var ErrReadOnly = errors.New("this calendar is read-only")
@@ -159,6 +173,29 @@ func NormalizeInput(in *models.EventInput) error {
 	}
 	if len(in.Attendees) > 500 {
 		return errors.New("too many attendees (max 500)")
+	}
+	seen := map[string]bool{}
+	atts := in.Attendees[:0:0]
+	for _, a := range in.Attendees {
+		email := strings.ToLower(strings.TrimSpace(a.Email))
+		addr, err := mail.ParseAddress(email)
+		if err != nil || addr.Address != email || strings.ContainsAny(email, "\r\n<>,;\"") || !strings.Contains(email, "@") {
+			return fmt.Errorf("%q is not a valid email address", a.Email)
+		}
+		if seen[email] {
+			continue
+		}
+		seen[email] = true
+		a.Email, a.Name = email, strings.TrimSpace(strings.Map(func(r rune) rune {
+			if r < 0x20 {
+				return -1
+			}
+			return r
+		}, a.Name))
+		atts = append(atts, a)
+	}
+	if in.Attendees != nil {
+		in.Attendees = atts
 	}
 	for _, m := range in.ReminderMinutes {
 		if m < 0 || m > 40320 {

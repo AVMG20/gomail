@@ -34,6 +34,9 @@ type GraphMessage struct {
 	HTML           string
 	MessageID      string
 	Attachments    []Attachment
+	// MeetingEventID makes this a meeting request for that calendar event
+	// (#microsoft.graph.eventMessageRequest).
+	MeetingEventID string
 
 	seq int
 }
@@ -528,7 +531,17 @@ func (g *Graph) applyFields(m *GraphMessage, body map[string]any) {
 func (g *Graph) message(w http.ResponseWriter, r *http.Request, m *GraphMessage, rest []string, body map[string]any) {
 	switch {
 	case len(rest) == 0 && r.Method == http.MethodGet:
-		writeJSON(w, 200, g.render(m, true))
+		out := g.render(m, true)
+		if m.MeetingEventID != "" {
+			out["@odata.type"] = "#microsoft.graph.eventMessageRequest"
+			if strings.Contains(r.URL.Query().Get("$expand"), "microsoft.graph.eventMessage/event") {
+				out["meetingMessageType"] = "meetingRequest"
+				if e, ok := g.calEvents[m.MeetingEventID]; ok {
+					out["event"] = g.renderCal(e)
+				}
+			}
+		}
+		writeJSON(w, 200, out)
 	case len(rest) == 0 && r.Method == http.MethodPatch:
 		g.applyFields(m, body)
 		g.bump(m)

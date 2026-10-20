@@ -210,7 +210,7 @@ func (u desktopUI) Notify(title, body string, open models.NotificationOpen) {
 	m.trayMu.Unlock()
 	err := m.notifier.SendNotification(notifications.NotificationOptions{
 		ID: id, Title: title, Body: body,
-		Data: map[string]any{"messageId": open.MessageID, "accountId": open.AccountID},
+		Data: map[string]any{"messageId": open.MessageID, "accountId": open.AccountID, "eventId": open.EventID},
 	})
 	if err != nil {
 		slog.Debug("notification failed", "err", err)
@@ -229,9 +229,14 @@ func (m *MailService) onNotification(r notifications.NotificationResult) {
 	if !ok {
 		open.MessageID, _ = r.Response.UserInfo["messageId"].(string)
 		open.AccountID, _ = r.Response.UserInfo["accountId"].(string)
+		open.EventID, _ = r.Response.UserInfo["eventId"].(string)
 	}
 	m.showWindow()
-	if open.MessageID != "" && m.app != nil {
+	switch {
+	case m.app == nil:
+	case open.EventID != "":
+		m.app.Event.Emit(models.EventCalendarOpen, models.CalendarOpen{EventID: open.EventID})
+	case open.MessageID != "":
 		m.app.Event.Emit(models.EventNotificationOpen, open)
 	}
 }
@@ -974,4 +979,14 @@ func (m *MailService) SyncCalendars(accountID string) error {
 		return err
 	}
 	return uiError(s.SyncCalendars(accountID))
+}
+
+// MoveEventCheck tells what moving an event to calendarID would do (cross
+// account, attendees re-invited, whole series) so the UI can confirm.
+func (m *MailService) MoveEventCheck(id, calendarID string) (models.MoveCheck, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.MoveCheck{}, err
+	}
+	return uiResult(s.MoveEventCheck(id, calendarID))
 }

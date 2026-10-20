@@ -74,6 +74,11 @@ func DefaultSettings() models.Settings {
 		MarkReadMode:             "immediate",
 		ReadingPane:              "right",
 		EmailBackground:          "auto",
+		CalendarWeekStart:        "auto",
+		CalendarDefaultView:      "week",
+		CalendarDefaultDuration:  30,
+		CalendarDefaultReminder:  10,
+		CalendarNotifications:    true,
 		Zoom:                     1,
 		SyncDepthDays:            90,
 		AIDailyBudgetUSD:         1,
@@ -114,6 +119,22 @@ func Normalize(s *models.Settings) {
 	}
 	if s.EmailBackground != "light" {
 		s.EmailBackground = "auto"
+	}
+	switch s.CalendarWeekStart {
+	case "auto", "sunday", "monday", "saturday":
+	default:
+		s.CalendarWeekStart = "auto"
+	}
+	switch s.CalendarDefaultView {
+	case "week", "day", "month", "agenda":
+	default:
+		s.CalendarDefaultView = "week"
+	}
+	if s.CalendarDefaultDuration < 5 || s.CalendarDefaultDuration > 24*60 {
+		s.CalendarDefaultDuration = 30
+	}
+	if s.CalendarDefaultReminder < 0 || s.CalendarDefaultReminder > 7*24*60 {
+		s.CalendarDefaultReminder = 10
 	}
 	switch s.ReadingPane {
 	case "right", "off":

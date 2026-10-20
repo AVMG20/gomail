@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/calendar"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 )
@@ -127,6 +128,17 @@ func TestMigrateFromEveryVersion(t *testing.T) {
 			}
 			if res, err := s.Search(models.SearchQuery{Query: "subject"}); err != nil || len(res) == 0 {
 				t.Fatalf("search after upgrade: %d %v", len(res), err)
+			}
+			// Calendars work on the upgraded database.
+			if a, _ := s.Account("a"); !a.CalendarEnabled || a.CalendarConsent {
+				t.Fatalf("calendar defaults after upgrade %+v", a)
+			}
+			if err := s.ReplaceCalendars("a", []calendar.Calendar{{RemoteID: "c", Name: "C", CanEdit: true}}); err != nil {
+				t.Fatal(err)
+			}
+			row, _ := s.Calendar(CalendarID("a", "c"))
+			if _, err := s.ApplyEvents(row, EventChanges{Upserts: []calendar.Event{{RemoteID: "e", Title: "E", Start: time.Now(), End: time.Now().Add(time.Hour), ETag: "x"}}}); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

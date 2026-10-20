@@ -33,6 +33,7 @@ type realEnv struct {
 	oauth *fakes.OAuth
 	gmail *fakes.Gmail
 	graph *fakes.Graph
+	gcal  *fakes.GoogleCalendar
 	ai    *fakes.OpenRouter
 }
 
@@ -41,14 +42,15 @@ func newRealEnv(t *testing.T) *realEnv {
 	e := &realEnv{oauth: fakes.NewOAuth(), ai: fakes.NewOpenRouter()}
 	e.gmail = fakes.NewGmail("carol@gmail.example", e.oauth.Valid)
 	e.graph = fakes.NewGraph("dave@contoso.example", "Dave", e.oauth.Valid)
-	t.Cleanup(func() { e.oauth.Close(); e.gmail.Close(); e.graph.Close(); e.ai.Close() })
+	e.gcal = fakes.NewGoogleCalendar("carol@gmail.example", e.oauth.Valid)
+	t.Cleanup(func() { e.oauth.Close(); e.gmail.Close(); e.graph.Close(); e.gcal.Close(); e.ai.Close() })
 	oldG, oldM := auth.GoogleEndpoint, auth.MicrosoftAuthority
 	auth.GoogleEndpoint = oauth2.Endpoint{TokenURL: e.oauth.URL() + "/token", AuthURL: e.oauth.URL() + "/auth", AuthStyle: oauth2.AuthStyleInParams}
 	auth.MicrosoftAuthority = e.oauth.URL()
 	t.Cleanup(func() { auth.GoogleEndpoint, auth.MicrosoftAuthority = oldG, oldM })
 	e.ui = &consentUI{oauth: e.oauth}
 	s, err := New(Options{DataDir: t.TempDir(), Version: "1.0.0", UI: e.ui, Secrets: secrets.NewMemory(),
-		GmailBase: e.gmail.URL(), GraphBase: e.graph.URL(), OpenRouterBase: e.ai.URL(),
+		GmailBase: e.gmail.URL(), GraphBase: e.graph.URL(), OpenRouterBase: e.ai.URL(), GoogleCalendarBase: e.gcal.URL(),
 		Online: func(context.Context) bool { return true }})
 	if err != nil {
 		t.Fatal(err)

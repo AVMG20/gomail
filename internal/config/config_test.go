@@ -99,3 +99,22 @@ func TestEmailBackgroundSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestCalendarSettings(t *testing.T) {
+	d := DefaultSettings()
+	if d.CalendarWeekStart != "auto" || d.CalendarDefaultView != "week" || d.CalendarDefaultDuration != 30 || d.CalendarShowDeclined ||
+		d.CalendarDefaultReminder != 10 || !d.CalendarNotifications {
+		t.Fatalf("%+v", d)
+	}
+	s := DefaultSettings()
+	s.CalendarWeekStart, s.CalendarDefaultView, s.CalendarDefaultDuration, s.CalendarDefaultReminder = "friday", "year", 1, -5
+	Normalize(&s)
+	if s.CalendarWeekStart != "auto" || s.CalendarDefaultView != "week" || s.CalendarDefaultDuration != 30 || s.CalendarDefaultReminder != 10 {
+		t.Fatalf("%+v", s)
+	}
+	s.CalendarWeekStart, s.CalendarDefaultView, s.CalendarDefaultDuration, s.CalendarDefaultReminder = "monday", "agenda", 45, 0
+	Normalize(&s)
+	if s.CalendarWeekStart != "monday" || s.CalendarDefaultView != "agenda" || s.CalendarDefaultDuration != 45 || s.CalendarDefaultReminder != 0 {
+		t.Fatalf("%+v", s)
+	}
+}

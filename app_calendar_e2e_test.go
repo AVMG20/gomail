@@ -23,6 +23,8 @@ func TestEndToEndCalendar(t *testing.T) {
 	oInvite := e.graph.AddCalEvent(fakes.CalEvent{Title: "Outlook invite", Start: day.Add(15 * time.Hour), End: day.Add(16 * time.Hour),
 		Attendee: "carol@contoso.example", Response: "none"})
 	e.graph.AddCalEvent(fakes.CalEvent{Title: "Outlook own", Start: day.Add(17 * time.Hour), End: day.Add(18 * time.Hour)})
+	e.graph.Deliver(fakes.GraphMessage{Folder: "inbox", Subject: "Invitation: Outlook invite", From: "carol@contoso.example",
+		To: []string{"bob@contoso.example"}, HTML: "<p>Please join</p>", MeetingEventID: oInvite})
 
 	st, _ := m.GetSettings()
 	st.GoogleClientID, st.GoogleClientSecret, st.MicrosoftClientID = "g", "gs", "m"
@@ -107,6 +109,32 @@ func TestEndToEndCalendar(t *testing.T) {
 	// Create on Outlook.
 	if _, err := m.CreateEvent(models.EventInput{AccountID: oa.ID, Title: "Teams sync", Start: day.Add(8 * time.Hour), TimeZone: "Europe/Amsterdam"}); err != nil {
 		t.Fatal(err)
+	}
+
+	// An Outlook meeting request links to its calendar event.
+	got = titles()
+	inviteMsg := e.msg(oa.ID, "Invitation: Outlook invite")
+	full, err := m.GetMessage(inviteMsg.ID)
+	if err != nil || full.Invite == nil || full.Invite.Method != "REQUEST" || full.Invite.EventID != got["Outlook invite"].ID ||
+		!full.Invite.Start.Equal(day.Add(15*time.Hour)) || full.Invite.Title != "Outlook invite" {
+		t.Fatalf("outlook invite %+v %v", full.Invite, err)
+	}
+
+	// A change made elsewhere isn't overwritten (If-Match → 412).
+	gs := got["Google sync"]
+	e.gcal.Touch(gMeet, "Renamed elsewhere")
+	if _, err := m.UpdateEvent(gs.ID, models.EventInput{Title: "Mine", Start: gs.Start, End: gs.End}, "this"); err == nil ||
+		!strings.Contains(err.Error(), "changed elsewhere") {
+		t.Fatalf("conflict: %v", err)
+	}
+	if ev, _ := m.GetEvent(gs.ID); ev.Title != "Renamed elsewhere" {
+		t.Fatalf("after conflict %q", ev.Title)
+	}
+	if ev, _ := e.gcal.Event(gMeet); ev.Title != "Renamed elsewhere" {
+		t.Fatalf("server event clobbered: %q", ev.Title)
+	}
+	if _, err := m.UpdateEvent(gs.ID, models.EventInput{Title: "Mine", Start: gs.Start, End: gs.End}, "this"); err != nil {
+		t.Fatalf("retry after conflict: %v", err)
 	}
 
 	// Answer invitations on both providers.

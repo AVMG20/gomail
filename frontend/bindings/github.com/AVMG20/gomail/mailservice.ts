@@ -272,6 +272,14 @@ export function MarkRead(ids: string[] | null, read: boolean): $CancellablePromi
     return $Call.ByID(2773403271, ids, read);
 }
 
+/**
+ * MoveEventCheck tells what moving an event to calendarID would do (cross
+ * account, attendees re-invited, whole series) so the UI can confirm.
+ */
+export function MoveEventCheck(id: string, calendarID: string): $CancellablePromise<models$0.MoveCheck> {
+    return $Call.ByID(3366187287, id, calendarID);
+}
+
 export function MoveToFolder(ids: string[] | null, folderID: string): $CancellablePromise<void> {
     return $Call.ByID(3168743658, ids, folderID);
 }

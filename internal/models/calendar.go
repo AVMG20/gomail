@@ -127,3 +127,18 @@ type Invite struct {
 type CalendarChanged struct {
 	AccountID string `json:"accountId"` // "" = several accounts
 }
+
+// CalendarOpen is the payload of calendar:open.
+type CalendarOpen struct {
+	EventID string `json:"eventId"`
+}
+
+// MoveCheck tells the UI what moving an event to another calendar does,
+// so it can ask for confirmation first.
+type MoveCheck struct {
+	Allowed      bool   `json:"allowed"`
+	Reason       string `json:"reason"`       // why not, when !allowed
+	CrossAccount bool   `json:"crossAccount"` // the event is recreated in another account
+	HasAttendees bool   `json:"hasAttendees"` // with crossAccount (or Outlook): attendees get a cancellation and a new invitation
+	Recurring    bool   `json:"recurring"`    // the whole series moves
+}

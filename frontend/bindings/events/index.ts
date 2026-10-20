@@ -24,6 +24,11 @@ export const AiBudget = "ai:budget";
 export const CalendarChanged = "calendar:changed";
 
 /**
+ * Name of the custom event "calendar:open".
+ */
+export const CalendarOpen = "calendar:open";
+
+/**
  * Name of the custom event "classify:finished".
  */
 export const ClassifyFinished = "classify:finished";

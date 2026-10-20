@@ -18,8 +18,10 @@ import type { Address, EventInput } from '@/lib/types'
 import { useCalendarStore } from '@/stores/calendar'
 import { useSettingsStore } from '@/stores/settings'
 import CalendarPicker from './CalendarPicker.vue'
+import ScopePrompt from './ScopePrompt.vue'
 import { closeEditor, editorRequest } from './editorState'
-import { askScope } from './scopePrompt'
+import { askConfirm, askScope } from './scopePrompt'
+import { api, hasMethod } from '@/lib/api'
 
 const cal = useCalendarStore()
 const settings = useSettingsStore()
@@ -59,7 +61,7 @@ const calendarId = ref(base.calendarId && cal.writableCalendars.some((c) => c.id
 const saving = ref(false)
 const error = ref('')
 
-const readOnly = computed(() => !!ev && !cal.writableCalendars.some((c) => c.id === ev.calendarId))
+const readOnly = computed(() => !!ev && !cal.canEditEvent(ev))
 const timeZones = allTimeZones()
 const reminderOptions = computed(() => REMINDER_CHOICES.filter((m) => !reminders.value.includes(m)))
 
@@ -107,7 +109,8 @@ function buildInput(): EventInput | null {
     location: location.value.trim(),
     description: description.value,
     attendees: guests.value.map((g) => ({ name: g.name, email: g.email, response: keep.get(g.email.toLowerCase()) ?? 'needsAction' })),
-    meetingUrl: meetingUrl.value.trim(),
+    // Unchanged links of existing events stay where the provider keeps them (conference data).
+    meetingUrl: !isNew && meetingUrl.value.trim() === (ev?.meetingUrl ?? '') ? '' : meetingUrl.value.trim(),
     recurrence: buildRRule({ freq: freq.value, until: until.value, byDay: rule0.freq === freq.value ? rule0.byDay : undefined }),
     reminders: [...reminders.value].sort((a, b) => a - b),
   }
@@ -128,6 +131,24 @@ async function save() {
     if (isNew) {
       if (await cal.create(input)) close()
       return
+    }
+    // Moving to a calendar in another mailbox recreates the event there.
+    if (input.calendarId !== ev!.calendarId && hasMethod('MoveEventCheck')) {
+      const check = await api.moveEventCheck(ev!.id, input.calendarId).catch(() => null)
+      if (check && !check.allowed) {
+        error.value = check.reason || 'This event can’t be moved to that calendar.'
+        return
+      }
+      if (check?.crossAccount) {
+        const ok = await askConfirm(
+          'Move to another account?',
+          check.hasAttendees
+            ? 'The event is recreated in the other mailbox’s calendar, and your guests get a new invitation (the old one is cancelled).'
+            : 'The event is recreated in the other mailbox’s calendar and removed from this one.',
+          'Move event',
+        )
+        if (!ok) return
+      }
     }
     let scope: 'this' | 'series' = 'this'
     if (needsScopeChoice(ev!)) {
@@ -281,6 +302,7 @@ function addReminder(v: unknown) {
         <Button variant="ghost" size="sm" @click="close">Cancel</Button>
         <Button v-if="!readOnly" size="sm" :disabled="saving" @click="save">{{ isNew ? 'Create event' : 'Save' }}</Button>
       </div>
+      <ScopePrompt />
     </DialogContent>
   </Dialog>
 </template>

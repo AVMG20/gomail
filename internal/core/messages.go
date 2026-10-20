@@ -126,6 +126,10 @@ func (s *Service) fetchBody(ctx context.Context, m models.Message) error {
 
 // processBody embeds cid: images, sanitizes HTML and fills text.
 func processBody(b *mail.Body) store.BodyUpdate {
+	invite := b.Invite
+	if invite == nil {
+		invite = calendar.ParseInvite(b.Calendar)
+	}
 	var images []mailmime.InlineImage
 	atts := make([]models.Attachment, 0, len(b.Attachments))
 	for _, a := range b.Attachments {
@@ -147,7 +151,7 @@ func processBody(b *mail.Body) store.BodyUpdate {
 	return store.BodyUpdate{
 		HTML: html, Text: text, HasRemoteContent: mailmime.HasRemoteContent(html), Attachments: atts,
 		MessageID: b.MessageID, InReplyTo: b.InReplyTo, References: b.References, Cc: b.Cc, Bcc: b.Bcc, ReplyTo: b.ReplyTo,
-		Unsubscribe: b.Unsubscribe, Invite: calendar.ParseInvite(b.Calendar),
+		Unsubscribe: b.Unsubscribe, Invite: invite,
 	}
 }
 

@@ -27,9 +27,9 @@ const compose = useComposeStore()
 const ev = computed(() => cal.events.find((e) => e.id === props.event.id) ?? props.event)
 const calendar = computed(() => cal.calendarMap.get(ev.value.calendarId))
 const account = computed(() => accounts.accountMap.get(ev.value.accountId))
-const canEdit = computed(() => !!calendar.value?.canEdit)
+const canEdit = computed(() => cal.canEditEvent(ev.value))
 const joinUrl = computed(() => (ev.value.meetingUrl && isSafeExternalUrl(ev.value.meetingUrl) ? ev.value.meetingUrl : ''))
-const repeat = computed(() => (ev.value.recurrence ? describeRepeat(parseRRule(ev.value.recurrence)) : ev.value.isRecurring ? 'Repeats' : ''))
+const repeat = computed(() => ev.value.recurrenceText || (ev.value.recurrence ? describeRepeat(parseRRule(ev.value.recurrence)) : ev.value.isRecurring ? 'Repeats' : ''))
 const myEmail = computed(() => account.value?.email.toLowerCase() ?? '')
 const guests = computed(() => {
   const list = [...ev.value.attendees]
@@ -108,7 +108,7 @@ function emailGuests() {
         </div>
 
         <p v-if="ev.description" class="text-muted-foreground selectable line-clamp-4 text-xs leading-relaxed whitespace-pre-line">{{ ev.description }}</p>
-        <p v-if="!canEdit" class="text-muted-foreground text-xs">Read-only calendar</p>
+        <p v-if="!canEdit && !canRespond" class="text-muted-foreground text-xs">Read-only calendar</p>
       </div>
 
       <div v-if="canRespond" class="border-border mt-3 flex items-center gap-1.5 border-t pt-3">

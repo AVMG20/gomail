@@ -44,6 +44,7 @@ func init() {
 	application.RegisterEvent[models.ComposeOpen](models.EventComposeOpen)
 	application.RegisterEvent[models.UpdateInfo](models.EventUpdateAvailable)
 	application.RegisterEvent[models.CalendarChanged](models.EventCalendarChanged)
+	application.RegisterEvent[models.CalendarOpen](models.EventCalendarOpen)
 }
 
 // webviewStorage keeps the webview's localStorage/cache inside the data

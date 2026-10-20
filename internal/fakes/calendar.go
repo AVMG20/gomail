@@ -80,6 +80,20 @@ func (g *GoogleCalendar) add(e *CalEvent) string {
 	return e.ID
 }
 
+func (g *GoogleCalendar) etag(id string) string { return fmt.Sprintf(`"%d"`, g.changed[id]) }
+
+// Touch changes an event's title on the server (a concurrent edit
+// elsewhere), giving it a new etag.
+func (g *GoogleCalendar) Touch(id, title string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if e, ok := g.events[id]; ok {
+		e.Title = title
+		g.version++
+		g.changed[id] = g.version
+	}
+}
+
 // Event returns a copy of an event.
 func (g *GoogleCalendar) Event(id string) (CalEvent, bool) {
 	g.mu.Lock()
@@ -93,7 +107,7 @@ func (g *GoogleCalendar) Event(id string) (CalEvent, bool) {
 
 func (g *GoogleCalendar) render(e *CalEvent) map[string]any {
 	m := map[string]any{"id": e.ID, "status": "confirmed", "summary": e.Title, "iCalUID": e.ICalUID,
-		"organizer": map[string]any{"email": g.Email, "self": e.Attendee == ""}}
+		"organizer": map[string]any{"email": g.Email, "self": e.Attendee == ""}, "etag": g.etag(e.ID)}
 	if e.AllDay {
 		m["start"], m["end"] = map[string]string{"date": e.Start.Format("2006-01-02")}, map[string]string{"date": e.End.Format("2006-01-02")}
 	} else {
@@ -173,6 +187,14 @@ func (g *GoogleCalendar) serve(w http.ResponseWriter, r *http.Request) {
 		e, ok := g.events[id]
 		if !ok {
 			writeJSON(w, 404, map[string]any{"error": map[string]any{"code": 404, "message": "Not Found"}})
+			return
+		}
+		if m := r.Header.Get("If-Match"); m != "" && m != g.etag(id) && r.Method != http.MethodGet {
+			writeJSON(w, 412, map[string]any{"error": map[string]any{"code": 412, "message": "Precondition Failed"}})
+			return
+		}
+		if strings.HasSuffix(id, "/move") {
+			writeJSON(w, 404, map[string]any{"error": map[string]any{"code": 404, "message": "single calendar fake"}})
 			return
 		}
 		switch r.Method {

@@ -3,7 +3,7 @@ import { computed, ref, shallowRef } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import {
-  defaultCalendarId, editableCalendars, effectiveWeekStart, eventToInput, isEventShown, scopeTargetId, type CalendarViewKind,
+  defaultCalendarId, editableCalendars, effectiveWeekStart, eventDate, eventToInput, isEventShown, scopeTargetId, shiftTimes, type CalendarViewKind,
 } from '@/lib/calendar'
 import type { AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope } from '@/lib/types'
 import { useAccountsStore } from './accounts'
@@ -25,6 +25,22 @@ export const useCalendarStore = defineStore('calendar', () => {
   const lastCalendarId = ref<string>(readLocal('lastCalendarId', ''))
   /** Ask the calendar view to jump to a date ("View in calendar" on an invite). */
   const focusDate = ref<Date | null>(null)
+  /** Ask the calendar view to show an event's details (reminder notification click). */
+  const openEventId = ref<string | null>(null)
+
+  /** The backend refuses stale writes (HTTP 412): reload and say so. */
+  function conflict(e: unknown): boolean {
+    if (!/changed elsewhere|412|precondition/i.test(errorMessage(e))) return false
+    void fetchEvents()
+    toast('This event changed elsewhere', { description: 'We loaded the latest version. Please make your change again.' })
+    return true
+  }
+
+  /** Who may edit an event: the backend says so; older backends: organizer on an editable calendar. */
+  function canEditEvent(ev: CalendarEvent): boolean {
+    if (ev.canEdit !== undefined) return ev.canEdit
+    return !!calendarMap.value.get(ev.calendarId)?.canEdit && ev.isOrganizer
+  }
 
   const available = computed(() => hasMethod('ListCalendars'))
   const calendarMap = computed(() => new Map(calendars.value.map((c) => [c.id, c])))
@@ -159,9 +175,22 @@ export const useCalendarStore = defineStore('calendar', () => {
   }
 
   /** Save edits. Recurring + "series" refetches (every occurrence changes). */
-  async function update(ev: CalendarEvent, input: EventInput, scope: RecurrenceScope, quiet = false): Promise<boolean> {
+  async function update(ev: CalendarEvent, input: EventInput, scope: RecurrenceScope, quiet = false, seriesTimesResolved = false): Promise<boolean> {
     rememberCalendar(input.calendarId)
     const before = events.value
+    if (scope === 'series' && ev.isRecurring && !seriesTimesResolved) {
+      // The editor shows one occurrence; for "all events" apply its time change to the
+      // series' own first date instead of moving the whole series to this occurrence.
+      try {
+        const master = await api.getEvent(ev.seriesId || ev.id)
+        const ds = eventDate(input.start, input.allDay).getTime() - eventDate(ev.start, ev.allDay).getTime()
+        const de = eventDate(input.end, input.allDay).getTime() - eventDate(ev.end, ev.allDay).getTime()
+        input = { ...input, ...shiftTimes(master, ds, de, input.allDay) }
+      } catch (e) {
+        toast.error('Couldn’t load the series', { description: errorMessage(e) })
+        return false
+      }
+    }
     if (scope === 'this' || !ev.isRecurring) {
       replaceLocal(ev.id, { ...ev, ...input, accountId: calendarMap.value.get(input.calendarId)?.accountId ?? ev.accountId })
     }
@@ -173,7 +202,7 @@ export const useCalendarStore = defineStore('calendar', () => {
       return true
     } catch (e) {
       events.value = before
-      toast.error('Couldn’t save the event', { description: errorMessage(e) })
+      if (!conflict(e)) toast.error('Couldn’t save the event', { description: errorMessage(e) })
       return false
     }
   }
@@ -184,13 +213,13 @@ export const useCalendarStore = defineStore('calendar', () => {
    */
   async function move(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, scope: RecurrenceScope, series?: { next: EventInput; before: EventInput }) {
     const input = series ? series.next : { ...eventToInput(ev), ...times }
-    const ok = await update(ev, input, scope, true)
+    const ok = await update(ev, input, scope, true, !!series)
     if (!ok) return
     toast('Event moved', {
       description: ev.title,
       action: {
         label: 'Undo',
-        onClick: () => void (series ? update(ev, series.before, 'series', true) : update({ ...ev, ...times }, eventToInput(ev), scope, true)),
+        onClick: () => void (series ? update(ev, series.before, 'series', true, true) : update({ ...ev, ...times }, eventToInput(ev), scope, true)),
       },
     })
   }
@@ -210,7 +239,7 @@ export const useCalendarStore = defineStore('calendar', () => {
       })
     } catch (e) {
       events.value = before
-      toast.error('Couldn’t delete the event', { description: errorMessage(e) })
+      if (!conflict(e)) toast.error('Couldn’t delete the event', { description: errorMessage(e) })
     }
   }
 
@@ -228,7 +257,7 @@ export const useCalendarStore = defineStore('calendar', () => {
   }
 
   return {
-    calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, available, calendarMap, weekStart, showDeclined,
+    calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, openEventId, canEditEvent, available, calendarMap, weekStart, showDeclined,
     visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible,
     setAccountEnabled, connect, create, update, move, remove, respond,
   }

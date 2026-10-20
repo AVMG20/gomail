@@ -24,9 +24,13 @@ export function localeWeekStart(locale = typeof navigator !== 'undefined' ? navi
   return sunday.includes(region) ? 0 : ['AE', 'AF', 'BH', 'DZ', 'EG', 'IQ', 'IR', 'JO', 'KW', 'LY', 'OM', 'QA', 'SD', 'SY'].includes(region) ? 6 : 1
 }
 
-/** Setting -1 (or anything invalid) follows the locale. */
-export function effectiveWeekStart(setting: number | undefined, locale?: string): number {
-  return setting === 0 || setting === 1 || setting === 6 ? setting : localeWeekStart(locale)
+const WEEK_START: Record<string, number> = { sunday: 0, monday: 1, saturday: 6 }
+
+/** Setting "auto" (or anything unknown) follows the locale; numbers 0/1/6 are accepted too. */
+export function effectiveWeekStart(setting: string | number | undefined, locale?: string): number {
+  if (setting === 0 || setting === 1 || setting === 6) return setting
+  if (typeof setting === 'string' && setting in WEEK_START) return WEEK_START[setting]
+  return localeWeekStart(locale)
 }
 
 /** Whether the locale writes times with AM/PM. */

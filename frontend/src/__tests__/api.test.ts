@@ -47,3 +47,44 @@ describe('api normalisation (Go nil slices / legacy fields)', () => {
     expect(s.readingPane).toBe('off')
   })
 })
+
+describe('calendar wire format', async () => {
+  const { normEvent, toWireInput } = await import('@/lib/api')
+  const wire = (over: Record<string, unknown> = {}) => ({
+    id: 'e1', calendarId: 'c1', accountId: 'a1', title: 'Offsite', start: '2026-10-28T00:00:00Z', end: '2026-10-31T00:00:00Z', allDay: true,
+    timeZone: 'Europe/Amsterdam', location: '', description: '', attendees: null, organizer: { name: '', email: 'p@x.io' }, isOrganizer: false,
+    myResponse: 'none', meetingUrl: '', isRecurring: false, seriesId: '', recurrence: 'Weekly on Monday', rrule: 'FREQ=WEEKLY;BYDAY=MO', status: 'confirmed',
+    reminders: null, canEdit: false, updatedAt: '', ...over,
+  }) as never
+
+  it('keeps all-day dates as calendar dates (never shifted by the local zone)', () => {
+    const e = normEvent(wire())
+    expect(e.start).toBe('2026-10-28')
+    expect(e.end).toBe('2026-10-31')
+  })
+
+  it('maps responses, recurrence and nil slices', () => {
+    const e = normEvent(wire({ attendees: [{ name: 'P', email: 'p@x.io', response: 'organizer' }, { name: 'Me', email: 'me@x.io', response: 'none' }] }))
+    expect(e.myResponse).toBe('needsAction')
+    expect(e.attendees.map((a) => a.response)).toEqual(['accepted', 'needsAction'])
+    expect(e.recurrence).toBe('FREQ=WEEKLY;BYDAY=MO')
+    expect(e.recurrenceText).toBe('Weekly on Monday')
+    expect(e.reminders).toEqual([])
+    expect(normEvent(wire({ isOrganizer: true, myResponse: 'organizer' })).myResponse).toBe('')
+    expect(normEvent(wire({ myResponse: 'declined' })).myResponse).toBe('declined')
+  })
+
+  it('builds the backend input', async () => {
+    const w = await toWireInput({
+      calendarId: 'c1', title: 'Trip', start: '2026-11-05', end: '2026-11-09', allDay: true, timeZone: '', location: 'Lisbon', description: 'Notes',
+      attendees: [{ name: '', email: 'a@b.io', response: 'needsAction' }], meetingUrl: 'https://meet.example/x', recurrence: 'FREQ=YEARLY;UNTIL=20301231', reminders: [1440],
+    })
+    expect(w).toMatchObject({ start: '2026-11-05T00:00:00Z', end: '2026-11-09T00:00:00Z', allDay: true, reminderMinutes: [1440] })
+    expect(w.attendees).toEqual([{ name: '', email: 'a@b.io', response: 'none', optional: false }])
+    expect((w.recurrence as { frequency: string }).frequency).toBe('yearly')
+    expect((w.recurrence as { until: string }).until).toMatch(/^2030-12-3[01]T/)
+    expect(w.description).toBe('Notes\n\nJoin: https://meet.example/x')
+    const timed = await toWireInput({ calendarId: '', title: '', start: '2026-10-20T09:00:00+02:00', end: '2026-10-20T10:00:00+02:00', allDay: false, timeZone: 'Europe/Amsterdam', location: '', description: '', attendees: [], meetingUrl: '', recurrence: '', reminders: [] })
+    expect(timed).toMatchObject({ start: '2026-10-20T07:00:00.000Z', end: '2026-10-20T08:00:00.000Z', recurrence: { frequency: 'none', until: null, count: 0 } })
+  })
+})

@@ -42,6 +42,9 @@ func New(tokens httpx.TokenSource, base string) *Client {
 func (c *Client) SetSleep(f func(context.Context, time.Duration) error) { c.api.Sleep = f }
 
 func wrap(err error) error {
+	if httpx.StatusOf(err) == http.StatusPreconditionFailed {
+		return fmt.Errorf("%w: %v", calendar.ErrConflict, err)
+	}
 	var e *httpx.Error
 	if errors.As(err, &e) && e.Status == http.StatusForbidden && (strings.EqualFold(e.Code, "ErrorAccessDenied") ||
 		strings.Contains(strings.ToLower(e.Message), "access is denied")) {
@@ -155,6 +158,7 @@ type gEvent struct {
 	ReminderMinutesBeforeStart int          `json:"reminderMinutesBeforeStart"`
 	LastModifiedDateTime       string       `json:"lastModifiedDateTime"`
 	ShowAs                     string       `json:"showAs"`
+	ETag                       string       `json:"@odata.etag"`
 	Removed                    *struct {
 		Reason string `json:"reason"`
 	} `json:"@removed"`
@@ -244,13 +248,13 @@ func toEvent(g gEvent, cal calendar.Calendar) calendar.Event {
 	}
 	ev.Start, ev.End = parseUTC(g.Start), parseUTC(g.End)
 	if g.IsAllDay {
-		// All-day times are midnight in the requested zone (UTC): keep dates.
 		ev.AllDay = true
-		ev.Start, ev.End = calendar.DateUTC(ev.Start), calendar.DateUTC(ev.End)
+		ev.Start, ev.End = allDayDate(ev.Start, ev.TimeZone), allDayDate(ev.End, ev.TimeZone)
 		if !ev.End.After(ev.Start) {
 			ev.End = ev.Start.AddDate(0, 0, 1)
 		}
 	}
+	ev.ETag = g.ETag
 	if g.IsCancelled {
 		ev.Status = models.EventCancelled
 	} else if g.ShowAs == "tentative" {
@@ -297,6 +301,25 @@ func toEvent(g gEvent, cal calendar.Calendar) calendar.Event {
 		ev.Updated = t.UTC()
 	}
 	return ev
+}
+
+// allDayDate recovers the date of an all-day boundary. Graph reports
+// all-day events at midnight of the requested zone (UTC), but some
+// servers convert from the event's zone instead (e.g. 15:00Z for midnight
+// in Tokyo): then the event's zone gives the date, or the nearest midnight
+// when the zone is unknown. Dates never shift by a day either way.
+func allDayDate(t time.Time, tz string) time.Time {
+	if t.Hour() == 0 && t.Minute() == 0 {
+		return calendar.DateUTC(t)
+	}
+	if tz != "" {
+		if loc, err := time.LoadLocation(tz); err == nil {
+			if l := t.In(loc); l.Hour() == 0 && l.Minute() == 0 {
+				return calendar.DateUTC(l)
+			}
+		}
+	}
+	return calendar.DateUTC(t.Add(12 * time.Hour))
 }
 
 func graphTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05") }
@@ -531,15 +554,37 @@ func (c *Client) Update(ctx context.Context, cal calendar.Calendar, remoteID str
 	} else {
 		b = body(ev, ev.SeriesRemoteID == "" && ev.RRule != "")
 	}
+	var hdr map[string]string
+	if target == remoteID && ev.ETag != "" {
+		hdr = map[string]string{"If-Match": ev.ETag}
+	}
 	var g gEvent
-	if err := c.api.JSON(ctx, http.MethodPatch, "me/events/"+url.PathEscape(target), b, &g); err != nil {
+	if err := c.api.JSONHeaders(ctx, http.MethodPatch, "me/events/"+url.PathEscape(target), hdr, b, &g); err != nil {
 		return calendar.Event{}, wrap(err)
 	}
 	return toEvent(g, cal), nil
 }
 
-func (c *Client) Delete(ctx context.Context, cal calendar.Calendar, remoteID, scope string) error {
-	err := c.api.JSON(ctx, http.MethodDelete, "me/events/"+url.PathEscape(remoteID), nil, nil)
+// Move has no Graph equivalent for events: the event is created in the
+// target calendar and deleted from the source (attendees get a
+// cancellation and a new invitation).
+func (c *Client) Move(ctx context.Context, from, to calendar.Calendar, remoteID string, ev calendar.Event) (calendar.Event, error) {
+	created, err := c.Create(ctx, to, ev)
+	if err != nil {
+		return calendar.Event{}, err
+	}
+	if err := c.Delete(ctx, from, remoteID, models.ScopeSeries, ""); err != nil {
+		return created, fmt.Errorf("the event was copied, but the original couldn't be removed: %w", err)
+	}
+	return created, nil
+}
+
+func (c *Client) Delete(ctx context.Context, cal calendar.Calendar, remoteID, scope, etag string) error {
+	var hdr map[string]string
+	if etag != "" {
+		hdr = map[string]string{"If-Match": etag}
+	}
+	err := c.api.JSONHeaders(ctx, http.MethodDelete, "me/events/"+url.PathEscape(remoteID), hdr, nil, nil)
 	if httpx.StatusOf(err) == http.StatusNotFound {
 		return nil
 	}

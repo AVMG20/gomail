@@ -5,6 +5,7 @@ import { api } from '@/lib/api'
 import { displayName, parseAddressList } from '@/lib/format'
 import type { Address } from '@/lib/types'
 import { useComposeStore } from '@/stores/compose'
+import { useUiStore } from '@/stores/ui'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
@@ -17,6 +18,7 @@ export function useBackendEvents() {
   const ai = useAiStore()
   const settings = useSettingsStore()
   const compose = useComposeStore()
+  const ui = useUiStore()
   const addrs = (v: string | Address[] | null | undefined): Address[] => (Array.isArray(v) ? v : v ? parseAddressList(v) : [])
   const refreshLabels = useDebounceFn(() => {
     void settings.refreshLabels()
@@ -92,6 +94,12 @@ export function useBackendEvents() {
       settings.updateInfo = p
     }),
     api.on('calendar:changed', () => refreshCalendar()),
+    api.on('calendar:open', async (p) => {
+      if (!p?.eventId) return
+      const { useCalendarStore } = await import('@/stores/calendar')
+      useCalendarStore().openEventId = p.eventId
+      ui.mainView = 'calendar'
+    }),
     api.on('database:status', (p) => {
       if (p && !p.ok) toast.error('Mail database problem', { description: p.message || 'gomail is repairing its local database.', duration: 10000 })
     }),

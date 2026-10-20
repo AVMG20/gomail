@@ -1,12 +1,16 @@
 package core
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/calendar"
 	"github.com/AVMG20/gomail/internal/demo"
+	"github.com/AVMG20/gomail/internal/httpx"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/secrets"
 )
 
 func findEvent(evs []models.CalendarEvent, title string) (models.CalendarEvent, bool) {
@@ -43,9 +47,19 @@ func TestDemoCalendarSyncAndViews(t *testing.T) {
 	if !ok || !standup.IsRecurring || standup.SeriesID == "" || standup.Recurrence != "Weekly on weekdays" || standup.MeetingURL == "" {
 		t.Fatalf("standup %+v", standup)
 	}
-	declined, ok := findEvent(evs, "Vendor pitch (optional)")
+	if _, ok := findEvent(evs, "Vendor pitch (optional)"); ok {
+		t.Fatal("declined invitation listed by default")
+	}
+	st := s.GetSettings()
+	st.CalendarShowDeclined = true
+	s.SaveSettings(st)
+	withDeclined, _ := s.ListEvents(from, to)
+	declined, ok := findEvent(withDeclined, "Vendor pitch (optional)")
 	if !ok || declined.MyResponse != models.ResponseDeclined || declined.IsOrganizer || declined.CanEdit {
 		t.Fatalf("declined %+v", declined)
+	}
+	if _, err := s.ListEvents(from, from.Add(401*24*time.Hour)); err == nil {
+		t.Fatal("range over 400 days accepted")
 	}
 	review, _ := findEvent(evs, "Design review: inbox redesign")
 	if !review.IsOrganizer || len(review.Attendees) < 2 || review.Organizer.Email == "" || len(review.Reminders) == 0 {
@@ -222,5 +236,245 @@ func TestCalendarInputValidation(t *testing.T) {
 		Start: time.Date(2026, 12, 24, 15, 0, 0, 0, time.UTC)})
 	if err != nil || !ev.AllDay || !ev.Start.Equal(time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC)) || !ev.End.Equal(ev.Start.AddDate(0, 0, 1)) {
 		t.Fatalf("all-day %+v %v", ev, err)
+	}
+}
+
+func calByName(t *testing.T, s *Service, acct, name string) models.Calendar {
+	t.Helper()
+	cals, _ := s.ListCalendars()
+	for _, c := range cals {
+		if c.AccountID == acct && c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("no calendar %s/%s", acct, name)
+	return models.Calendar{}
+}
+
+func TestDemoCalendarMoves(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	personal := calByName(t, s, demo.GmailAccountID, "Personal")
+	work := calByName(t, s, demo.GmailAccountID, "Work")
+	team := calByName(t, s, demo.OutlookAccountID, "Team")
+	start := time.Now().Add(72 * time.Hour).Truncate(time.Hour)
+	ev, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, CalendarID: personal.ID, Title: "Pottery", Start: start,
+		Attendees: []models.Attendee{{Email: "sam@example.com"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc, err := s.MoveEventCheck(ev.ID, work.ID)
+	if err != nil || !mc.Allowed || mc.CrossAccount || mc.HasAttendees || mc.Recurring {
+		t.Fatalf("same-account check %+v %v", mc, err)
+	}
+	mc, _ = s.MoveEventCheck(ev.ID, team.ID)
+	if !mc.Allowed || !mc.CrossAccount || !mc.HasAttendees {
+		t.Fatalf("cross-account check %+v", mc)
+	}
+	if mc, _ := s.MoveEventCheck(ev.ID, personal.ID); mc.Allowed {
+		t.Fatal("move to the same calendar allowed")
+	}
+	// Same account (native move), with a new title.
+	moved, err := s.UpdateEvent(ev.ID, models.EventInput{CalendarID: work.ID, Title: "Pottery class", Start: start}, models.ScopeThis)
+	if err != nil || moved.CalendarID != work.ID || moved.Title != "Pottery class" {
+		t.Fatalf("moved %+v %v", moved, err)
+	}
+	if _, err := s.GetEvent(ev.ID); err == nil {
+		t.Fatal("original still cached")
+	}
+	// Across accounts: recreated in Outlook, removed from Gmail.
+	cross, err := s.UpdateEvent(moved.ID, models.EventInput{CalendarID: team.ID, Title: "Pottery class", Start: start}, models.ScopeThis)
+	if err != nil || cross.AccountID != demo.OutlookAccountID || cross.CalendarID != team.ID {
+		t.Fatalf("cross %+v %v", cross, err)
+	}
+	evs, _ := s.ListEvents(start.Add(-time.Hour), start.Add(2*time.Hour))
+	n := 0
+	for _, x := range evs {
+		if x.Title == "Pottery class" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d copies after the move", n)
+	}
+	// Series: only as a whole.
+	series, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, CalendarID: personal.ID, Title: "Yoga", Start: start,
+		Recurrence: models.EventRecurrence{Frequency: models.RepeatDaily, Count: 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateEvent(series.ID, models.EventInput{CalendarID: work.ID, Title: "Yoga", Start: start}, models.ScopeThis); err == nil {
+		t.Fatal("moved a single occurrence")
+	}
+	if _, err := s.UpdateEvent(series.ID, models.EventInput{CalendarID: work.ID, Title: "Yoga", Start: start}, models.ScopeSeries); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ = s.ListEvents(start.Add(-time.Hour), start.AddDate(0, 0, 4))
+	for _, x := range evs {
+		if x.Title == "Yoga" && x.CalendarID != work.ID {
+			t.Fatalf("occurrence left behind in %s", x.CalendarID)
+		}
+	}
+	// Someone else's event can't be moved.
+	all, _ := s.ListEvents(time.Now().AddDate(0, 0, -7), time.Now().AddDate(0, 0, 35))
+	qbr, _ := findEvent(all, "Quarterly business review")
+	if mc, _ := s.MoveEventCheck(qbr.ID, personal.ID); mc.Allowed {
+		t.Fatal("invitation movable")
+	}
+}
+
+func TestEventReminders(t *testing.T) {
+	dir := t.TempDir()
+	ui := &fakeUI{}
+	s, err := New(Options{DataDir: dir, Demo: true, UI: ui, Secrets: secrets.NewMemory(), Online: func(context.Context) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncCalendars(""); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := s.ListEvents(time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 3))
+	var target models.CalendarEvent
+	for _, ev := range evs {
+		if ev.Title == "Sprint planning" && ev.AccountID == demo.GmailAccountID {
+			target = ev
+		}
+	}
+	if target.ID == "" {
+		t.Fatal("no event")
+	}
+	old := nowFunc
+	defer func() { nowFunc = old }()
+	nowFunc = func() time.Time { return target.Start.Add(-8 * time.Minute) } // its 10-minute reminder fired 2 minutes ago
+	s.checkReminders()
+	s.checkReminders()
+	count := func() (n int) {
+		ui.mu.Lock()
+		defer ui.mu.Unlock()
+		for _, x := range ui.notified {
+			if x == target.Title {
+				n++
+			}
+		}
+		return n
+	}
+	if count() != 1 {
+		t.Fatalf("%d reminders", count())
+	}
+	s.Close()
+	// No repeat after a restart.
+	s2, err := New(Options{DataDir: dir, Demo: true, UI: ui, Secrets: secrets.NewMemory(), Online: func(context.Context) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	_ = s2.SyncCalendars("")
+	s2.checkReminders()
+	if count() != 1 {
+		t.Fatalf("%d reminders after restart", count())
+	}
+	// Too late (beyond the grace period): nothing.
+	nowFunc = func() time.Time { return target.Start.Add(30 * time.Minute) }
+	s2.checkReminders()
+	if count() != 1 {
+		t.Fatal("late reminder shown")
+	}
+	// Turned off: nothing at all.
+	st := s2.GetSettings()
+	st.CalendarNotifications = false
+	s2.SaveSettings(st)
+	ui.mu.Lock()
+	before := len(ui.notified)
+	ui.mu.Unlock()
+	for _, ev := range evs {
+		nowFunc = func() time.Time { return ev.Start.Add(-5 * time.Minute) }
+		s2.checkReminders()
+	}
+	ui.mu.Lock()
+	after := len(ui.notified)
+	ui.mu.Unlock()
+	if after != before {
+		t.Fatal("reminders while turned off")
+	}
+	if title, body := ReminderText(models.CalendarEvent{Title: "X", Start: time.Now().Add(10 * time.Minute), Location: "Room"}, time.Now()); title != "X" ||
+		!strings.HasPrefix(body, "In 10 minutes · ") || !strings.HasSuffix(body, " · Room") {
+		t.Fatalf("%q %q", title, body)
+	}
+}
+
+// failingCal wraps the demo calendar and fails writes on demand.
+type failingCal struct {
+	*demo.CalendarProvider
+	fail error
+}
+
+func (f *failingCal) Update(ctx context.Context, cal calendar.Calendar, id string, ev calendar.Event, scope string) (calendar.Event, error) {
+	if f.fail != nil {
+		return calendar.Event{}, f.fail
+	}
+	return f.CalendarProvider.Update(ctx, cal, id, ev, scope)
+}
+
+func (f *failingCal) Delete(ctx context.Context, cal calendar.Calendar, id, scope, etag string) error {
+	if f.fail != nil {
+		return f.fail
+	}
+	return f.CalendarProvider.Delete(ctx, cal, id, scope, etag)
+}
+
+func (f *failingCal) Create(ctx context.Context, cal calendar.Calendar, ev calendar.Event) (calendar.Event, error) {
+	if f.fail != nil {
+		return calendar.Event{}, f.fail
+	}
+	return f.CalendarProvider.Create(ctx, cal, ev)
+}
+
+func TestCalendarOptimisticReverts(t *testing.T) {
+	fc := map[string]*failingCal{}
+	s, err := New(Options{DataDir: t.TempDir(), Demo: true, UI: &fakeUI{}, Secrets: secrets.NewMemory(),
+		Online: func(context.Context) bool { return true },
+		CalendarFactory: func(acct models.Account) (calendar.Provider, error) {
+			f := &failingCal{CalendarProvider: demo.NewCalendar(acct)}
+			fc[acct.ID] = f
+			return f, nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.SyncCalendars(""); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := s.ListEvents(time.Now().AddDate(0, 0, -7), time.Now().AddDate(0, 0, 35))
+	din, _ := findEvent(evs, "Dinner with Sam")
+	fc[din.AccountID].fail = &httpx.Error{Service: "Google Calendar", Status: 500, Message: "backend error"}
+	if _, err := s.UpdateEvent(din.ID, models.EventInput{Title: "Changed", Start: din.Start}, models.ScopeThis); err == nil ||
+		!strings.Contains(err.Error(), "saving the event failed") {
+		t.Fatalf("update error %v", err)
+	}
+	if got, _ := s.GetEvent(din.ID); got.Title != "Dinner with Sam" || !got.Start.Equal(din.Start) {
+		t.Fatalf("not reverted %+v", got)
+	}
+	if err := s.DeleteEvent(din.ID, models.ScopeThis); err == nil {
+		t.Fatal("delete should fail")
+	}
+	if _, err := s.GetEvent(din.ID); err != nil {
+		t.Fatal("failed delete not reverted")
+	}
+	before, _ := s.ListEvents(time.Now(), time.Now().AddDate(0, 0, 10))
+	if _, err := s.CreateEvent(models.EventInput{AccountID: din.AccountID, Title: "Doomed", Start: time.Now().Add(time.Hour)}); err == nil {
+		t.Fatal("create should fail")
+	}
+	after, _ := s.ListEvents(time.Now(), time.Now().AddDate(0, 0, 10))
+	if len(after) != len(before) {
+		t.Fatal("failed create left a placeholder")
+	}
+	// Losing calendar access on a write withdraws consent.
+	fc[din.AccountID].fail = calendar.ErrNoConsent
+	if _, err := s.UpdateEvent(din.ID, models.EventInput{Title: "x", Start: din.Start}, models.ScopeThis); err == nil || !strings.Contains(err.Error(), "Enable calendar") {
+		t.Fatalf("no consent %v", err)
+	}
+	if a, _ := s.store.Account(din.AccountID); a.CalendarConsent {
+		t.Fatal("consent kept")
 	}
 }

@@ -23,6 +23,7 @@ type fake struct {
 	tokenGone bool
 	requests  []string
 	bodies    []map[string]any
+	ifMatch   []string
 }
 
 func (f *fake) handler(t *testing.T) http.HandlerFunc {
@@ -105,14 +106,27 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 			}
 			body["id"], body["organizer"] = "created", map[string]any{"email": "me@gmail.com", "self": true}
 			write(body)
-		case strings.HasPrefix(r.URL.Path, "/calendars/me@gmail.com/events/") && r.Method == "PATCH":
-			body["id"] = strings.TrimPrefix(r.URL.Path, "/calendars/me@gmail.com/events/")
+		case strings.HasPrefix(r.URL.Path, "/calendars/") && r.Method == "PATCH":
+			f.mu.Lock()
+			f.ifMatch = append(f.ifMatch, r.Header.Get("If-Match"))
+			f.mu.Unlock()
+			body["id"] = r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 			if body["start"] == nil {
 				body["start"] = map[string]any{"dateTime": "2026-10-20T12:00:00+02:00"}
 				body["end"] = map[string]any{"dateTime": "2026-10-20T13:00:00+02:00"}
 			}
 			write(body)
+		case strings.HasSuffix(r.URL.Path, "/move") && r.Method == "POST":
+			if q.Get("destination") != "work@group" {
+				t.Errorf("move destination %v", q)
+			}
+			write(map[string]any{"id": "single", "summary": "Lunch"})
 		case r.Method == "DELETE":
+			if r.Header.Get("If-Match") == `"stale"` {
+				w.WriteHeader(412)
+				write(map[string]any{"error": map[string]any{"code": 412, "message": "Precondition Failed"}})
+				return
+			}
 			if strings.HasSuffix(r.URL.Path, "/gone") {
 				w.WriteHeader(410)
 				return
@@ -235,10 +249,10 @@ func TestCRUDRespondAndScopes(t *testing.T) {
 	if rec := f.bodies[len(f.bodies)-1]["recurrence"].([]any); rec[0] != "RRULE:FREQ=WEEKLY;BYDAY=MO" {
 		t.Fatalf("rule lost %v", rec)
 	}
-	if err := c.Delete(ctx, me, "x", models.ScopeThis); err != nil {
+	if err := c.Delete(ctx, me, "x", models.ScopeThis, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Delete(ctx, me, "gone", models.ScopeThis); err != nil {
+	if err := c.Delete(ctx, me, "gone", models.ScopeThis, ""); err != nil {
 		t.Fatalf("already deleted: %v", err)
 	}
 	if err := c.Respond(ctx, me, "single", models.ResponseTentative); err != nil {
@@ -256,5 +270,50 @@ func TestCRUDRespondAndScopes(t *testing.T) {
 	f.mu.Unlock()
 	if _, err := c.Calendars(ctx); !errors.Is(err, calendar.ErrNoConsent) {
 		t.Fatalf("insufficient scope: %v", err)
+	}
+}
+
+func TestMoveEtagDSTAndEscaping(t *testing.T) {
+	c, f := newTest(t)
+	ctx := context.Background()
+	me := calendar.Calendar{RemoteID: "me@gmail.com", CanEdit: true}
+	work := calendar.Calendar{RemoteID: "work@group", CanEdit: true}
+	// Crossing the end of DST in Amsterdam (Oct 25 2026, 03:00 → 02:00).
+	ev := calendar.Event{Title: "Night shift", TimeZone: "Europe/Amsterdam", Description: "<script>x</script>\nline 2",
+		Start: time.Date(2026, 10, 24, 23, 30, 0, 0, time.UTC), End: time.Date(2026, 10, 25, 2, 30, 0, 0, time.UTC)}
+	if _, err := c.Create(ctx, me, ev); err != nil {
+		t.Fatal(err)
+	}
+	b := f.bodies[len(f.bodies)-1]
+	if s, e := b["start"].(map[string]any)["dateTime"], b["end"].(map[string]any)["dateTime"]; s != "2026-10-25T01:30:00+02:00" || e != "2026-10-25T03:30:00+01:00" {
+		t.Fatalf("DST times %v %v", s, e)
+	}
+	if d := b["description"]; d != "&lt;script&gt;x&lt;/script&gt;<br>line 2" {
+		t.Fatalf("description %q", d)
+	}
+	if plainText(b["description"].(string)) != "<script>x</script>\nline 2" {
+		t.Fatalf("round trip %q", plainText(b["description"].(string)))
+	}
+	// Conditional update and delete.
+	ev.ETag = `"7"`
+	if _, err := c.Update(ctx, me, "single", ev, models.ScopeThis); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.ifMatch[len(f.ifMatch)-1]; got != `"7"` {
+		t.Fatalf("If-Match %q", got)
+	}
+	if err := c.Delete(ctx, me, "single", models.ScopeThis, `"stale"`); !errors.Is(err, calendar.ErrConflict) {
+		t.Fatalf("stale delete %v", err)
+	}
+	// Move: events.move, then the fields are applied in the target.
+	moved, err := c.Move(ctx, me, work, "single", calendar.Event{Title: "Lunch (moved)", Start: ev.Start, End: ev.End})
+	if err != nil || moved.RemoteID != "single" {
+		t.Fatalf("move %+v %v", moved, err)
+	}
+	if last := f.requests[len(f.requests)-1]; !strings.HasPrefix(last, "PATCH /calendars/work@group/events/single") {
+		t.Fatalf("after move %s", last)
+	}
+	if _, err := c.Move(ctx, me, calendar.Calendar{RemoteID: "ro"}, "single", ev); !errors.Is(err, calendar.ErrReadOnly) {
+		t.Fatalf("move to read-only %v", err)
 	}
 }

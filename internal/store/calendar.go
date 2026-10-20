@@ -142,7 +142,8 @@ func (s *Store) SetCalendarSync(id, state string, start, end time.Time) error {
 
 const eventCols = `e.id, e.calendar_id, e.account_id, e.remote_id, e.series_remote, e.ical_uid, e.title, e.start_ms, e.end_ms, e.all_day,
 	e.time_zone, e.location, e.description, e.attendees, e.organizer, e.is_organizer, e.my_response, e.meeting_url, e.is_recurring,
-	e.recurrence, e.rrule, e.status, e.reminders, e.can_edit, e.updated_ms`
+	e.recurrence, e.rrule, e.status, e.reminders,
+	(e.can_edit AND coalesce((SELECT c2.can_edit FROM calendars c2 WHERE c2.id = e.calendar_id), 0)), e.updated_ms, e.etag`
 
 // EventRow is a stored event with its remote ids.
 type EventRow struct {
@@ -150,6 +151,7 @@ type EventRow struct {
 	RemoteID       string
 	SeriesRemoteID string
 	ICalUID        string
+	ETag           string
 }
 
 func scanEvent(sc interface{ Scan(...any) error }) (EventRow, error) {
@@ -159,7 +161,7 @@ func scanEvent(sc interface{ Scan(...any) error }) (EventRow, error) {
 	var atts, org, rem string
 	err := sc.Scan(&e.ID, &e.CalendarID, &e.AccountID, &e.RemoteID, &e.SeriesRemoteID, &e.ICalUID, &e.Title, &start, &end, &allDay,
 		&e.TimeZone, &e.Location, &e.Description, &atts, &org, &isOrg, &e.MyResponse, &e.MeetingURL, &isRec,
-		&e.Recurrence, &e.RRule, &e.Status, &rem, &canEdit, &updated)
+		&e.Recurrence, &e.RRule, &e.Status, &rem, &canEdit, &updated, &e.ETag)
 	if err != nil {
 		return e, err
 	}
@@ -203,8 +205,8 @@ func (s *Store) ApplyEvents(cal CalendarRow, ch EventChanges) ([]string, error) 
 	err := s.tx(context.Background(), func(tx *sql.Tx) error {
 		up, err := tx.Prepare(`INSERT INTO events(id, calendar_id, account_id, remote_id, series_remote, ical_uid, title, start_ms, end_ms,
 			all_day, time_zone, location, description, attendees, organizer, is_organizer, my_response, meeting_url, is_recurring,
-			recurrence, rrule, status, reminders, can_edit, updated_ms)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			recurrence, rrule, status, reminders, can_edit, updated_ms, etag)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(id) DO UPDATE SET series_remote = excluded.series_remote, ical_uid = excluded.ical_uid, title = excluded.title,
 				start_ms = excluded.start_ms, end_ms = excluded.end_ms, all_day = excluded.all_day, time_zone = excluded.time_zone,
 				location = excluded.location, description = excluded.description, attendees = excluded.attendees,
@@ -212,7 +214,8 @@ func (s *Store) ApplyEvents(cal CalendarRow, ch EventChanges) ([]string, error) 
 				meeting_url = excluded.meeting_url, is_recurring = excluded.is_recurring,
 				recurrence = CASE WHEN excluded.recurrence != '' THEN excluded.recurrence ELSE events.recurrence END,
 				rrule = CASE WHEN excluded.rrule != '' THEN excluded.rrule ELSE events.rrule END,
-				status = excluded.status, reminders = excluded.reminders, can_edit = excluded.can_edit, updated_ms = excluded.updated_ms`)
+				status = excluded.status, reminders = excluded.reminders, can_edit = excluded.can_edit, updated_ms = excluded.updated_ms,
+				etag = excluded.etag`)
 		if err != nil {
 			return err
 		}
@@ -228,7 +231,7 @@ func (s *Store) ApplyEvents(cal CalendarRow, ch EventChanges) ([]string, error) 
 			if _, err := up.Exec(id, cal.ID, cal.AccountID, ev.RemoteID, ev.SeriesRemoteID, ev.ICalUID, ev.Title, toMillis(ev.Start),
 				toMillis(ev.End), boolInt(ev.AllDay), ev.TimeZone, ev.Location, ev.Description, string(atts), string(org),
 				boolInt(ev.IsOrganizer), ev.MyResponse, ev.MeetingURL, boolInt(ev.IsRecurring), ev.Recurrence, ev.RRule, ev.Status,
-				string(rem), boolInt(ev.CanEdit), toMillis(ev.Updated)); err != nil {
+				string(rem), boolInt(ev.CanEdit), toMillis(ev.Updated), ev.ETag); err != nil {
 				return err
 			}
 		}
@@ -277,14 +280,15 @@ func nonNilInts(a []int) []int {
 }
 
 // Events lists events overlapping [start, end) of visible calendars of
-// accounts with calendars enabled, ordered by start.
-func (s *Store) Events(start, end time.Time) ([]models.CalendarEvent, error) {
+// accounts with calendars enabled, ordered by start. Declined invitations
+// are left out unless showDeclined.
+func (s *Store) Events(start, end time.Time, showDeclined bool) ([]models.CalendarEvent, error) {
 	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events e
 		JOIN calendars c ON c.id = e.calendar_id
 		JOIN accounts a ON a.id = c.account_id
 		WHERE c.visible = 1 AND a.calendar_enabled = 1 AND a.calendar_consent = 1 AND e.status != 'cancelled'
-			AND e.start_ms < ? AND e.end_ms > ?
-		ORDER BY e.start_ms, e.end_ms DESC, e.id`, toMillis(end), toMillis(start))
+			AND e.start_ms < ? AND e.end_ms > ? AND (? OR e.my_response != 'declined')
+		ORDER BY e.start_ms, e.end_ms DESC, e.id`, toMillis(end), toMillis(start), showDeclined)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +385,7 @@ func rowToProvider(r EventRow) calendar.Event {
 		Start: e.Start, End: e.End, AllDay: e.AllDay, TimeZone: e.TimeZone, Location: e.Location, Description: e.Description,
 		Attendees: e.Attendees, Organizer: e.Organizer, IsOrganizer: e.IsOrganizer, MyResponse: e.MyResponse, MeetingURL: e.MeetingURL,
 		IsRecurring: e.IsRecurring, Recurrence: e.Recurrence, RRule: e.RRule, Status: e.Status, Reminders: e.Reminders,
-		CanEdit: e.CanEdit, Updated: e.UpdatedAt}
+		CanEdit: e.CanEdit, Updated: e.UpdatedAt, ETag: r.ETag}
 }
 
 // ToProvider converts a stored event to the provider form.

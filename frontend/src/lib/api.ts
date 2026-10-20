@@ -123,9 +123,7 @@ export const USED_METHODS = [
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
-const CALENDAR_PREFS = ['calendarWeekStart', 'calendarDefaultView', 'calendarDefaultDuration', 'calendarShowDeclined', 'calendarDefaultReminder'] as const
-
-export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetAccountCalendarEnabled', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent']
+export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetAccountCalendarEnabled', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
 export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', ...CALENDAR_METHODS]
 
@@ -198,7 +196,32 @@ export function normMessage(m: Message): Message {
   return m
 }
 
-export function normEvent(e: CalendarEvent): CalendarEvent {
+// ---- calendar wire format ----
+// The backend sends UTC times, all-day events as 00:00 UTC dates with an exclusive end,
+// `recurrence` as a human summary plus `rrule`, and responses none|accepted|tentative|declined|organizer.
+// The UI works with local "YYYY-MM-DD" all-day dates, an RRULE in `recurrence` and
+// myResponse "" (organizer) / "needsAction" / accepted / tentative / declined.
+
+const RRULE_RE = /^(RRULE:)?FREQ=/i
+
+function wireResponse(r: string | undefined): string {
+  if (!r || r === 'none') return 'needsAction'
+  return r
+}
+
+export function normEvent(raw: CalendarEvent): CalendarEvent {
+  const w = raw as CalendarEvent & { rrule?: string; attendees: (CalendarEvent['attendees'][number] & { optional?: boolean })[] | null }
+  const rrule = (w.rrule || (RRULE_RE.test(w.recurrence ?? '') ? w.recurrence : '')).replace(/^RRULE:/i, '')
+  const allDayDate = (v: string) => (v ? v.slice(0, 10) : v) // calendar dates, never shifted to local time
+  const e: CalendarEvent = {
+    ...w,
+    start: w.allDay ? allDayDate(w.start) : w.start,
+    end: w.allDay ? allDayDate(w.end) : w.end,
+    recurrence: rrule,
+    recurrenceText: rrule && w.recurrence && !RRULE_RE.test(w.recurrence) ? w.recurrence : w.recurrenceText,
+    myResponse: w.isOrganizer || w.myResponse === 'organizer' ? '' : wireResponse(w.myResponse),
+    attendees: (w.attendees ?? []).map((a) => ({ ...a, response: a.response === 'organizer' ? 'accepted' : wireResponse(a.response) })),
+  }
   return {
     ...e,
     title: e.title ?? '',
@@ -213,6 +236,37 @@ export function normEvent(e: CalendarEvent): CalendarEvent {
     seriesId: e.seriesId ?? '',
     timeZone: e.timeZone ?? '',
     status: e.status || 'confirmed',
+  }
+}
+
+export interface MoveCheck { allowed: boolean; reason: string; crossAccount: boolean; hasAttendees: boolean; recurring: boolean }
+
+/** UI event input → backend EventInput. */
+export async function toWireInput(i: EventInput & { accountId?: string }): Promise<Record<string, unknown>> {
+  // Lazy: calendar helpers stay out of the mail bundle.
+  const { parseRRule } = await import('./calendar')
+  const rule = parseRRule(i.recurrence)
+  const day = (ymd: string) => `${ymd.slice(0, 10)}T00:00:00Z`
+  // The backend has no meeting-link field yet: keep the link in the description so it isn't lost.
+  const link = i.meetingUrl?.trim()
+  const description = link && !i.description.includes(link) ? `${i.description.trim()}${i.description.trim() ? '\n\n' : ''}Join: ${link}` : i.description
+  return {
+    accountId: i.accountId ?? '',
+    calendarId: i.calendarId,
+    title: i.title,
+    start: i.allDay ? day(i.start) : new Date(i.start).toISOString(),
+    end: i.allDay ? day(i.end) : new Date(i.end).toISOString(),
+    allDay: i.allDay,
+    timeZone: i.timeZone,
+    location: i.location,
+    description,
+    attendees: i.attendees.map((a) => ({ name: a.name, email: a.email, response: a.response === 'needsAction' ? 'none' : a.response, optional: false })),
+    recurrence: {
+      frequency: rule.freq,
+      until: rule.until ? new Date(`${rule.until}T23:59:59`).toISOString() : null,
+      count: rule.count ?? 0,
+    },
+    reminderMinutes: i.reminders,
   }
 }
 
@@ -250,11 +304,12 @@ export function normSettings(s: Settings): Settings {
     syncDepthDays: s.syncDepthDays ?? 90,
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
     // Calendar preferences: backend values win; older backends keep a local copy.
-    calendarWeekStart: s.calendarWeekStart ?? readLocal('calendarWeekStart', -1),
+    calendarWeekStart: s.calendarWeekStart || 'auto',
     calendarDefaultView: s.calendarDefaultView || readLocal('calendarDefaultView', 'week'),
     calendarDefaultDuration: s.calendarDefaultDuration || readLocal('calendarDefaultDuration', 30),
     calendarShowDeclined: s.calendarShowDeclined ?? readLocal('calendarShowDeclined', false),
     calendarDefaultReminder: s.calendarDefaultReminder ?? readLocal('calendarDefaultReminder', 10),
+    calendarNotifications: s.calendarNotifications ?? true,
   }
 }
 
@@ -293,7 +348,7 @@ function normQuery(q: Partial<ListQuery>): ListQuery {
 
 export const api = {
   // ---- accounts
-  getAccounts: async () => ((await call<Account[] | null>('GetAccounts')) ?? []).map((a) => ({ ...a, color: safeColor(a.color, '#64748b') })),
+  getAccounts: async () => ((await call<Account[] | null>('GetAccounts')) ?? []).map((a) => ({ ...a, color: safeColor(a.color, '#64748b'), calendarEnabled: a.calendarEnabled ?? true })),
   addAccount: (provider: string) => call<Account>('AddAccount', provider),
   cancelAddAccount: () => call<void>('CancelAddAccount'),
   removeAccount: (id: string) => call<void>('RemoveAccount', id),
@@ -336,8 +391,12 @@ export const api = {
   /** Events overlapping [start, end) (RFC 3339), recurring events expanded into occurrences. */
   listEvents: async (start: string, end: string) => ((await call<CalendarEvent[] | null>('ListEvents', start, end)) ?? []).map(normEvent),
   getEvent: async (id: string) => normEvent(await call<CalendarEvent>('GetEvent', id)),
-  createEvent: async (input: EventInput) => normEvent(await call<CalendarEvent>('CreateEvent', input)),
-  updateEvent: async (id: string, input: EventInput, scope: RecurrenceScope) => normEvent(await call<CalendarEvent>('UpdateEvent', id, input, scope)),
+  createEvent: async (input: EventInput) => normEvent(await call<CalendarEvent>('CreateEvent', await toWireInput(input))),
+  updateEvent: async (id: string, input: EventInput, scope: RecurrenceScope) => normEvent(await call<CalendarEvent>('UpdateEvent', id, await toWireInput(input), scope)),
+  /** Moving an event to another calendar: does it cross accounts / have guests? (backend polish pass) */
+  moveEventCheck: async (id: string, calendarId: string): Promise<MoveCheck> =>
+    (await call<MoveCheck | null>('MoveEventCheck', id, calendarId)) ?? { allowed: true, reason: '', crossAccount: false, hasAttendees: false, recurring: false },
+  syncCalendars: (accountId = '') => call<void>('SyncCalendars', accountId),
   deleteEvent: (id: string, scope: RecurrenceScope) => call<void>('DeleteEvent', id, scope),
   respondToEvent: (id: string, response: AttendeeResponse) => call<void>('RespondToEvent', id, response),
   checkForUpdate: () => call<UpdateInfo>('CheckForUpdate'),
@@ -384,10 +443,7 @@ export const api = {
   getSettings: async () => normSettings(await call<Settings>('GetSettings')),
   // Reading/sending preferences now live in the backend's Settings; the
   // readLocal() fallbacks in normSettings only cover older backends.
-  saveSettings: (s: Settings) => {
-    for (const k of CALENDAR_PREFS) if (s[k] !== undefined) writeLocal(k, s[k])
-    return call<void>('SaveSettings', s)
-  },
+  saveSettings: (s: Settings) => call<void>('SaveSettings', s),
 
   setOpenRouterKey: (key: string) => call<void>('SetOpenRouterKey', key),
   getAppInfo: () => call<AppInfo>('GetAppInfo'),

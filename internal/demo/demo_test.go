@@ -230,7 +230,7 @@ func TestCalendarProvider(t *testing.T) {
 		if err := p.Respond(ctx, work, occ[0].RemoteID, models.ResponseAccepted); err != nil {
 			t.Fatal(err)
 		}
-		if err := p.Delete(ctx, work, occ[1].RemoteID, models.ScopeSeries); err != nil {
+		if err := p.Delete(ctx, work, occ[1].RemoteID, models.ScopeSeries, ""); err != nil {
 			t.Fatal(err)
 		}
 		evs, _ = p.Range(ctx, work, time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 5))

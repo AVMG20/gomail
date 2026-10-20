@@ -13,10 +13,12 @@ import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ invite: EventInvite }>()
 const ui = useUiStore()
-const response = ref<AttendeeResponse>(props.invite.myResponse)
+const response = ref<AttendeeResponse>(props.invite.myResponse ?? '')
 const busy = ref(false)
 const cancelled = computed(() => props.invite.method?.toUpperCase() === 'CANCEL')
 const canRespond = computed(() => !!props.invite.eventId && hasMethod('RespondToEvent') && !cancelled.value)
+/** Not on a synced calendar yet: show the RSVP buttons disabled with an explanation. */
+const pending = computed(() => !props.invite.eventId && hasMethod('RespondToEvent') && !cancelled.value)
 const OPTIONS: { value: AttendeeResponse; label: string }[] = [
   { value: 'accepted', label: 'Accept' }, { value: 'tentative', label: 'Maybe' }, { value: 'declined', label: 'Decline' },
 ]
@@ -61,14 +63,15 @@ function viewInCalendar() {
       <p v-if="invite.location" class="text-muted-foreground mt-0.5 flex items-center gap-1 truncate text-xs"><MapPinIcon class="size-3 shrink-0" /> {{ invite.location }}</p>
     </div>
     <div class="flex items-center gap-1.5">
-      <template v-if="canRespond">
+      <template v-if="canRespond || pending">
         <Button
           v-for="o in OPTIONS"
           :key="o.value"
           size="xs"
           :variant="response === o.value ? 'default' : 'outline'"
           :aria-pressed="response === o.value"
-          :disabled="busy"
+          :disabled="busy || pending"
+          :data-tip="pending ? 'Available once this event syncs to your calendar' : undefined"
           @click="respond(o.value)"
         >{{ o.label }}</Button>
       </template>

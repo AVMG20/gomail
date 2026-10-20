@@ -108,6 +108,9 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 			write(map[string]any{"value": []any{ev("t1", "Team lunch", "2026-10-23T11:00:00.0000000", "2026-10-23T12:00:00.0000000", nil)}})
 		case r.URL.Path == "/me/calendars/cal-main/events" && r.Method == "POST":
 			write(ev("new1", body["subject"].(string), "2026-11-02T09:00:00.0000000", "2026-11-02T10:00:00.0000000", nil))
+		case strings.HasPrefix(r.URL.Path, "/me/events/") && r.Method == "PATCH" && r.Header.Get("If-Match") == `W/"old"`:
+			w.WriteHeader(412)
+			write(map[string]any{"error": map[string]any{"code": "ErrorIrresolvableConflict", "message": "changed"}})
 		case strings.HasPrefix(r.URL.Path, "/me/events/") && r.Method == "PATCH":
 			write(ev(strings.TrimPrefix(r.URL.Path, "/me/events/"), "Patched", "2026-01-05T08:30:00.0000000", "2026-01-05T08:45:00.0000000", nil))
 		case strings.HasPrefix(r.URL.Path, "/me/events/") && r.Method == "DELETE":
@@ -232,7 +235,7 @@ func TestCRUDRespondAndScopes(t *testing.T) {
 	if last := f.requests[len(f.requests)-1]; !strings.HasPrefix(last, "PATCH /me/events/occ1") {
 		t.Fatalf("occurrence target %s", last)
 	}
-	if err := c.Delete(ctx, main, "e1", models.ScopeThis); err != nil {
+	if err := c.Delete(ctx, main, "e1", models.ScopeThis, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Respond(ctx, main, "occ1", models.ResponseTentative); err != nil {
@@ -246,5 +249,46 @@ func TestCRUDRespondAndScopes(t *testing.T) {
 	f.mu.Unlock()
 	if _, err := c.Calendars(ctx); !errors.Is(err, calendar.ErrNoConsent) {
 		t.Fatalf("denied %v", err)
+	}
+}
+
+func TestAllDayZonesMoveAndConflicts(t *testing.T) {
+	cal := calendar.Calendar{RemoteID: "cal-main", Primary: true, CanEdit: true}
+	// An all-day event of a Tokyo calendar reported as 15:00Z the day before
+	// stays on its date; so does a Pacific one (07:00Z/08:00Z).
+	for _, c := range []struct{ start, end, tz, want string }{
+		{"2026-10-23T15:00:00.0000000", "2026-10-24T15:00:00.0000000", "Tokyo Standard Time", "2026-10-24"},
+		{"2026-10-24T07:00:00.0000000", "2026-10-25T08:00:00.0000000", "Pacific Standard Time", "2026-10-24"},
+		{"2026-10-24T00:00:00.0000000", "2026-10-25T00:00:00.0000000", "Some Unknown Zone", "2026-10-24"},
+		{"2026-10-23T22:00:00.0000000", "2026-10-24T22:00:00.0000000", "Some Unknown Zone", "2026-10-24"},
+	} {
+		g := gEvent{ID: "x", IsAllDay: true, OriginalStartTimeZone: c.tz, Start: gTime{DateTime: c.start}, End: gTime{DateTime: c.end}}
+		ev := toEvent(g, cal)
+		if ev.Start.Format("2006-01-02") != c.want || ev.End.Sub(ev.Start) != 24*time.Hour || ev.Start.Hour() != 0 {
+			t.Errorf("%s %s: %v – %v", c.tz, c.start, ev.Start, ev.End)
+		}
+	}
+	if ev := toEvent(gEvent{ID: "y", OriginalStartTimeZone: "Mars Standard Time", Start: gTime{DateTime: "2026-10-24T10:00:00"}, End: gTime{DateTime: "2026-10-24T11:00:00"}}, cal); ev.TimeZone != "" || ev.Start.Hour() != 10 {
+		t.Fatalf("unknown zone %+v", ev)
+	}
+	c, f := newTest(t)
+	ctx := context.Background()
+	// Writing with an unmapped zone falls back to UTC.
+	if _, err := c.Create(ctx, cal, calendar.Event{Title: "x", TimeZone: "Antarctica/Troll", Start: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC), End: time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.bodies[len(f.bodies)-1]["start"].(map[string]any); st["timeZone"] != "UTC" || st["dateTime"] != "2026-11-02T09:00:00" {
+		t.Fatalf("fallback %v", st)
+	}
+	if _, err := c.Update(ctx, cal, "e1", calendar.Event{Title: "x", ETag: `W/"old"`}, models.ScopeThis); !errors.Is(err, calendar.ErrConflict) {
+		t.Fatalf("conflict %v", err)
+	}
+	// Move = create in the target + delete the original.
+	n := len(f.requests)
+	if _, err := c.Move(ctx, calendar.Calendar{RemoteID: "cal-team"}, cal, "e1", calendar.Event{Title: "Moved", Start: time.Now(), End: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.requests[n:]; len(got) != 2 || !strings.HasPrefix(got[0], "POST /me/calendars/cal-main/events") || !strings.HasPrefix(got[1], "DELETE /me/events/e1") {
+		t.Fatalf("move requests %v", got)
 	}
 }

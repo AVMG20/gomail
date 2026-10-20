@@ -321,6 +321,11 @@ func (c *Client) JSONRetry(ctx context.Context, method, path string, in, out any
 	return c.doJSON(ctx, Request{Method: method, Path: path, Idempotent: true}, in, out)
 }
 
+// JSONHeaders is JSON with extra request headers (e.g. If-Match).
+func (c *Client) JSONHeaders(ctx context.Context, method, path string, headers map[string]string, in, out any) error {
+	return c.doJSON(ctx, Request{Method: method, Path: path, Headers: headers}, in, out)
+}
+
 func (c *Client) doJSON(ctx context.Context, r Request, in, out any) error {
 	var body []byte
 	ct := ""

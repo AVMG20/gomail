@@ -58,7 +58,7 @@ const VIEWS: { id: CalendarViewKind; label: string; key: string }[] = [
 const fcEvents = computed(() =>
   cal.visibleEvents.map((e) => {
     const c = cal.calendarMap.get(e.calendarId)
-    const editable = !!c?.canEdit && e.isOrganizer && !e.id.startsWith('tmp_')
+    const editable = cal.canEditEvent(e) && !e.id.startsWith('tmp_')
     return {
       id: e.id, title: e.title || 'Untitled event', start: e.start, end: e.end || undefined, allDay: e.allDay,
       editable, startEditable: editable, durationEditable: editable,
@@ -310,6 +310,20 @@ watch(() => cal.focusDate, (d) => {
     cal.focusDate = null
   }
 })
+// Reminder notification click: jump to the event and show its details.
+watch(() => cal.openEventId, async (id) => {
+  if (!id) return
+  cal.openEventId = null
+  try {
+    const ev = await api.getEvent(id)
+    const date = new Date(ev.allDay ? `${ev.start}T00:00` : ev.start)
+    if (api$()) api$()!.gotoDate(date)
+    else cal.focusDate = date
+    details.value = { anchor: pointRect(null), event: ev }
+  } catch (e) {
+    toast.error('Couldn’t open the event', { description: errorMessage(e) })
+  }
+}, { immediate: true })
 watch(() => cal.weekStart, (fd) => api$()?.setOption('firstDay', fd))
 watch(compact, async () => {
   await nextTick()
@@ -385,6 +399,7 @@ const consentMissing = computed(() => accounts.accounts.filter((a) => a.calendar
     <QuickCreate v-if="quick" :key="quick.start.getTime()" :anchor="quick.anchor" :start="quick.start" :end="quick.end" :all-day="quick.allDay" @close="closeQuick" />
     <EventDetails v-if="details" :key="details.event.id" :anchor="details.anchor" :event="details.event" @close="details = null" />
     <EventEditor v-if="editorRequest" :key="editorRequest.event?.id ?? 'new'" />
-    <ScopePrompt />
+    <!-- While the editor (a modal) is open it hosts the prompts itself, nested, so they stay clickable. -->
+    <ScopePrompt v-if="!editorRequest" />
   </div>
 </template>

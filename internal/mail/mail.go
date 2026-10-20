@@ -86,6 +86,9 @@ type Body struct {
 	Unsubscribe Unsubscribe
 	// Calendar is the raw text/calendar (ICS) part of an invitation, if any.
 	Calendar string
+	// Invite is a meeting message the provider describes natively (Outlook
+	// event messages); it takes precedence over Calendar.
+	Invite *models.Invite
 }
 
 // SyncResult is what a provider returns from one sync round.

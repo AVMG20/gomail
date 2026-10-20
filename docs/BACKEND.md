@@ -434,15 +434,66 @@ restored if the provider refuses.
 - `RespondToEvent` answers for the whole series. Google patches your
   attendee status; Graph uses accept/tentativelyAccept/decline. Invitations
   and responses are sent to the other attendees.
-- Moving events between calendars isn't supported.
+- Updates and deletes send the synced etag as `If-Match` (Google `etag`,
+  Graph `@odata.etag`). If the event changed elsewhere (412), the change is
+  reverted, the calendar is resynced and the error says "This event changed
+  elsewhere". Series updates go to the master and aren't conditional.
+- **Moving**: `UpdateEvent` with another `calendarId` moves the event, or
+  the whole series (scope "series"; single occurrences can't move).
+  - Within a Google account it uses `events.move`, so guests aren't
+    re-invited.
+  - Within an Outlook account, Graph has no move: the event is created in
+    the target calendar and deleted from the source.
+  - Across accounts it is created in the target and deleted from the
+    source.
+  - Only the organizer can move an event. Ask the user first with
+    `MoveEventCheck(id, calendarId) → {allowed, reason, crossAccount,
+    hasAttendees, recurring}`. `hasAttendees` means attendees get a
+    cancellation and a new invitation.
+- Attendee emails are validated and de-duplicated. Descriptions are plain
+  text, HTML-escaped when sent to Google and converted back to text when
+  read.
+- `canEdit` also requires the calendar to be writable now, so a permission
+  downgrade takes effect without a resync. Deleted calendars take their
+  events with them.
+
+**Reminders.**
+- With `calendarNotifications` (default true), a desktop notification
+  appears for each reminder of upcoming events of enabled accounts and
+  visible calendars. The event's own reminders are used, else
+  `calendarDefaultReminder` (default 10 minutes).
+- Declined and cancelled events are skipped. All-day events count from
+  local midnight.
+- A reminder is shown once, at most 10 minutes late (after sleep or a
+  restart). Shown reminders are remembered in the database, so restarts
+  don't repeat them.
+- Clicking one emits `calendar:open {eventId}`.
+
+**Calendar settings** (stored for the Calendar tab):
+- `calendarWeekStart` (`auto` | `sunday` | `monday` | `saturday`)
+- `calendarDefaultView` (`week` | `day` | `month` | `agenda`)
+- `calendarDefaultDuration` (minutes, default 30)
+- `calendarShowDeclined` (default false; `ListEvents` leaves declined
+  invitations out unless it is on)
+- `calendarDefaultReminder`
+- `calendarNotifications`
+
+**Time zones and all-day events.** Graph sometimes reports all-day
+boundaries converted from the event's zone (for example 15:00Z for
+midnight in Tokyo). gomail recovers the date from the original zone, or
+from the nearest midnight when the zone is unknown, so all-day events never
+shift by a day. Windows zone names that aren't mapped leave `timeZone`
+empty and fall back to UTC when writing. Send all-day dates to
+`CreateEvent`/`UpdateEvent` either as `YYYY-MM-DDT00:00:00Z` or with the
+local offset: the date part is used.
 
 **Invitations in mail.** A `text/calendar` part (Gmail, and the demo
 invitation) is parsed into `Message.invite {uid, title, start, end, allDay,
 location, organizer, method, eventId}`. `eventId` points to the synced
 event with the same iCalUID, so the UI can call `RespondToEvent`. Outlook
-delivers invitations as event messages without an ICS part, so Outlook
-invitations aren't detected in mail; they still appear in the calendar,
-where you can answer them.
+meeting messages (`#microsoft.graph.eventMessage`) carry no ICS part.
+Their event is read with `$expand=microsoft.graph.eventMessage/event`
+(method from `meetingMessageType`), and `eventId` is linked the same way.
 
 ## Data directory
 

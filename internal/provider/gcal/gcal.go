@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strings"
@@ -38,6 +39,9 @@ func (c *Client) SetSleep(f func(context.Context, time.Duration) error) { c.api.
 
 // wrap maps "insufficient scopes" to calendar.ErrNoConsent.
 func wrap(err error) error {
+	if httpx.StatusOf(err) == http.StatusPreconditionFailed {
+		return fmt.Errorf("%w: %v", calendar.ErrConflict, err)
+	}
 	var e *httpx.Error
 	if errors.As(err, &e) && e.Status == http.StatusForbidden &&
 		(e.Reason == "insufficientPermissions" || e.Code == "PERMISSION_DENIED" || strings.Contains(strings.ToLower(e.Message), "insufficient authentication scopes")) {
@@ -142,6 +146,7 @@ type gEvent struct {
 	} `json:"reminders,omitempty"`
 	Updated         string `json:"updated,omitempty"`
 	GuestsCanModify bool   `json:"guestsCanModify,omitempty"`
+	Etag            string `json:"etag,omitempty"`
 }
 
 // parseTime reads a Google start/end. All-day dates become 00:00 UTC.
@@ -248,6 +253,7 @@ func (c *Client) toEvent(g gEvent, cal calendar.Calendar) calendar.Event {
 		ev.Recurrence = calendar.Summarize(ev.RRule)
 	}
 	ev.CanEdit = cal.CanEdit && (ev.IsOrganizer || g.GuestsCanModify || g.Organizer == nil)
+	ev.ETag = g.Etag
 	if t, err := time.Parse(time.RFC3339, g.Updated); err == nil {
 		ev.Updated = t.UTC()
 	}
@@ -362,7 +368,9 @@ func (c *Client) Range(ctx context.Context, cal calendar.Calendar, start, end ti
 
 // body renders an event for insert/patch.
 func body(ev calendar.Event) map[string]any {
-	b := map[string]any{"summary": ev.Title, "description": ev.Description, "location": ev.Location}
+	// Google renders descriptions as HTML: escape the plain text.
+	b := map[string]any{"summary": ev.Title, "description": strings.ReplaceAll(html.EscapeString(ev.Description), "\n", "<br>"),
+		"location": ev.Location}
 	tz := ev.TimeZone
 	if tz == "" {
 		tz = "UTC"
@@ -442,15 +450,38 @@ func (c *Client) Update(ctx context.Context, cal calendar.Calendar, remoteID str
 		}
 		b = body(shifted)
 	}
+	var hdr map[string]string
+	if target == remoteID && ev.ETag != "" {
+		hdr = map[string]string{"If-Match": ev.ETag}
+	}
 	var g gEvent
-	if err := c.api.JSON(ctx, http.MethodPatch, c.eventsPath(cal)+"/"+url.PathEscape(target)+sendUpdates, b, &g); err != nil {
+	if err := c.api.JSONHeaders(ctx, http.MethodPatch, c.eventsPath(cal)+"/"+url.PathEscape(target)+sendUpdates, hdr, b, &g); err != nil {
 		return calendar.Event{}, wrap(err)
 	}
 	return c.toEvent(g, cal), nil
 }
 
-func (c *Client) Delete(ctx context.Context, cal calendar.Calendar, remoteID, scope string) error {
-	err := c.api.JSON(ctx, http.MethodDelete, c.eventsPath(cal)+"/"+url.PathEscape(remoteID)+sendUpdates, nil, nil)
+// Move uses events.move (the event keeps its id and guests aren't
+// re-invited), then applies ev's fields.
+func (c *Client) Move(ctx context.Context, from, to calendar.Calendar, remoteID string, ev calendar.Event) (calendar.Event, error) {
+	if !to.CanEdit {
+		return calendar.Event{}, calendar.ErrReadOnly
+	}
+	var moved gEvent
+	if err := c.api.JSON(ctx, http.MethodPost, c.eventsPath(from)+"/"+url.PathEscape(remoteID)+"/move?"+
+		url.Values{"destination": {to.RemoteID}, "sendUpdates": {"none"}}.Encode(), nil, &moved); err != nil {
+		return calendar.Event{}, wrap(err)
+	}
+	ev.ETag = ""
+	return c.Update(ctx, to, moved.ID, ev, models.ScopeThis)
+}
+
+func (c *Client) Delete(ctx context.Context, cal calendar.Calendar, remoteID, scope, etag string) error {
+	var hdr map[string]string
+	if etag != "" {
+		hdr = map[string]string{"If-Match": etag}
+	}
+	err := c.api.JSONHeaders(ctx, http.MethodDelete, c.eventsPath(cal)+"/"+url.PathEscape(remoteID)+sendUpdates, hdr, nil, nil)
 	if s := httpx.StatusOf(err); s == http.StatusGone || s == http.StatusNotFound {
 		return nil // already deleted
 	}

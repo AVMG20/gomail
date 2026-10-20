@@ -253,13 +253,20 @@ type Settings struct {
 	ReadingPane         string  `json:"readingPane"`      // "right" | "off" (default "right")
 	// EmailBackground is "auto" (follow the theme, dark bodies in dark mode
 	// where the email allows it) or "light" (always render emails on white).
-	EmailBackground  string  `json:"emailBackground"`  // default "auto"
-	Zoom             float64 `json:"zoom"`             // UI zoom factor (default 1.0, 0.5..2)
-	SyncDepthDays    int     `json:"syncDepthDays"`    // background backfill depth: 30, 90 (default), 365 or 0 = all mail
-	BackfillPaused   bool    `json:"backfillPaused"`   // pause the background backfill
-	AIDailyBudgetUSD float64 `json:"aiDailyBudgetUsd"` // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
-	LaunchAtLogin    bool    `json:"launchAtLogin"`    // start gomail at login, minimized to the tray when enabled (default false)
-	CheckUpdates     bool    `json:"checkUpdates"`     // check GitHub releases once a day (default true)
+	EmailBackground string `json:"emailBackground"` // default "auto"
+	// Calendar preferences.
+	CalendarWeekStart       string  `json:"calendarWeekStart"`       // "auto" | "sunday" | "monday" | "saturday" (default "auto")
+	CalendarDefaultView     string  `json:"calendarDefaultView"`     // "week" | "day" | "month" | "agenda" (default "week")
+	CalendarDefaultDuration int     `json:"calendarDefaultDuration"` // minutes for new events (default 30)
+	CalendarShowDeclined    bool    `json:"calendarShowDeclined"`    // ListEvents includes declined events (default false)
+	CalendarDefaultReminder int     `json:"calendarDefaultReminder"` // minutes; used when an event has no reminders (default 10)
+	CalendarNotifications   bool    `json:"calendarNotifications"`   // desktop reminders for upcoming events (default true)
+	Zoom                    float64 `json:"zoom"`                    // UI zoom factor (default 1.0, 0.5..2)
+	SyncDepthDays           int     `json:"syncDepthDays"`           // background backfill depth: 30, 90 (default), 365 or 0 = all mail
+	BackfillPaused          bool    `json:"backfillPaused"`          // pause the background backfill
+	AIDailyBudgetUSD        float64 `json:"aiDailyBudgetUsd"`        // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
+	LaunchAtLogin           bool    `json:"launchAtLogin"`           // start gomail at login, minimized to the tray when enabled (default false)
+	CheckUpdates            bool    `json:"checkUpdates"`            // check GitHub releases once a day (default true)
 
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`
@@ -376,6 +383,7 @@ const (
 	EventComposeOpen      = "compose:open"      // ComposeOpen: a mailto: link was opened
 	EventUpdateAvailable  = "update:available"  // UpdateInfo: a newer release exists
 	EventCalendarChanged  = "calendar:changed"  // CalendarChanged: calendars or events of an account changed
+	EventCalendarOpen     = "calendar:open"     // CalendarOpen: the user clicked an event reminder
 )
 
 // ComposeOpen asks the UI to open the composer (mailto: links).
@@ -407,6 +415,7 @@ type AIBudgetEvent struct {
 type NotificationOpen struct {
 	MessageID string `json:"messageId"`
 	AccountID string `json:"accountId"`
+	EventID   string `json:"eventId"` // set for event reminders (clicks emit calendar:open)
 }
 
 // DatabaseStatus reports database health.

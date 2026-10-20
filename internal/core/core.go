@@ -196,6 +196,7 @@ func (s *Service) Start() {
 	})
 	s.goBG(s.maintenanceLoop)
 	s.goBG(s.updateLoop)
+	s.goBG(s.reminderLoop)
 }
 
 // startDelay bounds how long syncing waits for the first UI query.

@@ -19,3 +19,20 @@ export function answerScope(s: RecurrenceScope | null) {
   scopeRequest.value = null
   p?.resolve(s)
 }
+
+interface ConfirmPending { title: string; description: string; confirm: string; resolve: (ok: boolean) => void }
+export const confirmRequest = shallowRef<ConfirmPending | null>(null)
+
+/** A small yes/no confirmation (e.g. moving an event to another account). */
+export function askConfirm(title: string, description: string, confirm = 'Continue'): Promise<boolean> {
+  confirmRequest.value?.resolve(false)
+  return new Promise((resolve) => {
+    confirmRequest.value = { title, description, confirm, resolve }
+  })
+}
+
+export function answerConfirm(ok: boolean) {
+  const p = confirmRequest.value
+  confirmRequest.value = null
+  p?.resolve(ok)
+}

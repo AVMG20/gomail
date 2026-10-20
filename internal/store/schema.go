@@ -338,6 +338,10 @@ CREATE INDEX events_ical_uid ON events(ical_uid) WHERE ical_uid != '';
 
 ALTER TABLE messages ADD COLUMN invite TEXT NOT NULL DEFAULT ''; -- JSON Invite of a text/calendar part
 `,
+	// 6: event etags (conditional updates)
+	`
+ALTER TABLE events ADD COLUMN etag TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

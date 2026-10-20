@@ -19,13 +19,13 @@ const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floo
   <div v-if="settings.settings">
     <SettingSection title="View">
       <SettingRow title="Week starts on" :description="`Follows your language and region by default (${localeDay}).`">
-        <Select :model-value="String(s.calendarWeekStart ?? -1)" @update:model-value="(v) => settings.update({ calendarWeekStart: Number(v) })">
+        <Select :model-value="s.calendarWeekStart || 'auto'" @update:model-value="(v) => settings.update({ calendarWeekStart: String(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="-1">Automatic ({{ localeDay }})</SelectItem>
-            <SelectItem value="1">Monday</SelectItem>
-            <SelectItem value="0">Sunday</SelectItem>
-            <SelectItem value="6">Saturday</SelectItem>
+            <SelectItem value="auto">Automatic ({{ localeDay }})</SelectItem>
+            <SelectItem value="monday">Monday</SelectItem>
+            <SelectItem value="sunday">Sunday</SelectItem>
+            <SelectItem value="saturday">Saturday</SelectItem>
           </SelectContent>
         </Select>
       </SettingRow>
@@ -53,14 +53,18 @@ const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floo
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Default reminder">
+      <SettingRow title="Default reminder" description="Used for events without reminders of their own.">
         <Select :model-value="String(s.calendarDefaultReminder ?? 10)" @update:model-value="(v) => settings.update({ calendarDefaultReminder: Number(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="-1">None</SelectItem>
             <SelectItem v-for="m in REMINDER_CHOICES" :key="m" :value="String(m)">{{ formatReminder(m) }}</SelectItem>
           </SelectContent>
         </Select>
+      </SettingRow>
+    </SettingSection>
+    <SettingSection title="Notifications">
+      <SettingRow title="Event reminders" description="Show a desktop notification before events start.">
+        <Switch :model-value="s.calendarNotifications !== false" @update:model-value="(v: boolean) => settings.update({ calendarNotifications: v })" />
       </SettingRow>
     </SettingSection>
   </div>

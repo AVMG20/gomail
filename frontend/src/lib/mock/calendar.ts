@@ -2,7 +2,7 @@
 // around today (all-day, multi-day, a recurring standup, a declined meeting) and
 // full CRUD including recurrence scopes ("this" occurrence vs the whole series).
 import {
-  addDays, eventDate, expandOccurrences, fromYmd, overlaps, parseRRule, startOfDay, startOfWeek, toRfc3339, toYmd,
+  addDays, buildRRule, eventDate, expandOccurrences, fromYmd, overlaps, parseRRule, startOfDay, startOfWeek, toRfc3339, toYmd, type RepeatFreq,
 } from '../calendar'
 import type { Account, AttendeeResponse, Calendar, CalendarEvent, EventInput, EventInvite, Message, RecurrenceScope } from '../types'
 
@@ -271,6 +271,37 @@ export class MockCalendar {
     const ev = this.masters.get('ev_leadership')
     if (!ev) return null
     return { eventId: ev.id, uid: `${ev.id}@northwind.io`, title: ev.title, start: ev.start, end: ev.end, allDay: false, location: ev.location || 'Microsoft Teams', organizer: ev.organizer, method: 'REQUEST', myResponse: ev.myResponse }
+  }
+}
+
+/** Backend-shaped EventInput (what api.ts sends) → the mock's internal input. */
+export function fromWireInput(w: Record<string, unknown> & Partial<EventInput>): EventInput {
+  const allDay = !!w.allDay
+  const rec = (w.recurrence ?? {}) as { frequency?: string; until?: string | null; count?: number } | string
+  const recurrence = typeof rec === 'string'
+    ? rec
+    : buildRRule({ freq: (rec.frequency as RepeatFreq) || 'none', until: rec.until ? toYmd(new Date(rec.until)) : '', count: rec.count || undefined })
+  let description = String(w.description ?? '')
+  let meetingUrl = String(w.meetingUrl ?? '')
+  const m = /(?:^|\n)Join: (https?:\/\/\S+)\s*$/.exec(description)
+  if (m) {
+    meetingUrl = m[1]
+    description = description.slice(0, m.index).trim()
+  }
+  const attendees = ((w.attendees as { name: string; email: string; response: string }[] | null) ?? []).map((a) => ({ name: a.name, email: a.email, response: a.response === 'none' ? 'needsAction' : a.response }))
+  return {
+    calendarId: String(w.calendarId ?? ''),
+    title: String(w.title ?? ''),
+    start: allDay ? String(w.start).slice(0, 10) : String(w.start),
+    end: allDay ? String(w.end).slice(0, 10) : String(w.end),
+    allDay,
+    timeZone: String(w.timeZone ?? ''),
+    location: String(w.location ?? ''),
+    description,
+    attendees,
+    meetingUrl,
+    recurrence,
+    reminders: ((w.reminderMinutes ?? w.reminders) as number[] | null) ?? [],
   }
 }
 

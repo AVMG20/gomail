@@ -373,7 +373,39 @@ func (p *CalendarProvider) Update(ctx context.Context, cal calendar.Calendar, re
 	return *cur, nil
 }
 
-func (p *CalendarProvider) Delete(ctx context.Context, cal calendar.Calendar, remoteID, scope string) error {
+// Move moves an event (or a whole series) between demo calendars.
+func (p *CalendarProvider) Move(ctx context.Context, from, to calendar.Calendar, remoteID string, ev calendar.Event) (calendar.Event, error) {
+	if err := p.sleep(ctx); err != nil {
+		return calendar.Event{}, err
+	}
+	p.mu.Lock()
+	src, err := p.store(from)
+	dst, err2 := p.store(to)
+	if err == nil {
+		err = err2
+	}
+	if err != nil {
+		p.mu.Unlock()
+		return ev, err
+	}
+	var moved *calendar.Event
+	for id, o := range src {
+		if id == remoteID || o.SeriesRemoteID == remoteID {
+			delete(src, id)
+			dst[id] = o
+			if id == remoteID || moved == nil {
+				moved = o
+			}
+		}
+	}
+	p.mu.Unlock()
+	if moved == nil {
+		return ev, errors.New("event not found")
+	}
+	return p.Update(ctx, to, moved.RemoteID, ev, models.ScopeSeries)
+}
+
+func (p *CalendarProvider) Delete(ctx context.Context, cal calendar.Calendar, remoteID, scope, etag string) error {
 	if err := p.sleep(ctx); err != nil {
 		return err
 	}

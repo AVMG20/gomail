@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -392,6 +393,7 @@ type gMessage struct {
 	Removed *struct {
 		Reason string `json:"reason"`
 	} `json:"@removed"`
+	ODataType string `json:"@odata.type"`
 }
 
 const messageSelect = "id,conversationId,subject,bodyPreview,from,sender,toRecipients,ccRecipients,bccRecipients,replyTo," +
@@ -594,6 +596,14 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 		}
 	}
 	b.Unsubscribe = mailmime.ParseListUnsubscribe(unsub, unsubPost)
+	if strings.Contains(strings.ToLower(g.ODataType), "eventmessage") {
+		// Meeting requests/cancellations carry their event, not an ICS part.
+		if inv, err := c.meetingInvite(ctx, remoteID); err == nil {
+			b.Invite = inv
+		} else {
+			slog.Debug("reading the meeting of an event message failed", "err", err)
+		}
+	}
 	if strings.EqualFold(g.Body.ContentType, "html") {
 		b.HTML = g.Body.Content
 		b.Text = mailmime.HTMLToText(g.Body.Content)
@@ -1098,3 +1108,72 @@ func (c *Client) EmptyFolder(ctx context.Context, folder mail.Folder) error {
 }
 
 var _ provider.Provider = (*Client)(nil)
+
+var meetingMethods = map[string]string{"meetingRequest": "REQUEST", "meetingCancelled": "CANCEL", "meetingAccepted": "REPLY",
+	"meetingTenativelyAccepted": "REPLY", "meetingTentativelyAccepted": "REPLY", "meetingDeclined": "REPLY"}
+
+// meetingInvite reads the event of an event message
+// ($expand=microsoft.graph.eventMessage/event, times in UTC).
+func (c *Client) meetingInvite(ctx context.Context, remoteID string) (*models.Invite, error) {
+	resp, err := c.api.Do(ctx, httpx.Request{Method: http.MethodGet,
+		Path:    c.msgPath(remoteID) + "?$expand=microsoft.graph.eventMessage/event",
+		Headers: map[string]string{"Prefer": `IdType="ImmutableId", outlook.timezone="UTC"`}})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var m struct {
+		MeetingMessageType string `json:"meetingMessageType"`
+		Event              *struct {
+			ICalUID  string `json:"iCalUId"`
+			Subject  string `json:"subject"`
+			IsAllDay bool   `json:"isAllDay"`
+			Start    gTime  `json:"start"`
+			End      gTime  `json:"end"`
+			Location *struct {
+				DisplayName string `json:"displayName"`
+			} `json:"location"`
+			Organizer *gAddr `json:"organizer"`
+		} `json:"event"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		return nil, err
+	}
+	if m.Event == nil || m.Event.ICalUID == "" {
+		return nil, errors.New("no event")
+	}
+	e := m.Event
+	inv := &models.Invite{UID: e.ICalUID, Title: e.Subject, AllDay: e.IsAllDay, Method: meetingMethods[m.MeetingMessageType]}
+	if inv.Method == "" {
+		inv.Method = "REQUEST"
+	}
+	inv.Start, inv.End = graphUTC(e.Start.DateTime), graphUTC(e.End.DateTime)
+	if e.IsAllDay {
+		y, mo, d := inv.Start.Add(12 * time.Hour).Date()
+		inv.Start = time.Date(y, mo, d, 0, 0, 0, 0, time.UTC)
+		y, mo, d = inv.End.Add(12 * time.Hour).Date()
+		inv.End = time.Date(y, mo, d, 0, 0, 0, 0, time.UTC)
+	}
+	if e.Location != nil {
+		inv.Location = e.Location.DisplayName
+	}
+	if e.Organizer != nil {
+		inv.Organizer = addr(*e.Organizer)
+	}
+	return inv, nil
+}
+
+type gTime struct {
+	DateTime string `json:"dateTime"`
+	TimeZone string `json:"timeZone"`
+}
+
+func graphUTC(s string) time.Time {
+	s = strings.TrimSuffix(s, "Z")
+	for _, layout := range []string{"2006-01-02T15:04:05.0000000", "2006-01-02T15:04:05", "2006-01-02T15:04:05.999999999"} {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}

@@ -132,6 +132,9 @@ func (s *Service) calendarError(acct models.Account, err error) error {
 	if errors.Is(err, calendar.ErrReadOnly) {
 		return errors.New("this calendar is read-only")
 	}
+	if errors.Is(err, calendar.ErrConflict) {
+		return errors.New("this event changed elsewhere. gomail loaded the latest version; please make your change again")
+	}
 	return errors.New(syncer.HumanError(acct, err))
 }
 
@@ -340,7 +343,7 @@ func (s *Service) ListEvents(start, end time.Time) ([]models.CalendarEvent, erro
 	if end.Sub(start) > maxEventRange {
 		return nil, errors.New("the range is too long (max 400 days)")
 	}
-	evs, err := s.store.Events(start, end)
+	evs, err := s.store.Events(start, end, s.Settings().CalendarShowDeclined)
 	if err != nil {
 		return nil, err
 	}
@@ -581,15 +584,18 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 	if !cur.CanEdit {
 		return models.CalendarEvent{}, errors.New("you can't change this event: only its organizer can")
 	}
-	if in.CalendarID != "" && in.CalendarID != cur.CalendarID {
-		return models.CalendarEvent{}, errors.New("moving events to another calendar isn't supported yet")
-	}
 	if err := calendar.NormalizeInput(&in); err != nil {
 		return models.CalendarEvent{}, err
 	}
 	scope = normScope(scope)
+	if in.CalendarID != "" && in.CalendarID != cur.CalendarID {
+		return s.moveEvent(cur, row, acct, p, in, scope)
+	}
 	ev := calendar.FromInput(in)
 	ev.SeriesRemoteID, ev.OriginalStart, ev.ICalUID = cur.SeriesRemoteID, cur.Start, cur.ICalUID
+	if scope == models.ScopeThis {
+		ev.ETag = cur.ETag
+	}
 	if cur.SeriesRemoteID == "" {
 		scope = models.ScopeThis
 	} else if scope == models.ScopeThis {
@@ -634,7 +640,7 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 	if err != nil {
 		_ = s.store.PutEventRows(old)
 		s.emitCalendar(acct.ID)
-		return models.CalendarEvent{}, fmt.Errorf("saving the event failed: %w", s.calendarError(acct, err))
+		return models.CalendarEvent{}, s.eventChangeError(acct, p, row, "saving the event failed", err)
 	}
 	if scope == models.ScopeThis && updated.RemoteID == cur.RemoteID && ev.RRule == "" {
 		_, _ = s.store.ApplyEvents(row, store.EventChanges{Upserts: []calendar.Event{updated}})
@@ -684,10 +690,14 @@ func (s *Service) DeleteEvent(id, scope string) error {
 	s.emitCalendar(acct.ID)
 	ctx, cancel := s.calCtx()
 	defer cancel()
-	if err := p.Delete(ctx, row.Provider(), target, scope); err != nil {
+	etag := ""
+	if target == cur.RemoteID {
+		etag = cur.ETag
+	}
+	if err := p.Delete(ctx, row.Provider(), target, scope, etag); err != nil {
 		_ = s.store.PutEventRows(old)
 		s.emitCalendar(acct.ID)
-		return fmt.Errorf("deleting the event failed: %w", s.calendarError(acct, err))
+		return s.eventChangeError(acct, p, row, "deleting the event failed", err)
 	}
 	return nil
 }
@@ -761,4 +771,155 @@ func (s *Service) inviteEvent(m *models.Message) {
 		}
 	}
 	m.Invite.EventID = best.ID
+}
+
+// eventChangeError reports a failed change. On a conflict (the event was
+// changed elsewhere) the calendar is resynced first, so the UI shows the
+// latest version when it reloads.
+func (s *Service) eventChangeError(acct models.Account, p calendar.Provider, row store.CalendarRow, what string, err error) error {
+	if errors.Is(err, calendar.ErrConflict) {
+		ctx, cancel := s.calCtx()
+		defer cancel()
+		if _, serr := s.syncCalendar(ctx, acct, p, row); serr == nil {
+			s.emitCalendar(acct.ID)
+		}
+		return s.calendarError(acct, err)
+	}
+	return fmt.Errorf("%s: %w", what, s.calendarError(acct, err))
+}
+
+// MoveEventCheck tells what moving an event to calendarID would do.
+func (s *Service) MoveEventCheck(id, calendarID string) (models.MoveCheck, error) {
+	cur, err := s.store.Event(id)
+	if err != nil {
+		return models.MoveCheck{}, errors.New("that event no longer exists")
+	}
+	return s.moveCheck(cur, calendarID)
+}
+
+func (s *Service) moveCheck(cur store.EventRow, calendarID string) (models.MoveCheck, error) {
+	target, err := s.store.Calendar(calendarID)
+	if err != nil {
+		return models.MoveCheck{}, errors.New("calendar not found")
+	}
+	src, err := s.store.Calendar(cur.CalendarID)
+	if err != nil {
+		return models.MoveCheck{}, errors.New("that calendar no longer exists")
+	}
+	acct, _ := s.store.Account(cur.AccountID)
+	others := 0
+	for _, a := range cur.Attendees {
+		if !strings.EqualFold(a.Email, acct.Email) && a.Response != models.ResponseOrganizer {
+			others++
+		}
+	}
+	mc := models.MoveCheck{Allowed: true, CrossAccount: target.AccountID != cur.AccountID, HasAttendees: others > 0,
+		Recurring: cur.SeriesRemoteID != ""}
+	switch {
+	case target.ID == cur.CalendarID:
+		mc.Allowed, mc.Reason = false, "the event is already in this calendar"
+	case !target.CanEdit:
+		mc.Allowed, mc.Reason = false, "the target calendar is read-only"
+	case !src.CanEdit || !cur.IsOrganizer:
+		mc.Allowed, mc.Reason = false, "only the organizer can move this event"
+	case mc.Recurring && mc.CrossAccount && cur.RRule == "":
+		mc.Allowed, mc.Reason = false, "this series can't be recreated in another account"
+	}
+	if mc.Allowed {
+		if a, err := s.calendarAccount(target.AccountID); err != nil {
+			mc.Allowed, mc.Reason = false, err.Error()
+		} else if a.Provider == models.ProviderOutlook && !mc.CrossAccount {
+			// Graph has no move: the event is recreated.
+			mc.HasAttendees = others > 0
+		} else if !mc.CrossAccount {
+			mc.HasAttendees = false // Google moves keep the invitation
+		}
+	}
+	return mc, nil
+}
+
+// moveEvent moves an event (a whole series for occurrences) to another
+// calendar: natively within a Google account, otherwise by creating it in
+// the target and deleting the original.
+func (s *Service) moveEvent(cur store.EventRow, row store.CalendarRow, acct models.Account, p calendar.Provider,
+	in models.EventInput, scope string) (models.CalendarEvent, error) {
+	mc, err := s.moveCheck(cur, in.CalendarID)
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	if !mc.Allowed {
+		return models.CalendarEvent{}, errors.New("can't move this event: " + mc.Reason)
+	}
+	if mc.Recurring && scope != models.ScopeSeries {
+		return models.CalendarEvent{}, errors.New("only a whole series can be moved to another calendar")
+	}
+	target, _ := s.store.Calendar(in.CalendarID)
+	tacct, _ := s.store.Account(target.AccountID)
+	ev := calendar.FromInput(in)
+	remote := cur.RemoteID
+	if mc.Recurring {
+		remote = cur.SeriesRemoteID
+		if ev.RRule == "" {
+			ev.RRule = cur.RRule
+		}
+	}
+	if ev.Attendees == nil {
+		ev.Attendees = cur.Attendees
+	}
+	old := []store.EventRow{cur}
+	if mc.Recurring {
+		if old, err = s.store.SeriesEvents(cur.CalendarID, cur.SeriesRemoteID); err != nil {
+			return models.CalendarEvent{}, err
+		}
+	}
+	ctx, cancel := s.calCtx()
+	defer cancel()
+	var moved calendar.Event
+	if mc.CrossAccount {
+		tp, err := s.calendarProvider(tacct)
+		if err != nil {
+			return models.CalendarEvent{}, err
+		}
+		if moved, err = tp.Create(ctx, target.Provider(), ev); err != nil {
+			return models.CalendarEvent{}, fmt.Errorf("moving the event failed: %w", s.calendarError(tacct, err))
+		}
+		if err := p.Delete(ctx, row.Provider(), remote, models.ScopeSeries, ""); err != nil {
+			slog.Warn("removing the moved event's original failed", "err", err)
+			s.goBG(func() { s.syncCalendarsQuiet(s.ctx, tacct.ID) })
+			return models.CalendarEvent{}, fmt.Errorf("the event was copied to %s, but the original couldn't be removed: %s", tacct.Email,
+				s.calendarError(acct, err))
+		}
+	} else if moved, err = p.Move(ctx, row.Provider(), target.Provider(), remote, ev); err != nil {
+		return models.CalendarEvent{}, fmt.Errorf("moving the event failed: %w", s.calendarError(acct, err))
+	}
+	var ids []string
+	for _, o := range old {
+		ids = append(ids, o.ID)
+	}
+	_ = s.store.DeleteEvents(ids)
+	s.emitCalendar(acct.ID)
+	tp, err := s.calendarProvider(tacct)
+	if err == nil {
+		_, _ = s.syncCalendar(ctx, tacct, tp, target)
+	}
+	if !moved.IsRecurring && moved.SeriesRemoteID == "" {
+		if got, err := s.store.ApplyEvents(target, store.EventChanges{Upserts: []calendar.Event{moved}}); err == nil && len(got) == 1 {
+			s.emitCalendar(tacct.ID)
+			return s.GetEvent(got[0])
+		}
+	}
+	s.emitCalendar(tacct.ID)
+	if occ, err := s.store.SeriesEvents(target.ID, moved.RemoteID); err == nil && len(occ) > 0 {
+		first := occ[0]
+		for _, o := range occ {
+			if o.Start.Before(first.Start) {
+				first = o
+			}
+		}
+		return first.CalendarEvent, nil
+	}
+	if got, err := s.store.Event(store.EventID(target.ID, moved.RemoteID)); err == nil {
+		return got.CalendarEvent, nil
+	}
+	return models.CalendarEvent{}, errors.New("the event was moved, but it isn't synced yet")
 }

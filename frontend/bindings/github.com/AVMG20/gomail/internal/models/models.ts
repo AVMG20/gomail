@@ -274,6 +274,13 @@ export interface CalendarEvent {
 }
 
 /**
+ * CalendarOpen is the payload of calendar:open.
+ */
+export interface CalendarOpen {
+    "eventId": string;
+}
+
+/**
  * ClassificationResult is the outcome of labeling one message with the AI
  * classifier: which labels were added/removed and the P(yes) per label id.
  */
@@ -748,6 +755,34 @@ export interface MessageSummary {
 }
 
 /**
+ * MoveCheck tells the UI what moving an event to another calendar does,
+ * so it can ask for confirmation first.
+ */
+export interface MoveCheck {
+    "allowed": boolean;
+
+    /**
+     * why not, when !allowed
+     */
+    "reason": string;
+
+    /**
+     * the event is recreated in another account
+     */
+    "crossAccount": boolean;
+
+    /**
+     * with crossAccount (or Outlook): attendees get a cancellation and a new invitation
+     */
+    "hasAttendees": boolean;
+
+    /**
+     * the whole series moves
+     */
+    "recurring": boolean;
+}
+
+/**
  * NetworkStatus is emitted when connectivity changes.
  */
 export interface NetworkStatus {
@@ -774,6 +809,11 @@ export interface NewMailEvent {
 export interface NotificationOpen {
     "messageId": string;
     "accountId": string;
+
+    /**
+     * set for event reminders (clicks emit calendar:open)
+     */
+    "eventId": string;
 }
 
 export interface OutgoingAttachment {
@@ -907,6 +947,37 @@ export interface Settings {
      * default "auto"
      */
     "emailBackground": string;
+
+    /**
+     * Calendar preferences.
+     * "auto" | "sunday" | "monday" | "saturday" (default "auto")
+     */
+    "calendarWeekStart": string;
+
+    /**
+     * "week" | "day" | "month" | "agenda" (default "week")
+     */
+    "calendarDefaultView": string;
+
+    /**
+     * minutes for new events (default 30)
+     */
+    "calendarDefaultDuration": number;
+
+    /**
+     * ListEvents includes declined events (default false)
+     */
+    "calendarShowDeclined": boolean;
+
+    /**
+     * minutes; used when an event has no reminders (default 10)
+     */
+    "calendarDefaultReminder": number;
+
+    /**
+     * desktop reminders for upcoming events (default true)
+     */
+    "calendarNotifications": boolean;
 
     /**
      * UI zoom factor (default 1.0, 0.5..2)

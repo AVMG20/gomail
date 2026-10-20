@@ -2,7 +2,7 @@
 // (`npm run dev` without Wails). It mirrors the bound App methods closely
 // enough that every screen can be demoed and tested.
 import { parseSearch, type ParsedSearch } from '../searchQuery'
-import { MockCalendar } from './calendar'
+import { fromWireInput, MockCalendar } from './calendar'
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
@@ -598,15 +598,32 @@ class MockBackend {
     return this.cal.get(id)
   }
 
-  async CreateEvent(input: EventInput): Promise<CalendarEvent> {
+  async CreateEvent(wire: EventInput): Promise<CalendarEvent> {
     await latency(120, 260)
+    let input = fromWireInput(wire as unknown as Record<string, unknown>)
+    if (!input.calendarId) input = { ...input, calendarId: this.cal.calendars.find((c) => c.primary && c.canEdit)?.id ?? '' }
     if (!input.title.trim()) input = { ...input, title: '(No title)' }
     return this.cal.create(input)
   }
 
-  async UpdateEvent(id: string, input: EventInput, scope: RecurrenceScope): Promise<CalendarEvent> {
+  async UpdateEvent(id: string, wire: EventInput, scope: RecurrenceScope): Promise<CalendarEvent> {
     await latency(120, 260)
-    return this.cal.update(id, input, scope)
+    return this.cal.update(id, fromWireInput(wire as unknown as Record<string, unknown>), scope)
+  }
+
+  async MoveEventCheck(id: string, calendarId: string) {
+    await latency(20, 60)
+    const ev = this.cal.get(id)
+    const target = this.cal.calendars.find((c) => c.id === calendarId)
+    const crossAccount = !!target && target.accountId !== ev.accountId
+    // Like the backend: recurring events can't move across accounts.
+    const allowed = !!target?.canEdit && !(crossAccount && ev.isRecurring)
+    return { allowed, reason: allowed ? '' : ev.isRecurring ? 'Recurring events can’t be moved to another account.' : 'That calendar is read-only.', crossAccount, hasAttendees: ev.attendees.length > 0, recurring: ev.isRecurring }
+  }
+
+  async SyncCalendars(accountId: string): Promise<void> {
+    await latency(200, 500)
+    this.emit('calendar:changed', { accountId })
   }
 
   async DeleteEvent(id: string, scope: RecurrenceScope): Promise<void> {

@@ -88,6 +88,11 @@ export interface CalendarEvent {
   status: 'confirmed' | 'tentative' | 'cancelled' | string
   /** Minutes before the start. */
   reminders: number[]
+  /** Human summary of the recurrence ("Weekly on Monday"), from the backend. */
+  recurrenceText?: string
+  /** Backend: you can edit this event (organizer on an editable calendar). */
+  canEdit?: boolean
+  updatedAt?: string
 }
 
 export interface EventInput {
@@ -118,7 +123,8 @@ export interface EventInvite {
   organizer: Address
   /** iTIP method: REQUEST, CANCEL, REPLY… */
   method: string
-  myResponse: AttendeeResponse
+  /** Not sent by the backend yet; the card starts without a selection. */
+  myResponse?: AttendeeResponse
 }
 
 export interface Contact {
@@ -342,14 +348,16 @@ export interface Settings {
   checkUpdates?: boolean
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
-  /** Calendar: first day of the week (-1 = from the locale, 0 = Sunday, 1 = Monday, 6 = Saturday). */
-  calendarWeekStart?: number
+  /** Calendar: first day of the week ("auto" follows the locale). */
+  calendarWeekStart?: 'auto' | 'sunday' | 'monday' | 'saturday' | string
   calendarDefaultView?: 'week' | 'day' | 'month' | 'agenda'
   /** Minutes. */
   calendarDefaultDuration?: number
   calendarShowDeclined?: boolean
-  /** Minutes before the start (-1 = none). */
+  /** Minutes before the start, used when an event has no reminders of its own. */
   calendarDefaultReminder?: number
+  /** Desktop reminders for upcoming events. */
+  calendarNotifications?: boolean
   primaryColor: string
   /** rem */
   radius: number
@@ -485,6 +493,7 @@ export const Events = {
   AiBudget: 'ai:budget',
   DatabaseStatus: 'database:status',
   CalendarChanged: 'calendar:changed',
+  CalendarOpen: 'calendar:open',
   ComposeOpen: 'compose:open',
   UpdateAvailable: 'update:available',
 } as const
@@ -505,6 +514,8 @@ export interface EventPayloads {
   'database:status': { ok: boolean; message: string }
   /** Calendars or events changed (sync, edits elsewhere). */
   'calendar:changed': { accountId?: string } | undefined
+  /** A reminder notification was clicked: show this event. */
+  'calendar:open': { eventId: string }
   /** mailto: handler: open compose prefilled (next backend pass). */
   'compose:open': { to?: string | Address[] | null; cc?: string | Address[] | null; bcc?: string | Address[] | null; subject?: string; body?: string }
   /** A newer release exists (next backend pass). */

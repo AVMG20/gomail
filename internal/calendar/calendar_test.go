@@ -112,3 +112,16 @@ func TestParseInvite(t *testing.T) {
 		t.Fatalf("round trip %+v", built)
 	}
 }
+
+func TestAttendeeValidation(t *testing.T) {
+	in := models.EventInput{Start: time.Now(), Attendees: []models.Attendee{{Email: " Ann@X.com ", Name: "Ann\r\nBcc: x"}, {Email: "ann@x.com"}}}
+	if err := NormalizeInput(&in); err != nil || len(in.Attendees) != 1 || in.Attendees[0].Email != "ann@x.com" || in.Attendees[0].Name != "AnnBcc: x" {
+		t.Fatalf("%+v %v", in.Attendees, err)
+	}
+	for _, bad := range []string{"not an email", "a@b.c\r\nBcc: x@y.z", "Ann <ann@x.com>", "a@b.c,d@e.f", ""} {
+		in := models.EventInput{Start: time.Now(), Attendees: []models.Attendee{{Email: bad}}}
+		if NormalizeInput(&in) == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
