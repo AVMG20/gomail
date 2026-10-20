@@ -130,7 +130,9 @@ function collapseQuotes(html: string): string {
 const senderEmail = computed(() => props.message.from?.email?.trim() ?? '')
 const isHtml = computed(() => !!props.message.bodyHtml.trim())
 
-const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml, props.allowRemote) : { html: '', blocked: 0 }))
+/** Remote content allowed and present: keep the stripped render until the full body arrives (one reload, not two). */
+const remoteOn = computed(() => props.allowRemote && !props.message.remoteContentBlocked)
+const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml, remoteOn.value) : { html: '', blocked: 0 }))
 // Judged on the original HTML (DOMParser documents are inert), so loading remote images never flips the theme.
 const simple = computed(() => isHtml.value && isSimpleHtml(props.message.bodyHtml))
 /** Render this HTML mail with theme colors (no white card). */
@@ -159,9 +161,9 @@ const srcdoc = computed(() => {
   const dark = themed.value
   // Track theme/accent so the frame re-renders when they change.
   void themeState.value
-  const img = props.allowRemote ? 'img-src data: cid: https: http:;' : 'img-src data: cid:;'
+  const img = remoteOn.value ? 'img-src data: cid: https: http:;' : 'img-src data: cid:;'
   return `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; ${img} style-src 'unsafe-inline'${props.allowRemote ? ' https:' : ''}; font-src data:${props.allowRemote ? ' https:' : ''};">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; ${img} style-src 'unsafe-inline'${remoteOn.value ? ' https:' : ''}; font-src data:${remoteOn.value ? ' https:' : ''};">
 <meta name="color-scheme" content="${dark ? 'dark' : 'light'}">
 <style>
   html,body{margin:0;padding:0;background:#fff;color:#1f2328}
@@ -279,9 +281,15 @@ function onTextClick(e: MouseEvent) {
   followMailLink(a.getAttribute('href') ?? '', a.textContent ?? '')
 }
 
+// A new document gets a new <iframe>: WebKit doesn't reliably reload a frame (or fire
+// "load") when only its srcdoc changes, so after "Load images" the frame kept the stripped
+// body, or stayed at the reset height, until the mail was reopened.
+const frameKey = ref(0)
 watch(srcdoc, () => {
   height.value = 80
   fitScale = 1
+  ro?.disconnect()
+  frameKey.value++
 })
 onBeforeUnmount(() => ro?.disconnect())
 </script>
@@ -302,6 +310,7 @@ onBeforeUnmount(() => ro?.disconnect())
     </div>
     <div v-if="isHtml" :class="themed ? '' : 'overflow-hidden rounded-lg border border-black/5 bg-white dark:border-white/10'" :data-email-theme="themed ? 'dark' : 'light'">
       <iframe
+        :key="frameKey"
         ref="frame"
         :srcdoc="srcdoc"
         sandbox="allow-same-origin allow-scripts"
