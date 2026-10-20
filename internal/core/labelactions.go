@@ -10,9 +10,9 @@ import (
 	"github.com/AVMG20/gomail/internal/store"
 )
 
-// Label actions: a label's "When added" (Label.Then) moves new mail that a
-// rule or Jev gives that label: to the archive (skips the inbox), Junk or
-// Trash. Junk and Trash mark the mail read; archived mail keeps its unread
+// Label actions: a label's "When added" (Label.Then) moves mail that gets
+// that label from a rule, Jev or the user: to the archive (skips the
+// inbox), Junk or Trash. Junk and Trash mark the mail read; archived mail keeps its unread
 // state. Jev never trashes: a wrong guess would delete real mail, so its
 // Trash picks go to Junk.
 
@@ -113,7 +113,13 @@ func (s *Service) applyLabelMoves(moves labelMoves, what string) []string {
 			moved = append(moved, b...)
 		}
 	}
-	s.logAutoMoves(moved, func(id string) (string, string) { return moves[id].kind, moves[id].why })
+	var logged []string // moves without a reason were the user's own
+	for _, id := range moved {
+		if moves[id].why != "" {
+			logged = append(logged, id)
+		}
+	}
+	s.logAutoMoves(logged, func(id string) (string, string) { return moves[id].kind, moves[id].why })
 	return moved
 }
 

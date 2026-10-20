@@ -321,3 +321,42 @@ func TestMutedMailbox(t *testing.T) {
 		t.Fatal("unlisted label is quiet")
 	}
 }
+
+// Labeling by hand does what the label's "When added" says, like a rule:
+// the built-in Junk label and a label set to Junk move the mail to Junk,
+// read; a label without an action leaves it. The user's own moves aren't
+// in the "sorted for you" review.
+func TestManualLabelMovesMail(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	acct := demo.GmailAccountID
+	saveRules(t, s, nil,
+		models.Label{ID: "spammy", Name: "Spammy", Color: "#f97316", Source: "user", AccountIDs: []string{acct}, Then: "junk"},
+		models.Label{ID: "plain", Name: "Plain", Color: "#22c55e", Source: "user", AccountIDs: []string{acct}})
+	for _, subj := range []string{"By junk label", "By junk action", "No action"} {
+		e.demos[acct].Deliver(subj, "someone@example.com")
+	}
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	spam, _ := s.store.FolderByKind(acct, models.FolderSpam)
+	for subj, label := range map[string]string{"By junk label": "junk", "By junk action": "spammy", "No action": "plain"} {
+		m, ok := labelsOf(t, e, acct, subj)
+		if !ok {
+			t.Fatalf("%q not synced", subj)
+		}
+		if err := s.AddLabel([]string{m.ID}, label); err != nil {
+			t.Fatal(err)
+		}
+		m, _ = labelsOf(t, e, acct, subj)
+		if inSpam := has(m.FolderIDs, spam.ID); inSpam != (label != "plain") {
+			t.Fatalf("%q with %s: in Junk %v (%v)", subj, label, inSpam, m.FolderIDs)
+		}
+		if label != "plain" && m.Unread {
+			t.Fatalf("%q moved to Junk unread", subj)
+		}
+	}
+	if moves, _ := s.AutoMoves(acct, models.FolderSpam, 24); len(moves) != 0 {
+		t.Fatalf("manual moves in the review: %+v", moves)
+	}
+}

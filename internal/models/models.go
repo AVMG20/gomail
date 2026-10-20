@@ -283,8 +283,9 @@ type Label struct {
 	// settings from older versions, which shared labels between mailboxes
 	// (config.SplitLabels gives each mailbox its own copy).
 	AccountIDs []string `json:"accountIds"`
-	// Then is what happens to new mail that gets the label: "" (stays
-	// where it is), "archive", "junk" or "trash". Not used for Junk.
+	// Then is what happens to mail that gets the label (from a rule, Jev
+	// or the user): "" (stays where it is), "archive", "junk" or "trash".
+	// Not used for Junk, which always moves mail to Junk.
 	Then string `json:"then"`
 }
 

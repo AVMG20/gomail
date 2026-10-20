@@ -379,10 +379,12 @@ func (s *Service) ClassifyMessages(ids []string) ([]models.ClassificationResult,
 		if r.Error != "" {
 			return nil, errors.New(r.Error)
 		}
+		s.moveAILabeled([]models.ClassificationResult{r})
 		s.messagesChanged(ids)
 		return []models.ClassificationResult{r}, nil
 	}
 	results, final := s.runClassification(ctx, selectionJobID, ids, false)
+	s.moveAILabeled(results)
 	s.emit(models.EventClassifyFinished, final)
 	if final.Error != "" && final.Failed == len(ids) {
 		return results, errors.New(final.Error)
@@ -423,7 +425,8 @@ func (s *Service) ClassifyQuery(q models.ListQuery, onlyUnlabeled, includeAllFol
 
 	s.goBG(func() {
 		defer cancel()
-		_, final := s.runClassification(ctx, j.id, ids, false)
+		results, final := s.runClassification(ctx, j.id, ids, false)
+		s.moveAILabeled(results)
 		s.jobs.mu.Lock()
 		if s.jobs.current == j {
 			s.jobs.current = nil
@@ -563,10 +566,11 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 	})
 }
 
-// moveAILabeled acts on the labels Jev gave new mail: Junk (and a label set
-// to "When added: Junk") moves it to Junk, read; other label actions archive
-// it (see labelactions.go). Like Junk rules it only acts on new mail: mail
-// the user took out of Junk isn't moved back by a later run.
+// moveAILabeled acts on the labels Jev just gave mail (new mail, or a
+// selection or view the user asked Jev to label): Junk (and a label set to
+// "When added: Junk") moves it to Junk, read; other label actions archive
+// it (see labelactions.go). It only acts on labels Jev added in this run:
+// mail the user took out of Junk isn't moved back by a later run.
 func (s *Service) moveAILabeled(results []models.ClassificationResult) {
 	labels := map[string]models.Label{}
 	for _, l := range s.Settings().Labels {

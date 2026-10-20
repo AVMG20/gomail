@@ -205,6 +205,11 @@ func (s *Service) LabelSender(accountID, address, scope, labelID string) (LabelS
 				s.engine.PushLabel(b, l.Name, true)
 			}
 		}
+		moves := labelMoves{}
+		for _, id := range added {
+			moves.add(id, thenKind(l, false), labelWhy(l, false))
+		}
+		s.applyLabelMoves(moves, "label action")
 		s.messagesChanged(added)
 	}
 	return res, nil

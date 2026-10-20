@@ -908,9 +908,14 @@ export const useMailStore = defineStore('mail', () => {
     try {
       await inChunks(actionIds(ids), (c) => api.addLabel(c, labelId))
       const name = label?.name ?? labelId
+      // The label's "When added" moves the mail (the backend does it; the list refreshes).
+      const dest = label?.id === 'junk' || label?.then === 'junk' ? 'spam' : label?.then
+      const destName: Record<string, string> = { spam: 'Junk', trash: 'Trash', archive: 'Archive' }
+      const moves = !!dest && !!destName[dest] && (dest === 'archive' ? mailbox.value.kind === 'inbox' : mailbox.value.kind !== dest)
+      if (moves) toast(`Label “${name}” added`, { description: `${ids.length > 1 ? `${rows(ids.length)} moved` : 'Moved'} to ${destName[dest!]}, as the label says.` })
       // Part of the selection is in a mailbox without this label: say so, never skip it silently.
       if (skipped) toast(`Label “${name}” added to ${rows(ids.length)}`, { description: `${rows(skipped)} in other mailboxes didn’t get it: “${name}” isn’t one of their labels.` })
-      else if (!quiet && ids.length > 1) toast(`Label “${name}” added to ${rows(ids.length)}`)
+      else if (!quiet && !moves && ids.length > 1) toast(`Label “${name}” added to ${rows(ids.length)}`)
     } catch (e) {
       toast.error('Could not add label', { description: errorMessage(e) })
       void softRefresh()

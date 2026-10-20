@@ -286,7 +286,8 @@ func (s *Service) label(id string) (models.Label, error) {
 }
 
 // AddLabel assigns a label manually (pushed to Gmail/Outlook for
-// provider-sourced labels).
+// provider-sourced labels). Like a rule, it moves the mail where the
+// label's "When added" says (Junk moves it to Junk).
 func (s *Service) AddLabel(ids []string, labelID string) error {
 	return s.changeLabel(ids, labelID, true)
 }
@@ -315,6 +316,7 @@ func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
 		return fmt.Errorf("this mailbox has no label “%s”", l.Name)
 	}
 	var changed []string
+	moves := labelMoves{}
 	for lid, gids := range groups {
 		ml := byID[lid]
 		if add {
@@ -329,7 +331,15 @@ func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
 		if ml.Source == config.LabelSourceProvider {
 			s.engine.PushLabel(gids, ml.Name, add)
 		}
+		if add {
+			for _, id := range gids {
+				// No reason: the user did it, so it isn't in the "sorted
+				// for you" review.
+				moves.add(id, thenKind(ml, false), "")
+			}
+		}
 	}
+	s.applyLabelMoves(moves, "label action")
 	s.messagesChanged(changed)
 	return nil
 }

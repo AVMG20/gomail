@@ -41,7 +41,7 @@ const mine = (l: Label) => !!l.accountIds?.includes(props.accountId)
 const userLabels = computed(() => settings.labels.filter((l) => mine(l) && (!l.source || l.source === 'user')))
 const importedLabels = computed(() => settings.labels.filter((l) => mine(l) && l.source === 'provider'))
 
-// ---- what happens to new mail that gets the label
+// ---- what happens to mail that gets the label
 const THEN: { value: string; label: string; chip: string }[] = [
   { value: 'keep', label: 'Keep in inbox', chip: '' },
   { value: 'archive', label: 'Archive', chip: '→ Archive' },
@@ -207,12 +207,12 @@ function labelAll() {
               <SelectTrigger
                 size="sm"
                 :class="['h-6 shrink-0 gap-1 rounded-full px-2 text-xs data-[size=sm]:h-6', thenOf(l).chip ? 'bg-muted text-foreground border-transparent' : 'text-muted-foreground border-dashed']"
-                :aria-label="`When “${l.name}” is added to new mail`"
+                :aria-label="`When “${l.name}” is added`"
               >
                 {{ thenOf(l).chip || 'When added…' }}
               </SelectTrigger>
               <SelectContent>
-                <div class="text-muted-foreground px-2 py-1.5 text-xs">When Jev or a rule adds it to new mail</div>
+                <div class="text-muted-foreground px-2 py-1.5 text-xs">When you, Jev or a rule adds it</div>
                 <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
               </SelectContent>
             </Select>
@@ -275,12 +275,12 @@ function labelAll() {
                 <SelectTrigger
                   size="sm"
                   :class="['h-6 shrink-0 gap-1 rounded-full px-2 text-xs data-[size=sm]:h-6', thenOf(l).chip ? 'bg-muted text-foreground border-transparent' : 'text-muted-foreground border-dashed']"
-                  :aria-label="`When “${l.name}” is added to new mail`"
+                  :aria-label="`When “${l.name}” is added`"
                 >
                   {{ thenOf(l).chip || 'When added…' }}
                 </SelectTrigger>
                 <SelectContent>
-                  <div class="text-muted-foreground px-2 py-1.5 text-xs">When Jev or a rule adds it to new mail</div>
+                  <div class="text-muted-foreground px-2 py-1.5 text-xs">When you, Jev or a rule adds it</div>
                   <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
                 </SelectContent>
               </Select>
