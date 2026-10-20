@@ -65,6 +65,9 @@ func webviewStorage() string {
 	return wv
 }
 
+// Minimum main window size (also the floor for a restored size).
+const minWindowWidth, minWindowHeight = 900, 600
+
 // minimizedArg is passed when launched at login: start hidden in the tray.
 const minimizedArg = "--minimized"
 
@@ -132,8 +135,8 @@ func main() {
 		Title:            "gomail",
 		Width:            1280,
 		Height:           820,
-		MinWidth:         900,
-		MinHeight:        600,
+		MinWidth:         minWindowWidth,
+		MinHeight:        minWindowHeight,
 		URL:              "/",
 		BackgroundColour: application.NewRGB(27, 38, 54),
 		Hidden:           svc.startMinimized, // shown again unless the tray is available
@@ -145,6 +148,9 @@ func main() {
 		},
 	})
 	svc.attach(app, window)
+	// Remembers the window's size/position in window.json (restored once the
+	// screens are known, see ApplicationStarted below).
+	geometry := newWindowKeeper(st.dir, app, window, minWindowWidth, minWindowHeight, svc.startMinimized)
 
 	// System tray: unread count + quick actions.
 	tray := app.SystemTray.New()
@@ -159,6 +165,7 @@ func main() {
 	tray.OnClick(func() { svc.showWindow() })
 	svc.tray = tray
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		go geometry.restore()
 		svc.applyTray()
 		svc.ensureNotificationPermission()
 	})
@@ -170,6 +177,7 @@ func main() {
 
 	// Close-to-tray: hide instead of closing when enabled.
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		geometry.flush()
 		if svc.hideOnClose() {
 			e.Cancel()
 			window.Hide()
