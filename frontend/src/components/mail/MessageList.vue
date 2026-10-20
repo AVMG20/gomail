@@ -358,6 +358,11 @@ const emptyState = computed(() => {
 
     <ReauthBanner />
 
+    <!-- The search as typed found nothing: these are close matches. -->
+    <div v-if="mail.similar && mail.search && mail.messages.length" class="bg-muted/60 text-muted-foreground border-border shrink-0 border-b px-3 py-1.5 text-xs">
+      No exact matches for “{{ mail.search }}”. Showing similar mail.
+    </div>
+
     <!-- Select-all banner -->
     <div
       v-if="(allLoadedSelected && mail.total > mail.messages.length) || mail.selectAllQuery"

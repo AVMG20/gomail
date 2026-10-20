@@ -228,6 +228,9 @@ type MessagePage struct {
 	// has mail older than Settings.syncDepthDays: LoadOlder fetches it, but
 	// only when asked (never automatically on scrolling).
 	OlderBeyondDepth bool `json:"olderBeyondDepth"`
+	// Similar is true when the search as typed matched nothing and the
+	// page shows close matches (spelling corrected) instead.
+	Similar bool `json:"similar"`
 }
 
 type OutgoingAttachment struct {

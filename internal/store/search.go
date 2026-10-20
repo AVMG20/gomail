@@ -398,9 +398,33 @@ func (s *Store) fillSummaries(cands []candidate) error {
 // fuzzySearch spell-corrects the free-text words against the vocabulary
 // and runs the corrected full-text query.
 func (s *Store) fuzzySearch(ps ParsedSearch, w *where, nowMs int64, seen map[string]bool) ([]candidate, error) {
-	vocab, err := s.vocabulary()
+	expr, terms, err := s.fuzzyExpr(ps)
+	if err != nil || expr == "" {
+		return nil, err
+	}
+	cands, err := s.ftsCandidates(expr, w, terms, nowMs)
 	if err != nil {
 		return nil, err
+	}
+	out := cands[:0]
+	for _, c := range cands {
+		if seen[c.sum.ID] {
+			continue
+		}
+		c.fuzzy = true
+		c.score *= 0.6 // rank below exact matches of similar age
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// fuzzyExpr is the full-text query with the free-text words spell-corrected
+// against the vocabulary ("" when no word could be corrected), and the
+// terms to highlight.
+func (s *Store) fuzzyExpr(ps ParsedSearch) (string, []hlTerm, error) {
+	vocab, err := s.vocabulary()
+	if err != nil {
+		return "", nil, err
 	}
 	var groups []string
 	var terms []hlTerm
@@ -429,7 +453,7 @@ func (s *Store) fuzzySearch(ps ParsedSearch, w *where, nowMs int64, seen map[str
 		}
 	}
 	if !corrected {
-		return nil, nil
+		return "", nil, nil
 	}
 	// Operators other than free text still apply.
 	col := func(c string, vals []string) {
@@ -442,20 +466,7 @@ func (s *Store) fuzzySearch(ps ParsedSearch, w *where, nowMs int64, seen map[str
 	col("sender", ps.From)
 	col("recipients", ps.To)
 	col("subject", ps.Subject)
-	cands, err := s.ftsCandidates(strings.Join(groups, " AND "), w, terms, nowMs)
-	if err != nil {
-		return nil, err
-	}
-	out := cands[:0]
-	for _, c := range cands {
-		if seen[c.sum.ID] {
-			continue
-		}
-		c.fuzzy = true
-		c.score *= 0.6 // rank below exact matches of similar age
-		out = append(out, c)
-	}
-	return out, nil
+	return strings.Join(groups, " AND "), terms, nil
 }
 
 // vocab is the in-memory set of words seen in subjects and senders, bucketed

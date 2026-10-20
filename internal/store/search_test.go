@@ -180,3 +180,26 @@ func TestHighlightEscaping(t *testing.T) {
 		t.Fatalf("window %q", h)
 	}
 }
+
+// The list's search box finds the same close matches as the search
+// palette when the words as typed match nothing, and says so; "select all"
+// covers what the list shows.
+func TestListSearchTypo(t *testing.T) {
+	s := seedSearch(t)
+	p, err := s.ListMessages(models.ListQuery{Search: "invioce"}, ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Total != 1 || len(p.Messages) != 1 || p.Messages[0].Subject != "Your invoice for October" || !p.Similar {
+		t.Fatalf("typo in the list: total %d similar %v %+v", p.Total, p.Similar, p.Messages)
+	}
+	if ids, _ := s.ResolveIDs(models.ListQuery{Search: "invioce"}, FilterOptions{}, 10); len(ids) != 1 {
+		t.Fatalf("select all on a typo: %v", ids)
+	}
+	if p, _ := s.ListMessages(models.ListQuery{Search: "invoice"}, ListOptions{}); p.Similar || p.Total != 1 {
+		t.Fatalf("exact search marked similar: %+v", p)
+	}
+	if p, _ := s.ListMessages(models.ListQuery{Search: "zzzzqqq"}, ListOptions{}); p.Total != 0 || p.Similar {
+		t.Fatalf("garbage matched: %+v", p)
+	}
+}

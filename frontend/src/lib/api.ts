@@ -378,7 +378,7 @@ export const api = {
   getFolders: async (accountId: string) => (await call<Folder[] | null>('GetFolders', accountId)) ?? [],
   listMessages: async (q: Partial<ListQuery>): Promise<MessagePage> => {
     const page = await call<MessagePage>('ListMessages', normQuery(q))
-    return { messages: (page.messages ?? []).map(normSummary), nextCursor: page.nextCursor ?? '', total: page.total ?? 0, hasMoreRemote: !!page.hasMoreRemote, olderBeyondDepth: !!page.olderBeyondDepth }
+    return { messages: (page.messages ?? []).map(normSummary), nextCursor: page.nextCursor ?? '', total: page.total ?? 0, hasMoreRemote: !!page.hasMoreRemote, olderBeyondDepth: !!page.olderBeyondDepth, similar: !!page.similar }
   },
   getMessage: async (id: string) => normMessage(await call<Message>('GetMessage', id)),
   getThread: async (id: string) => ((await call<Message[] | null>('GetThread', id)) ?? []).map(normMessage),

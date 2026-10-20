@@ -88,6 +88,8 @@ export const useMailStore = defineStore('mail', () => {
   const nextCursor = ref('')
   const hasMoreRemote = ref(false)
   const olderBeyondDepth = ref(false)
+  /** The search as typed matched nothing: the list shows close matches (spelling corrected). */
+  const similar = ref(false)
   const loadingOlder = ref(false)
   const total = ref(0)
   const status = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -229,6 +231,7 @@ export const useMailStore = defineStore('mail', () => {
       hasMoreRemote.value = !!page.hasMoreRemote
       olderBeyondDepth.value = !!page.olderBeyondDepth
       total.value = page.total
+      similar.value = !!page.similar
       status.value = 'ready'
       learnAddresses(page.messages)
       void refreshViewUnread()
@@ -276,6 +279,7 @@ export const useMailStore = defineStore('mail', () => {
       hasMoreRemote.value = !!page.hasMoreRemote
       olderBeyondDepth.value = !!page.olderBeyondDepth
       total.value = page.total
+      similar.value = !!page.similar
       status.value = 'ready'
       learnAddresses(page.messages)
       void refreshViewUnread()
@@ -304,6 +308,7 @@ export const useMailStore = defineStore('mail', () => {
       hasMoreRemote.value = !!page.hasMoreRemote
       olderBeyondDepth.value = !!page.olderBeyondDepth
       total.value = page.total
+      similar.value = !!page.similar
       learnAddresses(page.messages)
     } catch (e) {
       if (t === token) toast.error('Could not load more messages', { description: errorMessage(e) })
@@ -989,7 +994,7 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   return {
-    mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, olderBeyondDepth, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
+    mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, olderBeyondDepth, similar, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,

@@ -85,6 +85,9 @@ type FilterOptions struct {
 	ExcludeFolderKinds []string
 	// OnlyUnlabeled keeps messages without any label.
 	OnlyUnlabeled bool
+	// FTSExpr replaces the search's full-text query (the spell-corrected
+	// one, see similarFilter).
+	FTSExpr string
 }
 
 // visible is the SQL condition for messages shown anywhere: a message in
@@ -152,7 +155,11 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 	if strings.TrimSpace(q.Search) != "" {
 		ps := ParseSearch(q.Search)
 		s.addSearchFilters(w, ps)
-		if expr := ps.FTSQuery(); expr != "" {
+		expr := ps.FTSQuery()
+		if opt.FTSExpr != "" {
+			expr = opt.FTSExpr
+		}
+		if expr != "" {
 			// "+" keeps the planner from fetching every match by rowid (each
 			// a row read, past cached bodies for folder_kinds): it walks a
 			// covering list index in date order and checks the matches
@@ -242,14 +249,43 @@ const (
 	MaxPageSize     = 200
 )
 
-// ResolveIDs returns the ids of up to max messages matching q, newest first.
-func (s *Store) ResolveIDs(q models.ListQuery, opt FilterOptions, max int) ([]string, error) {
-	w, err := s.buildFilter(q, opt)
-	if err != nil {
-		return nil, err
+// similarFilter is the filter for q with its search words spell-corrected,
+// for when the search as typed matches nothing (ok false: nothing to
+// correct). The list and "select all" then show the same close matches as
+// the search box.
+func (s *Store) similarFilter(q models.ListQuery, opt FilterOptions) (*where, bool, error) {
+	if strings.TrimSpace(q.Search) == "" {
+		return nil, false, nil
 	}
-	if q.Cursor != "" {
-		q.Cursor = "" // a selection covers the whole result, not one page
+	expr, _, err := s.fuzzyExpr(ParseSearch(q.Search))
+	if err != nil || expr == "" {
+		return nil, false, err
+	}
+	opt.FTSExpr = expr
+	w, err := s.buildFilter(q, opt)
+	return w, err == nil, err
+}
+
+// ResolveIDs returns the ids of up to max messages matching q, newest first
+// (close matches when the search as typed matches nothing, like the list).
+func (s *Store) ResolveIDs(q models.ListQuery, opt FilterOptions, max int) ([]string, error) {
+	ids, err := s.resolveIDs(q, opt, max, nil)
+	if err != nil || len(ids) > 0 {
+		return ids, err
+	}
+	w, ok, err := s.similarFilter(q, opt)
+	if err != nil || !ok {
+		return ids, err
+	}
+	return s.resolveIDs(q, opt, max, w)
+}
+
+func (s *Store) resolveIDs(q models.ListQuery, opt FilterOptions, max int, w *where) ([]string, error) {
+	if w == nil {
+		var err error
+		if w, err = s.buildFilter(q, opt); err != nil {
+			return nil, err
+		}
 	}
 	rows, err := s.db.Query(`SELECT m.id FROM messages m`+w.sql()+` ORDER BY m.date DESC, m.id DESC LIMIT ?`, append(w.args, max)...)
 	if err != nil {

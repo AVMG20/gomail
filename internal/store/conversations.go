@@ -63,6 +63,18 @@ func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.Messag
 	if page.Total, err = s.listTotal(q, opt, w); err != nil {
 		return page, err
 	}
+	if page.Total == 0 {
+		// Nothing as typed ("oddido"): show close matches ("odido").
+		if sw, ok, err := s.similarFilter(q, FilterOptions{}); err != nil {
+			return page, err
+		} else if ok {
+			if n, err := s.listTotal(q, opt, sw); err != nil {
+				return page, err
+			} else if n > 0 {
+				w, page.Total, page.Similar = sw, n, true
+			}
+		}
+	}
 	if opt.Conversations {
 		latestInThread(w)
 	}

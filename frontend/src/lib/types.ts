@@ -298,6 +298,8 @@ export interface MessagePage {
   hasMoreRemote?: boolean
   /** The server only has mail older than the sync depth: fetched on request, never on scroll. */
   olderBeyondDepth?: boolean
+  /** The search as typed matched nothing; these are close matches (spelling corrected). */
+  similar?: boolean
 }
 
 export interface OutgoingAttachment {

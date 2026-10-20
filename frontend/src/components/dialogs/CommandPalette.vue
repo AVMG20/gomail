@@ -69,7 +69,8 @@ watch(() => ui.paletteOpen, (open) => {
   if (open) {
     query.value = ''
     results.value = []
-    scopeAll.value = true
+    // Search the mailbox on screen; every mailbox only from the unified view.
+    scopeAll.value = !mail.mailbox.accountId
   }
 })
 
@@ -98,7 +99,7 @@ watch([query, scopeAccount, searchTick], () => {
     try {
       // Searches all mail: the list's label filter doesn't apply here (use label: to narrow).
       const res = await api.searchMessages({ query: q, accountId: scopeAccount.value, labels: [], limit: 20 })
-      if (t === token) results.value = res
+      if (t === token) results.value = oneOfEachConversation(res)
     } catch {
       if (t === token) results.value = []
     } finally {
@@ -106,6 +107,18 @@ watch([query, scopeAccount, searchTick], () => {
     }
   }, 120)
 })
+
+/** Like the list in conversation view: one row per conversation, its best match (results come ranked). */
+function oneOfEachConversation(res: SearchResult[]): SearchResult[] {
+  if (settings.settings?.conversationView === false) return res
+  const seen = new Set<string>()
+  return res.filter((r) => {
+    const key = r.message.threadId ? `${r.message.accountId}|${r.message.threadId}` : r.message.id
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
 
 const MATCH_FIELDS: Record<string, string> = { subject: 'subject', from: 'sender', to: 'recipients', snippet: 'preview', body: 'message body' }
 /** Explain the hit when the highlighted excerpt doesn't show it (or it was typo-tolerant). */
