@@ -13,6 +13,8 @@ import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ invite: EventInvite }>()
 const ui = useUiStore()
+// The calendar store applies Settings → Calendar → Time format to every displayed time.
+useCalendarStore()
 const response = ref<AttendeeResponse>(props.invite.myResponse ?? '')
 const busy = ref(false)
 const cancelled = computed(() => props.invite.method?.toUpperCase() === 'CANCEL')

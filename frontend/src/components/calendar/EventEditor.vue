@@ -130,8 +130,12 @@ function fail(msg: string): null {
   return null
 }
 
+const guestField = ref<InstanceType<typeof RecipientField> | null>(null)
+
 async function save() {
   error.value = ''
+  // A guest typed but not yet turned into a chip (the field commits on blur, after this click).
+  guestField.value?.commit()
   const input = buildInput()
   if (!input) return
   if (!input.title) input.title = 'Untitled event'
@@ -181,6 +185,7 @@ let initial = ''
 onMounted(() => (initial = snapshot()))
 let confirming = false
 async function requestClose() {
+  guestField.value?.commit()
   if (!readOnly.value && initial && snapshot() !== initial) {
     if (confirming) return
     confirming = true
@@ -294,7 +299,7 @@ function addReminder(v: unknown) {
         <div class="flex gap-3">
           <UsersIcon class="text-muted-foreground mt-2 size-4 shrink-0" />
           <div class="border-input min-w-0 flex-1 rounded-md border px-2">
-            <RecipientField v-model="guests" label="Guests" />
+            <RecipientField ref="guestField" v-model="guests" label="Guests" />
           </div>
         </div>
 

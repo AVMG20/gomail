@@ -89,7 +89,8 @@ type batchResp struct {
 }
 
 // batch executes requests via /$batch (20 per call), retrying throttled
-// sub-requests. It returns responses by request id.
+// sub-requests. It returns responses by request id; on error, the ones
+// received before it (those sub-requests were applied).
 func (c *Client) batch(ctx context.Context, reqs []batchReq) (map[string]batchResp, error) {
 	out := map[string]batchResp{}
 	pending := reqs
@@ -111,7 +112,7 @@ func (c *Client) batch(ctx context.Context, reqs []batchReq) (map[string]batchRe
 				Responses []batchResp `json:"responses"`
 			}
 			if err := c.api.JSONRetry(ctx, http.MethodPost, "$batch", map[string]any{"requests": chunk}, &resp); err != nil {
-				return nil, err
+				return out, err
 			}
 			byID := map[string]batchReq{}
 			for _, r := range chunk {
@@ -145,7 +146,7 @@ func (c *Client) batch(ctx context.Context, reqs []batchReq) (map[string]batchRe
 				}
 			}
 			if err := sleep(ctx, min(wait, time.Minute)); err != nil {
-				return nil, err
+				return out, err
 			}
 		}
 	}
@@ -175,9 +176,9 @@ func (c *Client) batchEach(ctx context.Context, ids []string, mk func(id string)
 		r.ID = strconv.Itoa(i)
 		reqs[i] = r
 	}
-	resps, err := c.batch(ctx, reqs)
-	if err != nil {
-		return err
+	resps, callErr := c.batch(ctx, reqs)
+	if callErr != nil && len(resps) == 0 {
+		return callErr
 	}
 	var first error
 	var failed []string
@@ -185,7 +186,10 @@ func (c *Client) batchEach(ctx context.Context, ids []string, mk func(id string)
 		r, ok := resps[strconv.Itoa(i)]
 		var err error
 		if !ok {
-			err = errors.New("Microsoft Graph returned an incomplete batch response")
+			err = callErr // a later $batch call failed: not applied
+			if err == nil {
+				err = errors.New("Microsoft Graph returned an incomplete batch response")
+			}
 		} else if err = batchError(r); r.Status == http.StatusNotFound {
 			err = nil
 		}

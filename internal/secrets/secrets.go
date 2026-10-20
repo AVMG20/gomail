@@ -181,6 +181,9 @@ type autoStore struct {
 	file     *FileStore
 	mu       sync.Mutex
 	disabled bool
+	// op serializes Get/Set/Delete: Get may move a fallback copy back into
+	// the keyring, which must not overwrite a concurrent Set's newer value.
+	op sync.Mutex
 }
 
 func (a *autoStore) keyringOK() bool {
@@ -202,6 +205,8 @@ func (a *autoStore) keyringFailed(op string, err error) {
 }
 
 func (a *autoStore) Get(key string) (string, error) {
+	a.op.Lock()
+	defer a.op.Unlock()
 	if a.keyringOK() {
 		// A fallback copy is always newer than the keyring's (a working
 		// keyring Set removes it): it was written while the keyring was
@@ -224,6 +229,8 @@ func (a *autoStore) Get(key string) (string, error) {
 }
 
 func (a *autoStore) Set(key, value string) error {
+	a.op.Lock()
+	defer a.op.Unlock()
 	if a.keyringOK() {
 		err := a.kr.Set(key, value)
 		if err == nil {
@@ -237,6 +244,8 @@ func (a *autoStore) Set(key, value string) error {
 }
 
 func (a *autoStore) Delete(key string) error {
+	a.op.Lock()
+	defer a.op.Unlock()
 	var kerr error
 	if a.keyringOK() {
 		if kerr = a.kr.Delete(key); kerr != nil {

@@ -398,9 +398,6 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 
 	newIDs, initial, err := e.doSync(ctx, acct)
-	if err == nil && e.cfg.Calendar != nil {
-		e.cfg.Calendar(ctx, accountID)
-	}
 
 	e.mu.Lock()
 	st.syncing = false
@@ -445,6 +442,10 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 	}
 	if err != nil {
 		return errors.New(msg)
+	}
+	// Calendars last: a slow calendar must not delay the mail result.
+	if e.cfg.Calendar != nil {
+		e.cfg.Calendar(ctx, accountID)
 	}
 	return nil
 }

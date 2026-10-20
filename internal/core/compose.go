@@ -144,6 +144,7 @@ func (s *Service) Send(req models.ComposeRequest) error {
 		}
 		if err == nil {
 			s.drafts.cancel(h.String()) // also waits for an autosave in flight
+			h = s.drafts.resolve(h)     // which may have recreated the draft
 		}
 		switch {
 		case err != nil:
@@ -360,7 +361,8 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 	e.last, e.pending = time.Now(), nil
 	flushing := e.flushing
 	s.drafts.mu.Unlock()
-	waitFlush(flushing) // an older coalesced save must not land after this one
+	waitFlush(flushing)     // an older coalesced save must not land after this one
+	h = s.drafts.resolve(h) // which may have recreated the draft
 	rid, err := p.SaveDraft(ctx, out, h.remoteID)
 	if err != nil {
 		return "", fmt.Errorf("saving the draft failed: %s", syncer.HumanError(acct, err))
@@ -411,6 +413,9 @@ func (s *Service) flushPendingDrafts(wait time.Duration) {
 }
 
 func (s *Service) flushDraft(key string) {
+	if h, ok := parseDraftHandle(key); ok {
+		key = s.drafts.resolve(h).String() // the timer may predate a recreation
+	}
 	s.drafts.mu.Lock()
 	e, ok := s.drafts.entries[key]
 	if !ok || e.pending == nil {
@@ -422,6 +427,7 @@ func (s *Service) flushDraft(key string) {
 	}
 	out := *e.pending
 	e.pending, e.timer, e.last = nil, nil, time.Now()
+	prev := e.flushing
 	done := make(chan struct{})
 	e.flushing = done
 	s.drafts.mu.Unlock()
@@ -433,7 +439,11 @@ func (s *Service) flushDraft(key string) {
 		s.drafts.mu.Unlock()
 		close(done)
 	}()
+	// Saves of one draft land in order; the previous one may also have
+	// recreated the draft under a new id.
+	waitFlush(prev)
 	h, _ := parseDraftHandle(key)
+	h = s.drafts.resolve(h)
 	p, err := s.provider(h.accountID)
 	if err != nil {
 		return
@@ -459,6 +469,7 @@ func (s *Service) DeleteDraft(id string) error {
 		return err
 	}
 	s.drafts.cancel(h.String())
+	h = s.drafts.resolve(h) // an autosave in flight may have recreated it
 	p, err := s.provider(h.accountID)
 	if err != nil {
 		return err

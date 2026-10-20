@@ -104,11 +104,15 @@ const liveRow = computed(() => {
   const first = thread.value[0]
   if (!first) return ''
   const r = mail.messages.find((m) => m.accountId === first.accountId && m.threadId === first.threadId)
-  return r ? `${r.id}:${r.threadCount ?? 1}` : ''
+  return r ? `${first.accountId}|${first.threadId}|${r.id}:${r.threadCount ?? 1}` : ''
 })
+const convOf = (k: string) => k.split('|').slice(0, 2).join('|')
 watch(liveRow, async (now, old) => {
   const id = mail.openId
-  if (!old || !now || now === old || !id) return
+  // Only for the conversation on screen: while another message is still loading, the old
+  // thread's row changing must not cancel (and replace) that load.
+  // Same conversation only (opening another one changes this too, and needs no refetch).
+  if (!old || !now || now === old || convOf(now) !== convOf(old) || !id || !threadMatches.value) return
   const t = ++token
   try {
     mail.invalidateThread(id)

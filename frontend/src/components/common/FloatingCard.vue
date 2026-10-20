@@ -55,20 +55,25 @@ function onKey(e: KeyboardEvent) {
 }
 
 // Where focus was before the card opened (an event chip, a slot, a button).
+let armTimer: ReturnType<typeof setTimeout> | null = null
+let alive = true
 const opener = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
 
 onMounted(async () => {
   await nextTick()
+  if (!alive) return
   place()
   // Focus a text field marked autofocus, else the card itself (no stray focus ring on a button).
   const field = el.value?.querySelector<HTMLElement>('input[autofocus], textarea[autofocus]')
   if (field) field.focus()
   else el.value?.focus()
   // Defer so the click that opened the card doesn't close it.
-  setTimeout(() => document.addEventListener('pointerdown', onDown, true), 0)
+  armTimer = setTimeout(() => alive && document.addEventListener('pointerdown', onDown, true), 0)
   window.addEventListener('resize', place)
 })
 onBeforeUnmount(() => {
+  alive = false // closed right away: never arm the outside-click listener
+  if (armTimer) clearTimeout(armTimer)
   // Give focus back unless the user already moved it somewhere else.
   const a = document.activeElement
   if (opener?.isConnected && opener !== document.body && (!a || a === document.body || el.value?.contains(a))) {

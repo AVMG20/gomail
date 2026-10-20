@@ -78,7 +78,10 @@ function loadDrafts(): Draft[] {
 }
 
 function contentSig(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' | 'html' | 'attachments'>): string {
-  return JSON.stringify([d.to, d.cc, d.bcc, d.subject, d.html, d.attachments?.length ?? 0])
+  // The body's text, not its markup: the editor normalises the prefilled HTML as soon as it
+  // loads (classes, a trailing paragraph), which is not the user changing anything.
+  const text = htmlToText(d.html ?? '').replace(/\s+/g, ' ').trim()
+  return JSON.stringify([d.to, d.cc, d.bcc, d.subject, text, d.attachments?.length ?? 0])
 }
 
 /** Recipients, subject, attachments or typed body text (the auto-inserted signature doesn't count).
@@ -124,10 +127,18 @@ export const useComposeStore = defineStore('compose', () => {
     return !!d.filesPending || !!d.missingFiles?.length
   }
 
+  function remoteSig(d: Draft): string {
+    return JSON.stringify([d.accountId, d.to, d.cc, d.bcc, d.subject, d.html, d.attachments.length])
+  }
+  /** The server copy has the draft's latest edits (a failed or pending save means it doesn't). */
+  function savedRemotely(d: Draft): boolean {
+    return !!d.remoteId && !remoteTimers.has(d.id) && !remoteInflight.has(d.id) && !filesIncomplete(d) && lastRemote.get(d.id) === remoteSig(d)
+  }
+
   function scheduleRemote(d: Draft) {
     // A draft whose files aren't back must not replace the server copy (which still has them).
     if (!hasMethod('SaveDraft') || d.queued || d.sending || !draftHasContent(d) || filesIncomplete(d)) return
-    const sig = JSON.stringify([d.accountId, d.to, d.cc, d.bcc, d.subject, d.html, d.attachments.length])
+    const sig = remoteSig(d)
     if (lastRemote.get(d.id) === sig || scheduledRemote.get(d.id) === sig) return
     scheduledRemote.set(d.id, sig)
     const t = remoteTimers.get(d.id)
@@ -213,7 +224,7 @@ export const useComposeStore = defineStore('compose', () => {
     drafts.value.forEach((x) => (x.minimized = true))
     const next = [...drafts.value, d]
     const others = next.filter((x) => x !== d && !x.queued && !x.sending)
-    const drop = others.length > 3 ? others.find((x) => !draftHasContent(x) || (x.remoteId && !remoteTimers.has(x.id) && !remoteInflight.has(x.id))) : undefined
+    const drop = others.length > 3 ? others.find((x) => !draftHasContent(x) || savedRemotely(x)) : undefined
     if (drop) {
       drafts.value = next.filter((x) => x !== drop)
       if (draftHasContent(drop)) toast('Draft moved to Drafts', { description: drop.subject || '(no subject)' })
@@ -295,10 +306,14 @@ export const useComposeStore = defineStore('compose', () => {
   }
 
   function close(id: string) {
-    drafts.value = drafts.value.filter((d) => d.id !== id)
+    const d = drafts.value.find((x) => x.id === id)
+    drafts.value = drafts.value.filter((x) => x.id !== id)
     storedFiles.delete(id)
     void deleteDraftFiles(id)
-    afterStepAway()
+    // Only a window the user was in hands focus back (a send finishing after the undo delay
+    // happens in the background and must not swallow the keys of whatever they do next).
+    const inDock = typeof document !== 'undefined' && !!document.activeElement?.closest?.('[data-compose-dock]')
+    if (d && !d.queued && (!d.minimized || inDock)) afterStepAway()
   }
 
   /** Minimise a compose window (Esc, the minimise button). */
@@ -368,7 +383,9 @@ export const useComposeStore = defineStore('compose', () => {
     const d = drafts.value.find((x) => x.id === id)
     if (!d) return true
     if (!draftHasContent(d)) {
-      close(id)
+      // Emptied again after an autosave: drop that server copy too (it still has the old text).
+      if (d.remoteId || remoteTimers.has(id) || remoteInflight.has(id)) await discard(id)
+      else close(id)
       return true
     }
     if (filesIncomplete(d)) {
@@ -491,7 +508,9 @@ export const useComposeStore = defineStore('compose', () => {
       return
     }
     if (delaySeconds > 0) {
+      const visible = !d.minimized
       d.queued = true
+      if (visible) afterStepAway() // the window disappears like a close: focus back to the list
       const toastId = toast('Sending…', {
         description: d.subject || '(no subject)',
         duration: delaySeconds * 1000,

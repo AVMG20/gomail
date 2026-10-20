@@ -182,6 +182,10 @@ func parseTime(t gTime, fallbackTZ string) (time.Time, bool, string) {
 var gResponse = map[string]string{"needsAction": models.ResponseNone, "accepted": models.ResponseAccepted,
 	"tentative": models.ResponseTentative, "declined": models.ResponseDeclined}
 
+// gStatus maps known answers back to Google's (unanswered: omitted).
+var gStatus = map[string]string{models.ResponseAccepted: "accepted", models.ResponseTentative: "tentative",
+	models.ResponseDeclined: "declined", models.ResponseOrganizer: "accepted"}
+
 func safeURL(u string) string {
 	if p, err := url.Parse(u); err == nil && p.Scheme == "https" && p.Host != "" {
 		return u
@@ -403,7 +407,10 @@ func body(ev calendar.Event) map[string]any {
 		atts := []gPerson{}
 		for _, a := range ev.Attendees {
 			if a.Email != "" {
-				atts = append(atts, gPerson{Email: a.Email, DisplayName: a.Name, Optional: a.Optional})
+				// The list replaces Google's; without their status, guests'
+				// answers would reset to needsAction.
+				atts = append(atts, gPerson{Email: a.Email, DisplayName: a.Name, Optional: a.Optional,
+					ResponseStatus: gStatus[a.Response]})
 			}
 		}
 		b["attendees"] = atts

@@ -80,6 +80,9 @@ export function useShortcuts() {
     // Focus inside the compose window, an open menu or a popover owns the keyboard.
     const inWidget = !!(e.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="menubar"], [data-no-shortcuts]')
     if (typing || inWidget || ui.anyDialogOpen()) return
+    // A minimised compose tab (focused after Esc): Enter/Space open it, and Backspace/Delete
+    // (still meant for the draft) never trash the open mail. Other shortcuts keep working.
+    if ((e.target as Element | null)?.closest?.('[data-compose-dock]') && ['Backspace', 'Delete', 'Enter', ' '].includes(key)) return
     if (ui.keyGuarded(key)) {
       // Right after a compose window closed: never trash/act on the open mail by accident.
       e.preventDefault()

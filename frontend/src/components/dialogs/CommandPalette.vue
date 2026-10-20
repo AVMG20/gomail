@@ -210,6 +210,7 @@ function close() {
 
 function openResult(r: SearchResult) {
   pushRecent(query.value)
+  ui.mainView = 'mail' // also when the palette was opened from the calendar
   const m = r.message
   const folder = m.folderIds.map((id) => accounts.folderMap.get(id)).find((f) => f && f.kind !== 'custom') ?? accounts.folderOf(m.accountId, 'inbox')
   const sameView = mail.byId.has(m.id)
@@ -225,12 +226,14 @@ function showAll() {
   const text = query.value.trim()
   if (!text) return
   pushRecent(text)
+  ui.mainView = 'mail'
   mail.setMailbox({ accountId: scopeAccount.value, folderId: '', kind: 'all' })
   mail.search = text
   close()
 }
 
 function pickMailbox(x: MailboxItem) {
+  ui.mainView = 'mail'
   if (x.isAccount) mail.switchAccount(x.accountId)
   else if (x.key === 'all') mail.switchAccount('')
   else mail.setMailbox({ accountId: x.accountId, folderId: x.folderId, kind: x.kind })
@@ -317,7 +320,7 @@ const tipKeys = shortcutLabel('mod+enter')
           <template v-for="section in order" :key="section">
             <template v-if="section === 'labels'">
             <CmdGroup v-if="labelItems.length" heading="Labels">
-              <CmdItem v-for="l in labelItems" :key="l.id" :value="`label:${l.id}`" @select="mail.toggleLabelFilter(l.id)">
+              <CmdItem v-for="l in labelItems" :key="l.id" :value="`label:${l.id}`" @select="ui.mainView = 'mail'; mail.toggleLabelFilter(l.id)">
                 <span class="size-2.5 rounded-full" :style="{ background: l.color }" />
                 <span class="flex-1 truncate">{{ l.name }}</span>
                 <span class="text-muted-foreground text-xs">{{ mail.labelFilter.labels.includes(l.id) ? 'Filtering' : 'Filter list' }}</span>

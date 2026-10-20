@@ -131,6 +131,7 @@ export function useBackendEvents() {
         action: {
           label: 'Open',
           onClick: () => {
+            ui.mainView = 'mail' // also from the calendar
             mail.switchAccount(p.accountId)
             setTimeout(() => mail.open(p.latest.id), 300)
           },

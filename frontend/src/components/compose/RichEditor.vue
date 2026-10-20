@@ -217,6 +217,7 @@ async function improveGrammar() {
   ed.view.dispatch(setPending(ed.state.tr, from, to))
   try {
     const result = await api.improveGrammar(input)
+    if (ed.isDestroyed) return // the window was minimised or closed meanwhile
     const range = pendingRange(ed.state) ?? { from, to }
     ed.view.dispatch(clearPending(ed.state.tr))
     if (!result.trim() || result === input) {
@@ -248,7 +249,7 @@ async function improveGrammar() {
       },
     })
   } catch (e) {
-    ed.view.dispatch(clearPending(ed.state.tr))
+    if (!ed.isDestroyed) ed.view.dispatch(clearPending(ed.state.tr))
     toast.error('Could not improve grammar', { description: errorMessage(e) })
   } finally {
     improving.value = false

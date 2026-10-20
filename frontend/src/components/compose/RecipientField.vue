@@ -41,6 +41,8 @@ watch(text, (q) => {
 onBeforeUnmount(() => {
   if (timer) clearTimeout(timer)
   token++
+  // Minimising the window (Esc) or opening another one unmounts the field: keep what was typed.
+  if (text.value.trim()) commit()
 })
 const suggestions = computed(() => {
   if (!text.value.trim()) return []
@@ -79,6 +81,18 @@ function commit(): boolean {
   return true
 }
 
+/** The text so far ends inside "a quoted name" or an <address>. */
+function insideQuoteOrAngle(t: string): boolean {
+  let quoted = false
+  let angle = false
+  for (const c of t) {
+    if (c === '"' && !angle) quoted = !quoted
+    else if (c === '<' && !quoted) angle = true
+    else if (c === '>' && !quoted) angle = false
+  }
+  return quoted || angle
+}
+
 function onKey(e: KeyboardEvent) {
   if (e.key === 'ArrowDown' && suggestions.value.length) {
     e.preventDefault()
@@ -86,6 +100,8 @@ function onKey(e: KeyboardEvent) {
   } else if (e.key === 'ArrowUp' && suggestions.value.length) {
     e.preventDefault()
     active.value = (active.value - 1 + suggestions.value.length) % suggestions.value.length
+  } else if ((e.key === ',' || e.key === ';') && insideQuoteOrAngle(text.value)) {
+    // Part of a display name like "Doe, John": type it, don't split there.
   } else if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',' || e.key === ';') {
     // A complete address that differs from the top suggestion is taken as typed (unless the
     // user arrowed to a suggestion).

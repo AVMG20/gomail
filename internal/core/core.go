@@ -400,7 +400,7 @@ func (s *Service) tokenSource(acct models.Account) (*auth.TokenSource, error) {
 	}
 	id := acct.ID
 	ts := auth.NewTokenSource(cfg, tok, acct.Email, func(t *oauth2.Token) error {
-		if _, err := s.store.Account(id); err != nil {
+		if _, err := s.store.Account(id); errors.Is(err, store.ErrNotFound) {
 			return nil // removed meanwhile: don't write its sign-in back
 		}
 		return auth.SaveToken(s.secrets, id, t)

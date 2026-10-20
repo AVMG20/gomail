@@ -463,9 +463,26 @@ export const useMailStore = defineStore('mail', () => {
     selectAllQuery.value = false
   }
 
+  /** Account of ids resolved by targetIdsForQuery in a unified view (Undo needs each one's folder). */
+  const resolvedAccount = new Map<string, string>()
+
   /** All ids in the current view (select all, "mark all as read"). */
   async function targetIdsForQuery(): Promise<string[]> {
-    const ids = await api.resolveQueryIds({ ...query.value, cursor: '' }, MAX_RESOLVE)
+    const q = { ...query.value, cursor: '' }
+    resolvedAccount.clear()
+    let ids: string[]
+    if (q.accountId || q.folderId || accounts.accounts.length < 2) ids = await api.resolveQueryIds(q, MAX_RESOLVE)
+    else {
+      // Unified view: resolve per account, so Undo can send rows that were never loaded back
+      // to their own account's folder.
+      const per = await Promise.all(accounts.accounts.map(async (a) => [a.id, await api.resolveQueryIds({ ...q, accountId: a.id }, MAX_RESOLVE)] as const))
+      ids = []
+      for (const [acct, list] of per) {
+        for (const id of list) resolvedAccount.set(id, acct)
+        ids.push(...list)
+      }
+      ids = ids.slice(0, MAX_RESOLVE)
+    }
     if (ids.length >= MAX_RESOLVE) {
       toast.warning(`Only the newest ${MAX_RESOLVE.toLocaleString()} messages are included`, { description: 'Repeat the action for the rest.' })
     }
@@ -553,17 +570,26 @@ export const useMailStore = defineStore('mail', () => {
   function undoMove(items: MessageSummary[], others: string[] = []) {
     const key = mailboxKey(mailbox.value)
     const origins = new Map(items.map((m) => [m.id, originFolder(m)] as const))
-    const shownFolder = mailbox.value.folderId
+    // Rows never loaded go back to the folder shown (in a unified view: their account's folder of that kind).
+    const mb = mailbox.value
+    for (const id of others) {
+      const acct = mb.accountId || resolvedAccount.get(id) || ''
+      const f = mb.folderId || (mb.kind !== 'all' && acct ? accounts.folderOf(acct, mb.kind)?.id : undefined)
+      if (f) origins.set(id, f)
+    }
+    const otherSet = new Set(others)
     return async () => {
       // Rows only come back if the same list is still shown.
       if (mailboxKey(mailbox.value) === key) restoreLocal(items)
       const groups = new Map<string, string[]>()
-      for (const m of items) {
-        const f = origins.get(m.id)
-        if (!f) continue
-        groups.set(f, [...(groups.get(f) ?? []), m.conversationId || m.id])
+      const add = (f: string | undefined, id: string) => {
+        if (!f) return
+        const list = groups.get(f)
+        if (list) list.push(id)
+        else groups.set(f, [id])
       }
-      if (shownFolder && others.length) groups.set(shownFolder, [...(groups.get(shownFolder) ?? []), ...others])
+      for (const m of items) add(origins.get(m.id), m.conversationId || m.id)
+      for (const id of otherSet) add(origins.get(id), id)
       await Promise.all([...groups].map(([f, ids]) => inChunks(ids, (c) => api.moveToFolder(c, f)))).catch((e) => toast.error('Undo failed', { description: errorMessage(e) }))
       void softRefresh()
     }
@@ -589,6 +615,7 @@ export const useMailStore = defineStore('mail', () => {
     } catch (e) {
       if (removes) restoreLocal(items)
       toast.error('Archive failed', { description: errorMessage(e) })
+      void softRefresh() // earlier chunks may have gone through
     }
     accounts.refreshCounts()
   }
@@ -612,6 +639,7 @@ export const useMailStore = defineStore('mail', () => {
     } catch (e) {
       restoreLocal(items)
       toast.error('Delete failed', { description: errorMessage(e) })
+      void softRefresh() // earlier chunks may have gone through
     }
     accounts.refreshCounts()
   }

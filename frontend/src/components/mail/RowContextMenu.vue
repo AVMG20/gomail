@@ -27,10 +27,10 @@ const ctxMsg = computed(() => mail.byId.get(props.messageId) ?? null)
 const ctxIds = computed(() => (mail.selection.has(props.messageId) ? [...mail.selection] : [props.messageId]))
 
 /** Bulk actions on a selected row follow the selection, including "all N in this view". */
-async function run(fn: (ids: string[]) => unknown) {
+async function run(fn: (ids: string[]) => unknown, keepSelection = false) {
   const inSelection = mail.selection.has(props.messageId)
   const ids = inSelection && mail.selectAllQuery ? await mail.targetIds() : ctxIds.value
-  if (inSelection) mail.clearSelection()
+  if (inSelection && !keepSelection) mail.clearSelection()
   await fn(ids)
 }
 
@@ -58,7 +58,8 @@ const labelState = (labelId: string) => ctxIds.value.every((id) => mail.byId.get
 
 function toggleCtxLabel(labelId: string) {
   const remove = labelState(labelId)
-  void run((ids) => (remove ? mail.removeLabel(ids, labelId) : mail.addLabel(ids, labelId)))
+  // The label submenu stays open for more toggles: keep the selection they apply to.
+  void run((ids) => (remove ? mail.removeLabel(ids, labelId) : mail.addLabel(ids, labelId)), true)
 }
 </script>
 
