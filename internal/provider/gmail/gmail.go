@@ -1056,7 +1056,7 @@ func (c *Client) ListOlder(ctx context.Context, folder mail.Folder, before time.
 		label, q = "", "-in:spam -in:trash"
 	}
 	if !before.IsZero() {
-		q = strings.TrimSpace(q + " before:" + strconv.FormatInt(before.Unix(), 10))
+		q = strings.TrimSpace(q + " before:" + strconv.FormatInt(provider.OlderBound(before).Unix(), 10))
 	}
 	ids, err := c.listIDs(ctx, label, q, limit)
 	if err != nil {

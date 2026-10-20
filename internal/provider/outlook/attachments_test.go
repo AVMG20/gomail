@@ -151,3 +151,21 @@ func TestRemovingLargeAttachment(t *testing.T) {
 		t.Fatalf("removed file still on the draft: %+v", got)
 	}
 }
+
+// Older pages include the whole second of the cursor: Graph compares whole
+// seconds, and mail sharing that second with the oldest cached message
+// (bulk deliveries) was excluded by "lt" for good.
+func TestListOlderIncludesTheCursorSecond(t *testing.T) {
+	var filter string
+	c := auditClient(t, func(w http.ResponseWriter, r *http.Request) {
+		filter = r.URL.Query().Get("$filter")
+		w.Write([]byte(`{"value":[]}`))
+	})
+	before := time.Date(2026, 3, 4, 5, 6, 7, 500e6, time.UTC)
+	if _, err := c.ListOlder(context.Background(), mail.Folder{RemoteID: "inbox"}, before, 10); err != nil {
+		t.Fatal(err)
+	}
+	if filter != "receivedDateTime lt 2026-03-04T05:06:08Z" {
+		t.Fatalf("filter %q", filter)
+	}
+}

@@ -1030,7 +1030,7 @@ func (c *Client) ListOlder(ctx context.Context, folder mail.Folder, before time.
 	q.Set("$orderby", "receivedDateTime desc")
 	q.Set("$select", messageSelect)
 	if !before.IsZero() {
-		q.Set("$filter", "receivedDateTime lt "+before.UTC().Format("2006-01-02T15:04:05Z"))
+		q.Set("$filter", "receivedDateTime lt "+provider.OlderBound(before).UTC().Format("2006-01-02T15:04:05Z"))
 	}
 	var resp struct {
 		Value []gMessage `json:"value"`

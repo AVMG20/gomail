@@ -317,3 +317,28 @@ func TestSaveBodyDropsBidiControlsFromAttachmentNames(t *testing.T) {
 		t.Fatalf("filename %q", a.Filename)
 	}
 }
+
+// Older-mail pages include the cursor's second (servers filter by whole
+// seconds; mail sharing it with the oldest cached message would be skipped
+// for good otherwise). A page holding only mail of that second makes no
+// progress, so the cursor then steps past the second instead of fetching
+// the same page forever.
+func TestOlderCursorStepsPastAFullSecond(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	all, _ := s.FolderByKind("a1", models.FolderArchive)
+	cur := base.Add(10*time.Hour + 500*time.Millisecond)
+	if _, err := s.ApplySync("a1", mail.SyncResult{Initial: true, Complete: map[string]time.Time{"ALL": cur}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Progress inside the second: the cursor follows the page.
+	_ = s.AdvanceOlderCursor("a1", all.ID, []time.Time{cur, base.Add(10*time.Hour + 200*time.Millisecond)})
+	if c, _ := s.OlderCursor("a1", all.ID); !c.Equal(base.Add(10*time.Hour + 200*time.Millisecond)) {
+		t.Fatalf("cursor %v", c)
+	}
+	// The same page again (nothing older in reach): step past the second.
+	_ = s.AdvanceOlderCursor("a1", all.ID, []time.Time{cur, base.Add(10*time.Hour + 200*time.Millisecond)})
+	if c, _ := s.OlderCursor("a1", all.ID); !c.Before(base.Add(10*time.Hour)) || c.Before(base.Add(10*time.Hour-time.Second)) {
+		t.Fatalf("cursor %v, want just before %v", c, base.Add(10*time.Hour))
+	}
+}
