@@ -227,15 +227,6 @@ func TestLabelScope(t *testing.T) {
 	if len(labels[2].AccountIDs) != 0 {
 		t.Fatalf("Junk should belong to every mailbox: %q", labels[2].AccountIDs)
 	}
-	if ScopeLabels(labels, nil) {
-		t.Fatal("without accounts nothing changes")
-	}
-	if !ScopeLabels(labels, []string{"a1", "a2"}) || fmt.Sprint(labels[0].AccountIDs) != "[a1 a2]" || fmt.Sprint(labels[1].AccountIDs) != "[a1]" || len(labels[2].AccountIDs) != 0 {
-		t.Fatalf("scoped %+v", labels)
-	}
-	if ScopeLabels(labels, []string{"a1", "a2"}) {
-		t.Fatal("scoping twice changed something")
-	}
 	names := func(ls []models.Label) string {
 		out := ""
 		for _, l := range ls {
@@ -248,6 +239,120 @@ func TestLabelScope(t *testing.T) {
 	}
 	if got := names(LabelsForAccount(labels, "")); got != "Old,Scoped,Junk," {
 		t.Fatalf("unified labels %s", got)
+	}
+	if l, ok := LabelNamed(labels, "a1", "scoped"); !ok || l.ID != "scoped" {
+		t.Fatalf("LabelNamed %+v %v", l, ok)
+	}
+	if _, ok := LabelNamed(labels, "a2", "Scoped"); ok {
+		t.Fatal("LabelNamed found another mailbox's label")
+	}
+	if l, ok := LabelNamed(labels, "a2", "JUNK"); !ok || l.ID != JunkLabelID {
+		t.Fatal("Junk belongs to every mailbox")
+	}
+}
+
+// Names are unique within a mailbox only; nothing else takes Junk's name
+// or id; unknown actions are dropped and Junk has none.
+func TestNormalizeLabelsPerMailbox(t *testing.T) {
+	labels := NormalizeLabels([]models.Label{
+		{ID: "work", Name: "Work", AccountIDs: []string{"a1"}, Then: "archive"},
+		{ID: "work", Name: "work", AccountIDs: []string{"a2"}, Then: "explode"},
+		{Name: "WORK", AccountIDs: []string{"a1"}},
+		{Name: "junk", AccountIDs: []string{"a1"}},
+		{ID: JunkLabelID, Name: "Junk", Then: "trash"},
+	})
+	got := ""
+	for _, l := range labels {
+		got += l.ID + "/" + l.Then + ","
+	}
+	if got != "work/archive,work-2/,junk/," {
+		t.Fatalf("labels %s", got)
+	}
+	if id := NewLabelID(labels, "Work"); id != "work-3" {
+		t.Fatalf("NewLabelID %s", id)
+	}
+	defs := MailboxDefaultLabels(labels, "a3")
+	if len(defs) == 0 || defs[0].ID != "important" || len(defs[0].AccountIDs) != 1 || defs[0].AccountIDs[0] != "a3" {
+		t.Fatalf("defaults %+v", defs)
+	}
+	for _, l := range defs {
+		if l.Source != LabelSourceUser || l.ID == "work" {
+			t.Fatalf("default copy %+v", l)
+		}
+	}
+}
+
+// Shared labels become one copy per mailbox: the first mailbox keeps the
+// id; rules for every mailbox become one per mailbox; rules and quiet
+// lists follow the copies. A second run changes nothing.
+func TestSplitLabels(t *testing.T) {
+	s := models.Settings{
+		Labels: NormalizeLabels([]models.Label{
+			{ID: "news", Name: "News", Color: "#111111", Description: "Newsletters.", Then: "archive", AccountIDs: []string{"a1", "a2"}},
+			{ID: "old", Name: "Old"},
+			{ID: "mine", Name: "Mine", AccountIDs: []string{"a2"}},
+			{ID: "rood", Name: "Categorie Rood", Source: LabelSourceProvider, AccountIDs: []string{"a2", "a1"}},
+		}),
+		LabelRules: []models.LabelRule{
+			{ID: "rule_1", Contains: "digest", LabelID: "news"},
+			{ID: "rule_2", AccountID: "a2", Contains: "x", LabelID: "news"},
+			{ID: "rule_3", Contains: "me", LabelID: "mine"},
+			{ID: "rule_4", Contains: "casino", Action: "junk"},
+		},
+		QuietLabels: map[string][]string{"a1": {"news"}, "a2": {"news", "rood", JunkLabelID}},
+	}
+	moves, changed := SplitLabels(&s, []string{"a1", "a2"})
+	if !changed {
+		t.Fatal("nothing split")
+	}
+	got := ""
+	for _, l := range s.Labels {
+		got += fmt.Sprintf("%s:%s:%v:%s|", l.ID, l.Name, l.AccountIDs, l.Then)
+	}
+	want := "news:News:[a1]:archive|news-2:News:[a2]:archive|old:Old:[a1]:|old-2:Old:[a2]:|mine:Mine:[a2]:|rood:Categorie Rood:[a2]:|rood-2:Categorie Rood:[a1]:|junk:Junk:[]:|"
+	if got != want {
+		t.Fatalf("labels\n got %s\nwant %s", got, want)
+	}
+	if s.Labels[1].Color != "#111111" || s.Labels[1].Description != "Newsletters." || s.Labels[6].Source != LabelSourceProvider {
+		t.Fatalf("copy lost its details: %+v %+v", s.Labels[1], s.Labels[6])
+	}
+	if fmt.Sprint(moves) != "[{a2 news news-2} {a2 old old-2} {a1 rood rood-2}]" {
+		t.Fatalf("moves %v", moves)
+	}
+	rules := ""
+	for _, r := range s.LabelRules {
+		rules += fmt.Sprintf("%s:%s:%s:%s|", r.ID, r.AccountID, r.Contains, r.LabelID)
+	}
+	if rules != "rule_1:a1:digest:news|rule_5:a2:digest:news-2|rule_2:a2:x:news-2|rule_3:a2:me:mine|rule_4:a1:casino:|rule_6:a2:casino:|" {
+		t.Fatalf("rules %s", rules)
+	}
+	if fmtSlice(s.QuietLabels["a1"]) != "[news]" || fmtSlice(s.QuietLabels["a2"]) != "[news-2 rood junk]" {
+		t.Fatalf("quiet %v", s.QuietLabels)
+	}
+	Normalize(&s)
+	if moves, changed := SplitLabels(&s, []string{"a1", "a2"}); changed || moves != nil {
+		t.Fatalf("second run changed something: %v", moves)
+	}
+
+	// Without accounts, labels without a mailbox wait for the first one.
+	empty := models.Settings{Labels: []models.Label{{ID: "old", Name: "Old"}}, LabelRules: []models.LabelRule{{ID: "r", Contains: "x"}}}
+	if _, changed := SplitLabels(&empty, nil); changed || len(empty.Labels[0].AccountIDs) != 0 || empty.LabelRules[0].AccountID != "" {
+		t.Fatalf("split without accounts: %+v", empty)
+	}
+}
+
+// Rules and quiet lists only keep labels of their own mailbox.
+func TestNormalizeKeepsMailboxLabels(t *testing.T) {
+	s := DefaultSettings()
+	s.Labels = append(s.Labels, models.Label{ID: "a1-only", Name: "A1", AccountIDs: []string{"a1"}})
+	s.LabelRules = []models.LabelRule{{ID: "r1", AccountID: "a2", Contains: "x", LabelID: "a1-only"}, {ID: "r2", AccountID: "a1", Contains: "x", LabelID: "a1-only"}}
+	s.QuietLabels = map[string][]string{"a2": {"a1-only", JunkLabelID}, "a1": {"a1-only"}}
+	Normalize(&s)
+	if s.LabelRules[0].LabelID != "" || s.LabelRules[1].LabelID != "a1-only" {
+		t.Fatalf("rules %+v", s.LabelRules)
+	}
+	if fmtSlice(s.QuietLabels["a2"]) != "[junk]" || fmtSlice(s.QuietLabels["a1"]) != "[a1-only]" {
+		t.Fatalf("quiet %v", s.QuietLabels)
 	}
 }
 

@@ -1177,13 +1177,21 @@ func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.Outgo
 
 // ---- folder-wide operations ----
 
+// flaggedUnreadFilter selects the unread mail of the virtual Flagged folder.
+const flaggedUnreadFilter = "flag/flagStatus eq 'flagged' and isRead eq false"
+
 // folderIDs lists message ids of a folder (optionally filtered).
 func (c *Client) folderIDs(ctx context.Context, folderID, filter string) ([]string, error) {
+	return c.messageIDs(ctx, "me/mailFolders/"+url.PathEscape(folderID)+"/messages", filter)
+}
+
+// messageIDs lists message ids of a messages collection (optionally filtered).
+func (c *Client) messageIDs(ctx context.Context, path, filter string) ([]string, error) {
 	q := url.Values{"$select": {"id"}, "$top": {"1000"}}
 	if filter != "" {
 		q.Set("$filter", filter)
 	}
-	next := "me/mailFolders/" + url.PathEscape(folderID) + "/messages?" + q.Encode()
+	next := path + "?" + q.Encode()
 	var ids []string
 	for next != "" && len(ids) < provider.MaxFolderOp {
 		var resp struct {
@@ -1204,10 +1212,14 @@ func (c *Client) folderIDs(ctx context.Context, folderID, filter string) ([]stri
 }
 
 func (c *Client) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
+	var ids []string
+	var err error
 	if folder.RemoteID == Flagged {
-		return provider.ErrUnsupported
+		// Flagged isn't a Graph folder: it's flagged mail in any folder.
+		ids, err = c.messageIDs(ctx, "me/messages", flaggedUnreadFilter)
+	} else {
+		ids, err = c.folderIDs(ctx, folder.RemoteID, "isRead eq false")
 	}
-	ids, err := c.folderIDs(ctx, folder.RemoteID, "isRead eq false")
 	if err != nil {
 		return err
 	}

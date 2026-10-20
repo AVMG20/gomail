@@ -2,7 +2,7 @@
 // Settings has two parts: "App" pages for settings that apply everywhere, and "Mailboxes":
 // the mailbox list, labels & rules, and one page per mailbox with everything set per mailbox.
 import { computed, nextTick, ref, watch, type Component } from 'vue'
-import { BellIcon, CalendarDaysIcon, InfoIcon, MailIcon, PaletteIcon, PlusIcon, SlidersHorizontalIcon, SparklesIcon, TagIcon, UsersIcon, XIcon, CheckIcon, LoaderIcon } from '@lucide/vue'
+import { BellIcon, CalendarDaysIcon, InfoIcon, MailIcon, PaletteIcon, PlusIcon, SlidersHorizontalIcon, SparklesIcon, UsersIcon, XIcon, CheckIcon, LoaderIcon } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import type { Account } from '@/lib/types'
@@ -16,7 +16,6 @@ import AppearanceTab from './AppearanceTab.vue'
 import CalendarTab from './CalendarTab.vue'
 import { hasMethod } from '@/lib/api'
 import GeneralTab from './GeneralTab.vue'
-import LabelsTab from './LabelsTab.vue'
 import MailboxPage from './MailboxPage.vue'
 import MailTab from './MailTab.vue'
 import NotificationsTab from './NotificationsTab.vue'
@@ -39,8 +38,6 @@ const appPages: Page[] = [
 ]
 const mailboxPages = computed<Page[]>(() => [
   { id: 'accounts', label: 'All mailboxes', icon: UsersIcon, comp: AccountsTab },
-  // Labels belong to mailboxes; this page edits them for all mailboxes at once.
-  { id: 'labels', label: 'Labels & rules', icon: TagIcon, comp: LabelsTab },
   ...accounts.accounts.map((a) => ({ id: `mailbox:${a.id}` as SettingsTab, label: a.displayName || a.email, account: a, comp: MailboxPage, props: { accountId: a.id } })),
 ])
 const groups = computed(() => [

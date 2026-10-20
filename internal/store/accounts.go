@@ -12,7 +12,7 @@ import (
 )
 
 const accountCols = `a.id, a.provider, a.email, a.display_name, a.color, a.created_at, a.last_sync_at, a.sync_error, a.needs_reauth, a.signature,
-	a.calendar_consent, a.calendar_enabled, a.calendar_muted,
+	a.calendar_consent, a.calendar_enabled, a.calendar_muted, a.position,
 	coalesce((SELECT sum(f.unread) FROM folders f WHERE f.account_id = a.id AND f.kind = 'inbox'), 0)`
 
 func scanAccount(sc interface{ Scan(...any) error }) (models.Account, error) {
@@ -21,7 +21,7 @@ func scanAccount(sc interface{ Scan(...any) error }) (models.Account, error) {
 	var last sql.NullInt64
 	var reauth, calConsent, calEnabled, calMuted int
 	err := sc.Scan(&a.ID, &a.Provider, &a.Email, &a.DisplayName, &a.Color, &created, &last, &a.SyncError, &reauth, &a.Signature,
-		&calConsent, &calEnabled, &calMuted, &a.UnreadCount)
+		&calConsent, &calEnabled, &calMuted, &a.Position, &a.UnreadCount)
 	a.NeedsReauth = reauth == 1
 	a.CalendarConsent, a.CalendarEnabled, a.CalendarMuted = calConsent == 1, calEnabled == 1, calMuted == 1
 	if err != nil {
@@ -35,21 +35,21 @@ func scanAccount(sc interface{ Scan(...any) error }) (models.Account, error) {
 	return a, nil
 }
 
-// InsertAccount stores a new account.
+// InsertAccount stores a new account, after the existing ones.
 func (s *Store) InsertAccount(a models.Account) error {
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = time.Now()
 	}
-	_, err := s.db.Exec(`INSERT INTO accounts(id, provider, email, display_name, color, created_at, calendar_consent, calendar_enabled, calendar_muted)
-		VALUES(?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO accounts(id, provider, email, display_name, color, created_at, calendar_consent, calendar_enabled, calendar_muted, position)
+		VALUES(?,?,?,?,?,?,?,?,?, (SELECT coalesce(max(position) + 1, 0) FROM accounts))`,
 		a.ID, a.Provider, strings.ToLower(a.Email), a.DisplayName, a.Color, toMillis(a.CreatedAt), boolInt(a.CalendarConsent),
 		boolInt(a.CalendarEnabled), boolInt(a.CalendarMuted))
 	return err
 }
 
-// Accounts lists all accounts in creation order.
+// Accounts lists all accounts in the user's order (new ones last).
 func (s *Store) Accounts() ([]models.Account, error) {
-	rows, err := s.db.Query(`SELECT ` + accountCols + ` FROM accounts a ORDER BY a.created_at, a.id`)
+	rows, err := s.db.Query(`SELECT ` + accountCols + ` FROM accounts a ORDER BY a.position, a.created_at, a.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -244,10 +244,46 @@ func (s *Store) ReplaceFolders(accountID string, folders []mail.Folder) error {
 	})
 }
 
+// recountStarred sets the counters of the virtual starred folder from the
+// messages it lists: starred and visible (emptied ones in no folder don't count).
+// ReorderAccounts puts the accounts in the order of ids; accounts missing
+// from ids keep their order after the listed ones. Unknown ids are ignored.
+func (s *Store) ReorderAccounts(ids []string) error {
+	cur, err := s.Accounts()
+	if err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	for _, a := range cur {
+		known[a.ID] = true
+	}
+	var order []string
+	listed := map[string]bool{}
+	for _, id := range ids {
+		if known[id] && !listed[id] {
+			listed[id] = true
+			order = append(order, id)
+		}
+	}
+	for _, a := range cur {
+		if !listed[a.ID] {
+			order = append(order, a.ID)
+		}
+	}
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		for i, id := range order {
+			if _, err := tx.Exec(`UPDATE accounts SET position = ? WHERE id = ?`, i, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func recountStarred(tx *sql.Tx, accountID string) error {
 	_, err := tx.Exec(`UPDATE folders SET
-		total  = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND m.starred = 1),
-		unread = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND m.starred = 1 AND m.unread = 1)
+		total  = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND m.starred = 1 AND `+visible("m")+`),
+		unread = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND m.starred = 1 AND m.unread = 1 AND `+visible("m")+`)
 		WHERE account_id = ? AND kind = 'starred'`, accountID)
 	return err
 }

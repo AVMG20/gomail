@@ -9,15 +9,14 @@ import CmdList from '@/components/common/cmd/CmdList.vue'
 import CmdItem from '@/components/common/cmd/CmdItem.vue'
 import Tip from '@/components/common/Tip.vue'
 import { fuzzyFilter } from '@/lib/fuzzy'
+import { groupCount, openLabelSettings } from '@/lib/labelScope'
 import { useAccountsStore } from '@/stores/accounts'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
-import { useUiStore } from '@/stores/ui'
 
 const mail = useMailStore()
 const settings = useSettingsStore()
 const accounts = useAccountsStore()
-const ui = useUiStore()
 const open = ref(false)
 const q = ref('')
 /** What picking a label does: show only mail with it, or hide mail with it. */
@@ -31,8 +30,10 @@ function pick(id: string) {
   else mail.toggleLabelFilter(id)
 }
 
-// Only the labels of the mailbox shown (every label in the unified view).
-const items = computed(() => fuzzyFilter(q.value, settings.labelsForAccount(mail.mailbox.accountId), (l) => l.name, 100))
+// Only the labels of the mailbox shown (one per name in the unified view, counted over every mailbox).
+const items = computed(() =>
+  fuzzyFilter(q.value, settings.labelsForAccount(mail.mailbox.accountId), (l) => l.name, 100).map((l) => ({ ...l, total: groupCount(settings.labels, accounts.labelCounts, l)?.total })),
+)
 const activeCount = computed(() => mail.labelFilter.labels.length + mail.labelFilter.hidden.length + (mail.labelFilter.unlabeled ? 1 : 0))
 </script>
 
@@ -70,7 +71,7 @@ const activeCount = computed(() => mail.labelFilter.labels.length + mail.labelFi
           <CmdItem v-for="l in items" :key="l.id" :value="l.id" @select="pick(l.id)">
             <span class="size-2.5 rounded-full" :style="{ background: l.color }" />
             <span class="flex-1 truncate">{{ l.name }}</span>
-            <span class="text-muted-foreground text-xs tabular-nums" :aria-label="`${accounts.labelCounts.get(l.id)?.total ?? 0} messages`">{{ accounts.labelCounts.get(l.id)?.total ?? '' }}</span>
+            <span class="text-muted-foreground text-xs tabular-nums" :aria-label="`${l.total ?? 0} messages`">{{ l.total ?? '' }}</span>
             <EyeOffIcon v-if="mail.labelFilter.hidden.includes(l.id)" class="text-muted-foreground size-4" aria-label="Hidden" />
             <CheckIcon v-else class="size-4" :class="mail.labelFilter.labels.includes(l.id) ? 'opacity-100' : 'opacity-0'" />
           </CmdItem>
@@ -82,7 +83,7 @@ const activeCount = computed(() => mail.labelFilter.labels.length + mail.labelFi
           <div v-if="!items.length && q" class="text-muted-foreground px-2 py-6 text-center text-sm">No labels match “{{ q }}”</div>
         </CmdList>
         <div class="border-border flex items-center justify-between border-t px-2 py-1.5">
-          <Button variant="ghost" size="xs" class="text-muted-foreground" @click="open = false; ui.openSettings('labels')"><TagIcon /> Manage</Button>
+          <Button variant="ghost" size="xs" class="text-muted-foreground" @click="open = false; openLabelSettings(mail.mailbox.accountId)"><TagIcon /> Manage</Button>
           <Button variant="ghost" size="xs" :disabled="!activeCount" @click="mail.clearLabelFilter()">Clear</Button>
         </div>
       </CmdRoot>

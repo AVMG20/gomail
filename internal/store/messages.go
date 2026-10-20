@@ -958,6 +958,7 @@ func (s *Store) MessageFolders(ids []string) (map[string][]string, error) {
 func (s *Store) SetMessageFolders(sets map[string][]string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
 		var moved []string
+		accounts := map[string]bool{}
 		for id, folders := range sets {
 			var unread int
 			var acct string
@@ -1009,6 +1010,13 @@ func (s *Store) SetMessageFolders(sets map[string][]string) error {
 				return err
 			}
 			moved = append(moved, id)
+			accounts[acct] = true
+		}
+		// Messages left in no folder (emptied) leave the starred view.
+		for a := range accounts {
+			if err := recountStarred(tx, a); err != nil {
+				return err
+			}
 		}
 		return refreshJunk(tx, moved, time.Now().UnixMilli())
 	})

@@ -1,11 +1,13 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -133,6 +135,7 @@ func Recover(path string) error {
 			_ = old.QueryRow(`SELECT calendar_consent, calendar_enabled FROM accounts WHERE id = ?`, a.ID).Scan(&consent, &enabled)
 			_ = old.QueryRow(`SELECT calendar_muted FROM accounts WHERE id = ?`, a.ID).Scan(&muted)
 			accounts[i].CalendarConsent, accounts[i].CalendarEnabled, accounts[i].CalendarMuted = consent == 1, enabled == 1, muted == 1
+			_ = old.QueryRow(`SELECT position FROM accounts WHERE id = ?`, a.ID).Scan(&accounts[i].Position)
 		}
 		if rows, err := old.Query(`SELECT key, value FROM settings`); err == nil {
 			for rows.Next() {
@@ -163,6 +166,14 @@ func Recover(path string) error {
 			_ = s.UpdateSignature(a.ID, signatures[i])
 		}
 	}
+	// Keep the user's mailbox order (inserted in table order above).
+	order := slices.Clone(accounts)
+	slices.SortStableFunc(order, func(a, b models.Account) int { return cmp.Compare(a.Position, b.Position) })
+	ids := make([]string, len(order))
+	for i, a := range order {
+		ids[i] = a.ID
+	}
+	_ = s.ReorderAccounts(ids)
 	for k, v := range settings {
 		_, _ = s.db.Exec(`INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)`, k, v)
 	}

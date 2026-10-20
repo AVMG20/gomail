@@ -5,7 +5,7 @@ import { api, errorMessage, hasMethod, isWails, setWindowChrome } from '@/lib/ap
 import { setClockPreference } from '@/lib/calendar'
 import { applyTheme, themeFromSettings } from '@/lib/theme'
 import type { AIModel, AppInfo, DefaultPrompts, Label, Settings, UpdateInfo } from '@/lib/types'
-import { labelsForAccount as forAccount, labelsForAccounts as forAccounts } from '@/lib/labelScope'
+import { labelInMailbox, labelsForAccount as forAccount, labelsForAccounts as forAccounts, nameTaken, sameNameIds, viewLabelId } from '@/lib/labelScope'
 
 export const JEV_MODELS: AIModel[] = [
   { id: 'typesafe/jev-1.13', name: 'Jev 1.13 (pinned)', description: 'Decision model for labeling, pinned version', contextLength: 0, promptPrice: 0, completionPrice: 0 },
@@ -23,10 +23,21 @@ export const useSettingsStore = defineStore('settings', () => {
 
   const labels = computed<Label[]>(() => settings.value?.labels ?? [])
   const labelMap = computed(() => new Map(labels.value.map((l) => [l.id, l])))
-  /** Labels of one mailbox ("" = the unified view: every label). Use this wherever labels are offered. */
+  /** Muted mailboxes (no new-mail notifications): their unread count shows on no badge and in no All inboxes total. */
+  const mutedMailboxes = computed(() => new Set(settings.value?.mutedMailboxes ?? []))
+  /** Labels of one mailbox ("" = the unified view: one label per name). Use this wherever labels are offered. */
   const labelsForAccount = (accountId: string) => forAccount(labels.value, accountId)
-  /** Labels of any of these mailboxes (a mixed selection); none known = every label. */
+  /** Labels of a selection: its mailbox's, or one per name for mail of several mailboxes. */
   const labelsForAccounts = (accountIds: Iterable<string>) => forAccounts(labels.value, accountIds)
+  /** A mailbox's label with the same name as label id (the label itself when it is the mailbox's). */
+  const labelInAccountOf = (id: string, accountId: string) => {
+    const l = labelMap.value.get(id)
+    return l && labelInMailbox(labels.value, l, accountId)
+  }
+  /** The ids of every label with the same name as one of these (the unified view's groups). */
+  const labelGroupIds = (ids: string[]) => sameNameIds(labels.value, ids)
+  /** The id a view's label filter keeps for a label id (see lib/labelScope viewLabelId). */
+  const viewLabel = (id: string, accountId: string) => viewLabelId(labels.value, id, accountId)
   const aiReady = computed(() => !!settings.value?.openRouterKeySet)
   const grammarReady = computed(() => aiReady.value && hasMethod('ImproveGrammar'))
 
@@ -157,11 +168,12 @@ export const useSettingsStore = defineStore('settings', () => {
   function patchLabel(id: string, p: Partial<Label>) {
     void update({ labels: labels.value.map((l) => (l.id === id ? { ...l, ...p } : l)) }, 500)
   }
-  /** Names must not be empty, and two labels with the same name would be indistinguishable:
-   *  a taken name gets a number. Returns the name used and whether it had to change. */
+  /** Names must not be empty, and two labels of a mailbox with the same name would be
+   *  indistinguishable: a taken name gets a number. Returns the name used and whether it had to change. */
   function renameLabel(id: string, raw: string): { name: string; deduped: boolean } {
     const name = raw.trim() || 'Untitled label'
-    const taken = (n: string) => labels.value.some((x) => x.id !== id && x.name.trim().toLowerCase() === n.toLowerCase())
+    const account = labelMap.value.get(id)?.accountIds?.[0] ?? ''
+    const taken = (n: string) => nameTaken(labels.value, account, n, id)
     let final = name
     for (let n = 2; taken(final); n++) final = `${name} ${n}`
     if (final !== labels.value.find((l) => l.id === id)?.name) patchLabel(id, { name: final })
@@ -174,7 +186,7 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     patchLabel, renameLabel, removeLabel,
     settings, saving, models, modelsLoading, modelsError, defaults, appInfo, updateInfo, checkingUpdate, checkForUpdate,
-    labels, labelMap, labelsForAccount, labelsForAccounts, aiReady, grammarReady,
+    labels, labelMap, mutedMailboxes, labelsForAccount, labelsForAccounts, labelInAccountOf, labelGroupIds, viewLabel, aiReady, grammarReady,
     load, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
   }
 })

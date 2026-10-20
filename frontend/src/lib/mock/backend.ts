@@ -3,14 +3,17 @@
 // enough that every screen can be demoed and tested.
 import { parseSearch, type ParsedSearch } from '../searchQuery'
 import { remoteImagesTrusted } from '../trust'
+import { isFreeMailDomain, domainOf, type RuleRef, type SenderScope, type JunkSenderResult, type LabelSenderResult, type NotJunkResult } from '../junk'
+import { groupSenders, type SenderGrouping, type SenderStat, type SenderSummary } from '../senders'
 import { fromWireInput, MockCalendar } from './calendar'
+import { labelInAccount, labelInMailbox } from '../labelScope'
 import type {
   Account, AIModel, AppInfo, BackupResult, RestoreSummary, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
-  SearchQuery, SearchResult, Settings, Calendar, CalendarEvent, EventInput, RecurrenceScope, AttendeeResponse, EventDraft,
+  SearchQuery, SearchResult, Settings, Calendar, CalendarEvent, EventInput, RecurrenceScope, AttendeeResponse, EventDraft, AutoMove,
 } from '../types'
 import {
-  DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, PROVIDER_LABELS, SEED_ACCOUNTS, SEED_SETTINGS,
+  DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, PROVIDER_LABELS, SEED_ACCOUNTS, SEED_LABELS, SEED_SETTINGS, mockLabelId,
   asTemplateAccount, buildMessage, buildSeedMessages, buildStressMessages, buildWelcome, foldersFor, SAMPLE_PDF, SAMPLE_PNG,
 } from './data'
 
@@ -296,6 +299,8 @@ class MockBackend {
     const auto = this.settings.autoLabelAccounts ?? []
     if (this.accounts.length && this.accounts.every((a) => auto.includes(a.id))) this.settings.autoLabelAccounts = [...auto, acc.id]
     this.accounts.push(acc)
+    // Every mailbox has its own labels: the new one gets its own copies of the defaults.
+    this.settings.labels = [...this.settings.labels, ...SEED_LABELS.map((l) => ({ ...l, id: mockLabelId(l.id, acc.id), source: 'user', accountIds: [acc.id] }))]
     this.folders.set(acc.id, foldersFor(acc.id, provider))
     for (const m of buildWelcome(acc)) this.messages.set(m.id, m)
     this.emit('accounts:changed')
@@ -320,6 +325,18 @@ class MockBackend {
     for (const [mid, m] of this.messages) if (m.accountId === id) this.messages.delete(mid)
     this.emit('accounts:changed')
     this.changed()
+  }
+
+  async AutoMoves(_accountId: string, _kind: string, _hours: number): Promise<AutoMove[]> {
+    await latency(20, 60)
+    return []
+  }
+
+  async ReorderAccounts(ids: string[]): Promise<void> {
+    await latency(20, 60)
+    const pos = new Map(ids.map((id, i) => [id, i]))
+    this.accounts = [...this.accounts].sort((a, b) => (pos.get(a.id) ?? ids.length) - (pos.get(b.id) ?? ids.length))
+    this.emit('accounts:changed')
   }
 
   async UpdateAccount(id: string, displayName: string, color: string): Promise<void> {
@@ -746,6 +763,137 @@ class MockBackend {
     })
   }
 
+  /** Like the backend's senderNeedle: the address, or "@domain" (not for shared mail services). */
+  private senderNeedle(accountId: string, address: string, scope: SenderScope): string {
+    address = address.trim().toLowerCase()
+    const domain = domainOf(address)
+    if (!domain) throw new Error('this sender has no valid address')
+    const acct = this.accounts.find((a) => a.id === accountId)
+    if (!acct) throw new Error('that mailbox no longer exists')
+    if (scope === 'domain' && (isFreeMailDomain(domain) || domainOf(acct.email) === domain)) throw new Error(`${domain} is shared by many people; use the address instead`)
+    return scope === 'domain' ? `@${domain}` : address
+  }
+
+  /** Like the backend: the mailbox's rule with this action that covers needle, else a new one. */
+  private ensureSenderRule(accountId: string, needle: string, action: 'junk' | 'label', labelId: string): { rule: RuleRef; created: boolean } {
+    const rules = this.settings.labelRules ?? []
+    const have = rules.find((r) => r.action === action && (r.labelId ?? '') === labelId && r.field === 'from' && (!r.accountId || r.accountId === accountId) && r.contains && needle.includes(r.contains.toLowerCase()))
+    if (have) return { rule: { id: have.id, accountId: have.accountId, contains: have.contains, action, labelId }, created: false }
+    const rule = { id: `rule_${Math.random().toString(36).slice(2, 10)}`, accountId, field: 'from' as const, contains: needle, action, labelId }
+    this.settings.labelRules = [...rules, rule]
+    this.emit('labels:changed', { accountId: '' })
+    return { rule, created: true }
+  }
+
+  private fromMatches(m: MessageSummary, needle: string): boolean {
+    return `${m.from.name} ${m.from.email}`.toLowerCase().includes(needle)
+  }
+
+  /** Like the backend: a junk rule for the mailbox (unless one covers the sender), then the picked
+   *  rows and the sender's inbox mail to Junk, marked read. */
+  async JunkSender(accountId: string, address: string, scope: SenderScope, ids: string[]): Promise<JunkSenderResult> {
+    await latency(80, 200)
+    const needle = this.senderNeedle(accountId, address, scope)
+    const { rule, created } = this.ensureSenderRule(accountId, needle, 'junk', '')
+    const picked = new Set(this.withThreads(ids).filter((id) => this.messages.get(id)?.accountId === accountId))
+    const moved: string[] = []
+    for (const m of this.messages.values()) {
+      if (m.accountId !== accountId || picked.has(m.id) || !m.folderIds.some((f) => this.kindOf(f) === 'inbox')) continue
+      if (this.fromMatches(m, needle)) moved.push(m.id)
+    }
+    const all = [...picked, ...moved]
+    const unread = all.filter((id) => this.messages.get(id)?.unread)
+    this.mutate(all, (m) => {
+      m.unread = false
+      m.folderIds = [`${m.accountId}:spam`]
+    })
+    return { rule, created, count: all.length, moved, unread }
+  }
+
+  /** Like the backend: a label rule for the mailbox, and the label on the sender's received mail now. */
+  async LabelSender(accountId: string, address: string, scope: SenderScope, labelId: string): Promise<LabelSenderResult> {
+    await latency(80, 200)
+    const label = this.allLabels().find((l) => l.id === labelId)
+    if (!label) throw new Error('that label no longer exists')
+    const needle = this.senderNeedle(accountId, address, scope)
+    const { rule, created } = this.ensureSenderRule(accountId, needle, 'label', labelId)
+    const labeled: string[] = []
+    for (const m of this.messages.values()) {
+      if (m.accountId !== accountId || m.labels.includes(labelId) || !this.fromMatches(m, needle)) continue
+      if (m.folderIds.some((f) => ['sent', 'drafts', 'trash'].includes(this.kindOf(f)))) continue
+      m.labels.push(labelId)
+      m.labelDetails = [...(m.labelDetails ?? []), { labelId, source: 'manual', confidence: 1 }]
+      labeled.push(m.id)
+    }
+    if (labeled.length) {
+      this.version++
+      this.changed(accountId)
+      this.emit('labels:changed', { accountId: '' })
+    }
+    return { rule, created, labeled }
+  }
+
+  /** Like the backend: back to the inbox, plus the junk rules still matching the senders. */
+  async NotJunk(ids: string[]): Promise<NotJunkResult> {
+    await latency(50, 140)
+    const list = this.withThreads(ids).map((id) => this.messages.get(id)).filter((m): m is Message => !!m)
+    this.mutate(list.map((m) => m.id), (m) => {
+      m.folderIds = [`${m.accountId}:inbox`]
+      m.labels = m.labels.filter((l) => l !== 'junk')
+      m.labelDetails = (m.labelDetails ?? []).filter((d) => d.labelId !== 'junk')
+    })
+    const found = new Map<string, RuleRef>()
+    for (const r of this.settings.labelRules ?? []) {
+      if (r.action !== 'junk' || r.field !== 'from' || !r.contains) continue
+      const hit = list.some((m) => (!r.accountId || r.accountId === m.accountId) && `${m.from.name} ${m.from.email}`.toLowerCase().includes(r.contains.toLowerCase()))
+      if (hit) found.set(r.id, { id: r.id, accountId: r.accountId, contains: r.contains, action: 'junk', labelId: '' })
+    }
+    return { count: list.length, rules: [...found.values()] }
+  }
+
+  async RemoveRules(ruleIds: string[]): Promise<void> {
+    await latency(30, 90)
+    this.settings.labelRules = (this.settings.labelRules ?? []).filter((r) => !ruleIds.includes(r.id))
+    this.emit('labels:changed', { accountId: '' })
+  }
+
+  /** Like the backend's sender kinds: "" is the inbox, "all" is received mail outside Junk and Trash. */
+  private senderKind(m: Message, kind: string): boolean {
+    const kinds = m.folderIds.map((f) => this.kindOf(f))
+    return kind === 'all' ? kinds.some((k) => ['inbox', 'archive', 'custom'].includes(k)) : kinds.includes(kind || 'inbox')
+  }
+
+  /** Like the backend: senders of a folder kind per address or company domain, the most mail first. */
+  async TopSenders(accountId: string, folderKind: string, groupBy: SenderGrouping, limit: number): Promise<SenderSummary[]> {
+    await latency(80, 200)
+    const own = (id: string) => this.accounts.find((a) => a.id === id)?.email ?? ''
+    const stats = new Map<string, SenderStat>()
+    for (const m of this.messages.values()) {
+      const address = m.from.email.trim().toLowerCase()
+      if ((accountId && m.accountId !== accountId) || !address || address === own(m.accountId).toLowerCase() || !this.senderKind(m, folderKind)) continue
+      const key = `${m.accountId}\n${address}`
+      const st = stats.get(key)
+      if (!st) stats.set(key, { accountId: m.accountId, address, name: m.from.name, count: 1, unread: m.unread ? 1 : 0, newest: m.date, unsubscribe: !!m.unsubscribe })
+      else {
+        st.count++
+        if (m.unread) st.unread++
+        if (m.date > st.newest) Object.assign(st, { newest: m.date, name: m.from.name, unsubscribe: !!m.unsubscribe })
+      }
+    }
+    return groupSenders([...stats.values()], groupBy === 'domain' ? 'domain' : 'address', own, Math.min(limit > 0 ? limit : 200, 2000))
+  }
+
+  /** Like the backend: one sender's mail (the address, or "@domain") in a folder kind, matched exactly. */
+  async SenderMessageIDs(accountId: string, folderKind: string, sender: string): Promise<string[]> {
+    await latency(40, 120)
+    const s = sender.trim().toLowerCase()
+    const hit = (email: string) => (s.startsWith('@') ? email.endsWith(s) : email === s)
+    return [...this.messages.values()]
+      .filter((m) => m.accountId === accountId && this.senderKind(m, folderKind) && hit(m.from.email.trim().toLowerCase()))
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+      .map((m) => m.id)
+  }
+
   async SendMessage(req: ComposeRequest): Promise<void> {
     await sleep(700)
     if (!req.to.length && !req.cc.length && !req.bcc.length) throw new Error('Add at least one recipient')
@@ -920,10 +1068,12 @@ class MockBackend {
     }
     const s = this.settings
     const corrects = s.aiCorrectsProviderLabels && !s.aiCorrectsOff?.includes(m.accountId)
-    const candidates = [...s.labels, ...(s.importProviderLabels && corrects ? this.providerLabels : [])]
+    // The labels of the message's mailbox; imported ones need a description (like the backend).
+    const candidates = [...s.labels, ...(s.importProviderLabels && corrects ? this.providerLabels.filter((l) => l.description) : [])]
+      .filter((l) => labelInAccount(l, m.accountId))
     const scores: Record<string, number> = {}
     for (const l of candidates) {
-      const kw = [...(hints[l.id] ?? []), ...words(`${l.name} ${l.description}`).filter((w) => w.length > 4)]
+      const kw = [...(hints[l.id] ?? hints[l.id.replace(/-(work|side)$/, '')] ?? []), ...words(`${l.name} ${l.description}`).filter((w) => w.length > 4)]
       const hitsN = kw.reduce((acc, k) => acc + (text.includes(k) ? 1 : 0), 0)
       const x = hitsN * 1.4 - 2.2 + (hash(m.id + l.id) % 10) / 20
       scores[l.id] = Math.round((1 / (1 + Math.exp(-x))) * 100) / 100
@@ -965,19 +1115,28 @@ class MockBackend {
     return results
   }
 
+  /** The label a message gets for labelId: its own mailbox's label with that name (like the backend). */
+  private mailboxLabel(m: Message, labelId: string): string | undefined {
+    const l = this.allLabels().find((x) => x.id === labelId)
+    return l && labelInMailbox(this.allLabels(), l, m.accountId)?.id
+  }
+
   async AddLabel(ids: string[], labelId: string): Promise<void> {
     await latency(30, 90)
     this.mutate(ids, (m) => {
-      if (!m.labels.includes(labelId)) m.labels = [...m.labels, labelId]
-      m.labelDetails = [...(m.labelDetails ?? []).filter((d) => d.labelId !== labelId), { labelId, source: 'manual', confidence: 1 }]
+      const id = this.mailboxLabel(m, labelId)
+      if (!id) return
+      if (!m.labels.includes(id)) m.labels = [...m.labels, id]
+      m.labelDetails = [...(m.labelDetails ?? []).filter((d) => d.labelId !== id), { labelId: id, source: 'manual', confidence: 1 }]
     })
   }
 
   async RemoveLabel(ids: string[], labelId: string): Promise<void> {
     await latency(30, 90)
     this.mutate(ids, (m) => {
-      m.labels = m.labels.filter((l) => l !== labelId)
-      m.labelDetails = (m.labelDetails ?? []).filter((d) => d.labelId !== labelId)
+      const id = this.mailboxLabel(m, labelId) ?? labelId
+      m.labels = m.labels.filter((l) => l !== id)
+      m.labelDetails = (m.labelDetails ?? []).filter((d) => d.labelId !== id)
     })
   }
 

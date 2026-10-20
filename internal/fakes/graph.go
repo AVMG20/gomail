@@ -442,8 +442,16 @@ func (g *Graph) route(w http.ResponseWriter, r *http.Request, p string, body map
 		g.delta(w, g.folderID(seg[2]), q)
 	case p == "me/messages" && get:
 		search := strings.ToLower(strings.Trim(q.Get("$search"), `"`))
+		flaggedUnread := q.Get("$filter") == "flag/flagStatus eq 'flagged' and isRead eq false"
+		if f := q.Get("$filter"); f != "" && !flaggedUnread {
+			apiError(w, 400, "ErrorInvalidUrlQueryFilter", "The query filter contains one or more invalid nodes.")
+			return
+		}
 		out := []any{}
 		for _, m := range g.msgs {
+			if flaggedUnread && (!m.Flagged || m.IsRead) {
+				continue
+			}
 			if search == "" || strings.Contains(strings.ToLower(m.Subject+" "+m.From+" "+m.HTML), search) {
 				out = append(out, g.render(m, false))
 			}

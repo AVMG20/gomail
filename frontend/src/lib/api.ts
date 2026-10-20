@@ -4,12 +4,13 @@
 // in-memory mock in ./mock.
 import type {
   Account, AIModel, AppInfo, BackupResult, RestoreSummary, AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
-  EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, EventDraft, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
-} from './types'
+  EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, EventDraft, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo, AutoMove } from './types'
 import { isSafeExternalUrl } from './format'
 import { normalizeDomains, normalizeSenders } from './trust'
 import { LABEL_COLORS as LABEL_FALLBACK, safeColor } from './color'
 import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
+import type { LabelSenderResult, SenderScope, JunkSenderResult, NotJunkResult } from './junk'
+import type { SenderGrouping, SenderSummary } from './senders'
 
 type AnyFn = (...args: unknown[]) => Promise<unknown>
 
@@ -126,7 +127,7 @@ export const USED_METHODS = [
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
 export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -298,6 +299,7 @@ export function normSettings(s: Settings): Settings {
     labelRules: s.labelRules ?? [],
     quietLabels: s.quietLabels ?? {},
     mutedMailboxes: s.mutedMailboxes ?? [],
+    hiddenFolders: s.hiddenFolders ?? [],
     autoLabelAccounts: s.autoLabelAccounts ?? [],
     aiCorrectsOff: s.aiCorrectsOff ?? [],
     // Not (yet) in the Go Settings struct: fall back to the locally stored value.
@@ -367,6 +369,8 @@ export const api = {
   cancelAddAccount: () => call<void>('CancelAddAccount'),
   removeAccount: (id: string) => call<void>('RemoveAccount', id),
   updateAccount: (id: string, displayName: string, color: string) => call<void>('UpdateAccount', id, displayName, color),
+  reorderAccounts: (ids: string[]) => call<void>('ReorderAccounts', ids),
+  autoMoves: async (accountId: string, kind: string, hours = 24) => (await call<AutoMove[] | null>('AutoMoves', accountId, kind, hours)) ?? [],
 
   // ---- folders & messages
   getFolders: async (accountId: string) => (await call<Folder[] | null>('GetFolders', accountId)) ?? [],
@@ -382,6 +386,29 @@ export const api = {
   trash: (ids: string[]) => call<void>('Trash', ids),
   moveToJunk: (ids: string[]) => call<void>('MoveToJunk', ids),
   moveToFolder: (ids: string[], folderId: string) => call<void>('MoveToFolder', ids, folderId),
+  /** "Always send <sender> to Junk": a junk rule for the mailbox, and the picked + inbox mail of the sender to Junk (read). */
+  junkSender: async (accountId: string, address: string, scope: SenderScope, ids: string[]): Promise<JunkSenderResult> => {
+    const r = await call<JunkSenderResult>('JunkSender', accountId, address, scope, ids)
+    return { ...r, moved: r.moved ?? [], unread: r.unread ?? [] }
+  },
+  /** Back to the inbox (Jev won't junk them again); returns the junk rules still matching their senders. */
+  notJunk: async (ids: string[]): Promise<NotJunkResult> => {
+    const r = await call<NotJunkResult>('NotJunk', ids)
+    return { count: r.count ?? 0, rules: r.rules ?? [] }
+  },
+  /** "Always label <sender> as …": a label rule for the mailbox, and the label on the sender's mail now. */
+  labelSender: async (accountId: string, address: string, scope: SenderScope, labelId: string): Promise<LabelSenderResult> => {
+    const r = await call<LabelSenderResult>('LabelSender', accountId, address, scope, labelId)
+    return { ...r, labeled: r.labeled ?? [] }
+  },
+  /** Delete label/junk rules by id (Stop junking, a sender rule toggled off, Undo). */
+  removeRules: (ruleIds: string[]) => call<void>('RemoveRules', ruleIds),
+  /** "Clean up by sender": who fills a mailbox's folder kind ("" = inbox; accountId "" = every mailbox), the most mail first. */
+  topSenders: async (accountId: string, folderKind: string, groupBy: SenderGrouping, limit = 0): Promise<SenderSummary[]> =>
+    (await call<SenderSummary[] | null>('TopSenders', accountId, folderKind, groupBy, limit)) ?? [],
+  /** One sender's mail (the address, or "@domain") in a mailbox's folder kind, matched exactly. */
+  senderMessageIds: async (accountId: string, folderKind: string, sender: string): Promise<string[]> =>
+    (await call<string[] | null>('SenderMessageIDs', accountId, folderKind, sender)) ?? [],
   sendMessage: (req: ComposeRequest) => call<void>('SendMessage', req),
   saveAttachment: (messageId: string, attachmentId: string) => call<void>('SaveAttachment', messageId, attachmentId),
   syncNow: (accountId: string) => call<void>('SyncNow', accountId),

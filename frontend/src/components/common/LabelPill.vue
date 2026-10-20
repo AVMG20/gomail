@@ -18,7 +18,7 @@ const tooltip = computed(() => {
   else if (props.label.source === 'system') parts.push('Built-in label')
   else if (props.label.source === 'provider') parts.push(props.label.provider ? `Imported from ${props.label.provider === 'outlook' ? 'Outlook' : 'Gmail'}` : 'Imported from your provider')
   if (props.detail?.source === 'provider' && !isAi.value) parts.push('Set in Gmail/Outlook')
-  else if (props.detail?.source === 'manual') parts.push('Added by you')
+  else if (props.detail?.source === 'manual') parts.push('Added by you or one of your rules')
   return parts.join(' — ')
 })
 </script>

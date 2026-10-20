@@ -17,6 +17,7 @@ import Tip from '@/components/common/Tip.vue'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { displayName } from '@/lib/format'
 import { needsRemoteRefetch, normalizeSenders, remoteAllowedFor } from '@/lib/trust'
+import { chipLabelIds } from '@/lib/labelScope'
 import type { Label, Message, MessageLabel } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
@@ -25,6 +26,7 @@ import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { FOLDER_ICONS } from './folderIcons'
 import LabelPopover from './LabelPopover.vue'
+import SenderRulesMenu from './SenderRulesMenu.vue'
 import ThreadMessage from './ThreadMessage.vue'
 import InviteCard from './InviteCard.vue'
 
@@ -148,7 +150,7 @@ const labelPills = computed(() => {
   const m = current.value
   if (!m) return [] as { label: Label; detail?: MessageLabel }[]
   const details = new Map((m.labelDetails ?? []).map((d) => [d.labelId, d]))
-  return m.labels.map((id) => ({ label: settings.labelMap.get(id), detail: details.get(id) })).filter((x): x is { label: Label; detail: MessageLabel | undefined } => !!x.label)
+  return chipLabelIds(m.labels, m.folderIds, (f) => accounts.folderMap.get(f)?.kind).map((id) => ({ label: settings.labelMap.get(id), detail: details.get(id) })).filter((x): x is { label: Label; detail: MessageLabel | undefined } => !!x.label)
 })
 
 /** "Load images": allow this conversation; ensureRemoteBodies() fetches the unstripped bodies. */
@@ -319,6 +321,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            <SenderRulesMenu v-if="current" menu="dropdown" :message="current" />
             <DropdownMenuSeparator />
             <DropdownMenuItem @click="mail.open(null)"><XIcon /> Close <DropdownMenuShortcut>Esc</DropdownMenuShortcut></DropdownMenuItem>
           </DropdownMenuContent>

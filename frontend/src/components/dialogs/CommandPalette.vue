@@ -4,7 +4,7 @@ import DOMPurify from 'dompurify'
 import {
   ArchiveIcon, CheckIcon, ClockIcon, CornerUpLeftIcon, KeyboardIcon, LayersIcon, MoonIcon, PencilIcon, PlusIcon,
   RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, TagIcon, LoaderIcon, ForwardIcon, CornerDownLeftIcon,
-  CalendarDaysIcon, CalendarPlusIcon, InboxIcon, MailCheckIcon, MailIcon, MailOpenIcon, MessagesSquareIcon, OctagonAlertIcon, XIcon, PanelLeftIcon, PanelRightIcon, ReplyAllIcon, StarIcon, Trash2Icon,
+  CalendarDaysIcon, CalendarPlusIcon, InboxIcon, MailCheckIcon, UsersIcon, MailIcon, MailOpenIcon, MessagesSquareIcon, OctagonAlertIcon, XIcon, PanelLeftIcon, PanelRightIcon, ReplyAllIcon, StarIcon, Trash2Icon,
 } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import CmdRoot from '@/components/common/cmd/CmdRoot.vue'
@@ -18,6 +18,7 @@ import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { FOLDER_ICONS } from '@/components/mail/folderIcons'
 import { api, hasMethod } from '@/lib/api'
 import { fuzzyFilter } from '@/lib/fuzzy'
+import { openLabelSettings } from '@/lib/labelScope'
 import { applyCompletion, operatorCompletions, type Completion } from '@/lib/searchQuery'
 import { displayName, listDate } from '@/lib/format'
 import { hasMod, shortcutLabel } from '@/lib/platform'
@@ -25,6 +26,7 @@ import { currentIsDark } from '@/lib/theme'
 import type { Label, MessageSummary, SearchResult } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
+import { useCleanupStore } from '@/stores/cleanup'
 import { useComposeStore } from '@/stores/compose'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
@@ -36,6 +38,7 @@ const accounts = useAccountsStore()
 const settings = useSettingsStore()
 const compose = useComposeStore()
 const ai = useAiStore()
+const cleanup = useCleanupStore()
 
 const RECENT_KEY = 'gomail.recentSearches.v1'
 const query = ref('')
@@ -150,7 +153,7 @@ const actions = computed<Action[]>(() => {
     { id: 'compose', title: 'Compose new message', icon: PencilIcon, shortcut: 'c', run: () => compose.compose() },
     { id: 'sync', title: 'Sync now', icon: RefreshCwIcon, run: () => void accounts.sync(mail.mailbox.accountId).catch(() => {}) },
     { id: 'settings', title: 'Open settings', icon: SettingsIcon, shortcut: 'mod+,', run: () => ui.openSettings() },
-    { id: 'labels', title: 'Manage labels', icon: TagIcon, run: () => ui.openSettings('labels') },
+    { id: 'labels', title: 'Manage labels', icon: TagIcon, run: () => openLabelSettings(mail.mailbox.accountId) },
     { id: 'theme', title: currentIsDark() ? 'Switch to light theme' : 'Switch to dark theme', icon: MoonIcon, run: () => settings.update({ theme: currentIsDark() ? 'light' : 'dark' }) },
     { id: 'shortcuts', title: 'Keyboard shortcuts', icon: KeyboardIcon, shortcut: '?', run: () => (ui.shortcutsOpen = true) },
     { id: 'add', title: 'Add account', icon: PlusIcon, run: () => (ui.addAccountOpen = true) },
@@ -168,6 +171,9 @@ const actions = computed<Action[]>(() => {
     { id: 'conv', title: settings.settings?.conversationView === false ? 'Group by conversation' : 'Show individual messages', icon: MessagesSquareIcon, run: () => settings.update({ conversationView: settings.settings?.conversationView === false }) },
     { id: 'folders', title: 'Toggle folders', icon: PanelLeftIcon, shortcut: 'mod+b', run: () => (ui.folderSidebarOpen = !ui.folderSidebarOpen) },
   ]
+  if (hasMethod('TopSenders')) {
+    list.push({ id: 'cleanup', title: 'Clean up inbox by sender', icon: UsersIcon, run: () => { ui.mainView = 'mail'; cleanup.show(mail.mailbox.accountId) } })
+  }
   if (mail.mailbox.kind === 'trash' || mail.mailbox.kind === 'spam') {
     list.push({ id: 'empty', title: `Empty ${mail.mailbox.kind === 'spam' ? 'Junk' : 'Trash'}…`, icon: Trash2Icon, run: () => folderAction('empty') })
   }

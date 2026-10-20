@@ -45,6 +45,8 @@ type Account struct {
 	NeedsReauth bool `json:"needsReauth"`
 	// Signature is sanitized HTML inserted by the composer.
 	Signature string `json:"signature"`
+	// Position orders the mailboxes (account rail, settings); lists come sorted.
+	Position int `json:"-"`
 	// CalendarConsent is true when the sign-in includes calendar access.
 	// Accounts added before calendar support need EnableCalendar.
 	CalendarConsent bool `json:"calendarConsent"`
@@ -103,6 +105,20 @@ type MessageSummary struct {
 	ConversationID string   `json:"conversationId"`
 	ThreadCount    int      `json:"threadCount"`  // messages in the conversation (1 in message view)
 	Participants   []string `json:"participants"` // sender names, oldest first; "me" for the account itself
+}
+
+// AutoMove is mail an automation (Jev, a rule, a label's "When added")
+// moved, for the "sorted for you" review.
+type AutoMove struct {
+	MessageID string    `json:"messageId"`
+	AccountID string    `json:"accountId"`
+	To        string    `json:"to"`     // folder kind: spam | archive | trash
+	Reason    string    `json:"reason"` // e.g. "Jev: Junk", "Rule: sender contains “github.com”"
+	At        time.Time `json:"at"`
+	FromName  string    `json:"fromName"`
+	FromEmail string    `json:"fromEmail"`
+	Subject   string    `json:"subject"`
+	Date      time.Time `json:"date"`
 }
 
 // MessageLabel is one label assignment on a message.
@@ -242,7 +258,7 @@ type ComposeRequest struct {
 // LabelRule acts on new mail whose sender or subject contains some text.
 type LabelRule struct {
 	ID        string `json:"id"`
-	AccountID string `json:"accountId"` // "" = every mailbox
+	AccountID string `json:"accountId"` // the mailbox ("" = every mailbox, only in settings from older versions)
 	Field     string `json:"field"`     // "from" (name or address) | "subject"
 	Contains  string `json:"contains"`  // case-insensitive
 	Action    string `json:"action"`    // "label" | "junk" (move to Junk/Spam)
@@ -259,11 +275,17 @@ type Label struct {
 	// Source is "user" (created in gomail), "provider" (imported from Gmail
 	// labels / Outlook categories) or "system" (built-in, e.g. "junk").
 	Source string `json:"source"`
-	// AccountIDs are the mailboxes the label belongs to: it is offered,
-	// counted and applied only there. Provider labels list the accounts
-	// they were imported from. Empty means every mailbox (labels saved
-	// before labels were per mailbox, and the built-in Junk label).
+	// AccountIDs is the one mailbox the label belongs to: it is offered,
+	// counted and applied only there, and editing it never changes another
+	// mailbox (every mailbox has its own labels; labels with the same name
+	// are grouped only for display in the unified view). Empty for the
+	// built-in Junk label, which belongs to every mailbox. A list for
+	// settings from older versions, which shared labels between mailboxes
+	// (config.SplitLabels gives each mailbox its own copy).
 	AccountIDs []string `json:"accountIds"`
+	// Then is what happens to new mail that gets the label: "" (stays
+	// where it is), "archive", "junk" or "trash". Not used for Junk.
+	Then string `json:"then"`
 }
 
 type Settings struct {
@@ -343,6 +365,9 @@ type Settings struct {
 	// MutedMailboxes lists account ids whose new mail never notifies
 	// (calendar reminders are separate: Account.CalendarMuted).
 	MutedMailboxes []string `json:"mutedMailboxes"`
+	// HiddenFolders lists folder ids (other folders, like an old "GitHub"
+	// folder) left out of the sidebar. Their mail still shows in search.
+	HiddenFolders []string `json:"hiddenFolders"`
 	// AutoLabelAccounts lists the account ids whose new mail Jev labels
 	// automatically. Missing (nil) in settings from before it existed: see
 	// config.MigrateAutoLabel.
@@ -542,4 +567,19 @@ type ClassifyProgress struct {
 	Cost      float64 `json:"cost"` // USD so far
 	Cancelled bool    `json:"cancelled"`
 	Error     string  `json:"error"`
+}
+
+// SenderSummary is one sender of a mailbox's folder for "Clean up by
+// sender": an address, or every address at a domain.
+type SenderSummary struct {
+	AccountID   string    `json:"accountId"`
+	Key         string    `json:"key"`         // the address, or "@domain" for a domain group
+	Address     string    `json:"address"`     // lower-cased; for a domain group, the newest message's
+	Name        string    `json:"name"`        // display name of the newest message
+	Domain      string    `json:"domain"`      // the address's domain
+	Addresses   int       `json:"addresses"`   // distinct addresses in the group (1 for an address)
+	Count       int       `json:"count"`       // messages
+	Unread      int       `json:"unread"`      // of which unread
+	Newest      time.Time `json:"newest"`      // date of the newest message
+	Unsubscribe bool      `json:"unsubscribe"` // the newest message offers List-Unsubscribe
 }

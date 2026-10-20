@@ -18,6 +18,7 @@ import { useComposeStore } from '@/stores/compose'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
+import { useCleanupStore } from '@/stores/cleanup'
 import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
 
 // Heavier, not-always-needed UI is code-split.
@@ -31,6 +32,7 @@ const ShortcutsDialog = defineAsyncComponent(() => import('@/components/dialogs/
 const OnboardingWizard = defineAsyncComponent(() => import('@/components/dialogs/OnboardingWizard.vue'))
 const ClassifyProgress = defineAsyncComponent(() => import('@/components/dialogs/ClassifyProgress.vue'))
 const ClassifyConfirmDialog = defineAsyncComponent(() => import('@/components/dialogs/ClassifyConfirmDialog.vue'))
+const SenderCleanup = defineAsyncComponent(() => import('@/components/mail/SenderCleanup.vue'))
 
 const settings = useSettingsStore()
 const accounts = useAccountsStore()
@@ -38,6 +40,7 @@ const mail = useMailStore()
 const ui = useUiStore()
 const compose = useComposeStore()
 const ai = useAiStore()
+const cleanup = useCleanupStore()
 
 const booted = ref(false)
 const onboarded = ref(readLocal('onboarded', false))
@@ -51,12 +54,13 @@ useShortcuts()
 useBackendEvents()
 
 // Mount lazily-loaded dialogs on first use, then keep them mounted for instant reopen.
-const used = ref({ settings: false, palette: false, addAccount: false, shortcuts: false, classify: false })
+const used = ref({ settings: false, palette: false, addAccount: false, shortcuts: false, classify: false, cleanup: false })
 watch(() => ui.settingsOpen, (v) => v && (used.value.settings = true))
 watch(() => ui.paletteOpen, (v) => v && (used.value.palette = true))
 watch(() => ui.addAccountOpen, (v) => v && (used.value.addAccount = true))
 watch(() => ui.shortcutsOpen, (v) => v && (used.value.shortcuts = true))
 watch(() => ai.bulkRequest, (v) => v && (used.value.classify = true))
+watch(() => cleanup.open, (v) => v && (used.value.cleanup = true))
 
 onMounted(async () => {
   if (isWails()) {
@@ -185,6 +189,7 @@ watch([() => mail.mailboxName, showCalendar], ([name, cal]) => {
     <AddAccountDialog v-if="used.addAccount" />
     <ShortcutsDialog v-if="used.shortcuts" />
     <ClassifyConfirmDialog v-if="used.classify" />
+    <SenderCleanup v-if="used.cleanup" />
     <LinkConfirmDialog />
     <Toaster position="bottom-center" :theme="toasterTheme" close-button />
     <TooltipLayer />

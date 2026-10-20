@@ -457,6 +457,31 @@ END;
 -- (Defensive: conversation counts count rows, so no emptied counter may stay.)
 DELETE FROM folder_threads WHERE msgs <= 0;
 `,
+	// 15: the user's order of the mailboxes, starting as creation order.
+	`
+ALTER TABLE accounts ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+UPDATE accounts SET position = (SELECT count(*) FROM accounts b
+	WHERE b.created_at < accounts.created_at OR (b.created_at = accounts.created_at AND b.id < accounts.id));
+`,
+	// 16: "Clean up by sender": counts per sender of a folder walk this
+	// index in sender order without reading rows (bodies sit before
+	// folder_kinds), and one sender's mail is a seek.
+	`
+CREATE INDEX messages_senders ON messages(account_id, from_email COLLATE NOCASE, folder_kinds, unread, date, from_name);
+`,
+	// 17: what automations moved (Jev, rules, label actions), so the Junk,
+	// Archive and Trash views can show "sorted here for you" and undo it.
+	`
+CREATE TABLE auto_moves (
+	message_id TEXT NOT NULL,
+	account_id TEXT NOT NULL,
+	to_kind    TEXT NOT NULL,
+	reason     TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (message_id, created_at)
+);
+CREATE INDEX auto_moves_recent ON auto_moves(to_kind, created_at);
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

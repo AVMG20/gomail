@@ -180,7 +180,13 @@ func New(opts Options) (*Service, error) {
 			st.Close()
 			return nil, err
 		}
-		s.updateLabels(func(st *models.Settings) bool { return s.scopeLabels(st.Labels) })
+		s.updateLabels(func(st *models.Settings) bool { // each demo mailbox gets its own labels once
+			changed := false
+			for _, a := range demo.Accounts() {
+				changed = s.ownLabels(st, a.ID) || changed
+			}
+			return changed
+		})
 	}
 	return s, nil
 }
@@ -673,6 +679,15 @@ func (s *Service) UpdateAccount(accountID, displayName, color string) error {
 		return err
 	}
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
+	return nil
+}
+
+// ReorderAccounts sets the order of the mailboxes (ids in the new order).
+func (s *Service) ReorderAccounts(ids []string) error {
+	if err := s.store.ReorderAccounts(ids); err != nil {
+		return err
+	}
+	s.emit(models.EventAccountsChanged, models.AccountEvent{})
 	return nil
 }
 

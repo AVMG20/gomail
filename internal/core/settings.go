@@ -16,7 +16,20 @@ import (
 	"github.com/AVMG20/gomail/internal/store"
 )
 
-const dismissedLabelsKey = "dismissedProviderLabels"
+const (
+	// dismissedLabelsKey held the deleted provider labels of every mailbox
+	// (lower-cased names) before labels were per mailbox; migrateLabels
+	// moves it to dismissedMailboxLabelsKey.
+	dismissedLabelsKey = "dismissedProviderLabels"
+	// dismissedMailboxLabelsKey maps an account id to the lower-cased names
+	// of the provider labels the user deleted there: sync doesn't import
+	// them again.
+	dismissedMailboxLabelsKey = "dismissedMailboxLabels"
+	// labelsVersionKey records the one-time label migrations that ran
+	// (labelsVersion: labels belong to one mailbox each).
+	labelsVersionKey = "labelsVersion"
+	labelsVersion    = 1
+)
 
 func (s *Service) loadSettings() error {
 	st := config.DefaultSettings()
@@ -32,8 +45,8 @@ func (s *Service) loadSettings() error {
 	}
 	migrated := config.MigrateAutoLabel(&st, s.accountIDs())
 	config.Normalize(&st)
-	// Labels from before labels were per mailbox, or the old auto-label switch.
-	if s.scopeLabels(st.Labels) || migrated {
+	// Labels shared by mailboxes (older versions), or the old auto-label switch.
+	if s.migrateLabels(&st) || migrated {
 		_ = s.persist(st)
 	}
 	s.settingsMu.Lock()
@@ -115,10 +128,10 @@ func (s *Service) SaveSettings(in models.Settings) error {
 		ids, names := map[string]bool{}, map[string]bool{}
 		for _, l := range in.Labels {
 			ids[l.ID] = true
-			names[strings.ToLower(strings.TrimSpace(l.Name))] = true
+			names[labelKey(l)] = true
 		}
 		for _, l := range old.Labels {
-			if s.labelAdded[l.ID] > readAt && !ids[l.ID] && !names[strings.ToLower(l.Name)] {
+			if s.labelAdded[l.ID] > readAt && !ids[l.ID] && !names[labelKey(l)] {
 				in.Labels = append(in.Labels, l)
 			}
 		}
@@ -148,7 +161,7 @@ func (s *Service) SaveSettings(in models.Settings) error {
 		}
 	}
 	in.Labels = config.NormalizeLabels(in.Labels)
-	s.scopeLabels(in.Labels)
+	s.splitLabels(&in, false) // a label of several mailboxes becomes one per mailbox
 	if err := s.persist(in); err != nil {
 		s.settingsMu.Unlock()
 		return err
@@ -166,23 +179,28 @@ func (s *Service) SaveSettings(in models.Settings) error {
 		valid = append(valid, l.ID)
 		kept[l.ID] = true
 	}
-	var dismissed []string
-	_ = s.store.GetSetting(dismissedLabelsKey, &dismissed)
+	dismissed := s.dismissedLabels()
 	changed := false
 	for _, l := range old.Labels {
 		if !kept[l.ID] && l.Source == config.LabelSourceProvider {
-			dismissed = append(dismissed, strings.ToLower(l.Name))
-			changed = true
+			for _, a := range l.AccountIDs {
+				if n := strings.ToLower(l.Name); !slices.Contains(dismissed[a], n) {
+					dismissed[a] = append(dismissed[a], n)
+					changed = true
+				}
+			}
 		}
 	}
 	for _, l := range in.Labels {
-		if i := slices.Index(dismissed, strings.ToLower(l.Name)); i >= 0 {
-			dismissed = slices.Delete(dismissed, i, i+1)
-			changed = true
+		for _, a := range l.AccountIDs {
+			if i := slices.Index(dismissed[a], strings.ToLower(l.Name)); i >= 0 {
+				dismissed[a] = slices.Delete(dismissed[a], i, i+1)
+				changed = true
+			}
 		}
 	}
 	if changed {
-		_ = s.store.SetSetting(dismissedLabelsKey, dismissed)
+		_ = s.store.SetSetting(dismissedMailboxLabelsKey, dismissed)
 	}
 	if err := s.store.DeleteUnknownLabels(valid); err != nil {
 		return err
@@ -203,18 +221,15 @@ func (s *Service) SaveSettings(in models.Settings) error {
 	return nil
 }
 
-// resolveProviderLabels merges provider labels into the label list by
-// case-insensitive name and returns lower-cased name -> label id.
+// resolveProviderLabels finds the labels of a mailbox for its Gmail labels
+// or Outlook categories by case-insensitive name, adding the missing ones
+// to that mailbox, and returns lower-cased name -> label id. Mailboxes
+// never share labels: the same name in another mailbox is another label.
 func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) map[string]string {
-	var dismissed []string
-	_ = s.store.GetSetting(dismissedLabelsKey, &dismissed)
+	dismissed := s.dismissedLabels()[accountID]
 	s.settingsMu.Lock()
 	st := s.settings
 	st.Labels = slices.Clone(st.Labels)
-	byName := map[string]int{}
-	for i, l := range st.Labels {
-		byName[strings.ToLower(l.Name)] = i
-	}
 	out := map[string]string{}
 	changed := false
 	for _, pl := range labels {
@@ -223,15 +238,10 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 		if name == "" {
 			continue
 		}
-		if i, ok := byName[lower]; ok {
-			out[lower] = st.Labels[i].ID
-			// The same name in another mailbox is the same label: it now
-			// belongs there too (its mail carries it).
-			if l := st.Labels[i]; l.Source != config.LabelSourceSystem && len(l.AccountIDs) > 0 && !slices.Contains(l.AccountIDs, accountID) {
-				st.Labels[i].AccountIDs = append(slices.Clone(l.AccountIDs), accountID)
-				changed = true
-			}
-			if st.Labels[i].Source == config.LabelSourceProvider && pl.Color != "" && st.Labels[i].Color != pl.Color && config.IsHexColor(pl.Color) {
+		if l, ok := config.LabelNamed(st.Labels, accountID, name); ok {
+			out[lower] = l.ID
+			i := slices.IndexFunc(st.Labels, func(x models.Label) bool { return x.ID == l.ID })
+			if l.Source == config.LabelSourceProvider && pl.Color != "" && l.Color != pl.Color && config.IsHexColor(pl.Color) {
 				st.Labels[i].Color = pl.Color
 				changed = true
 			}
@@ -240,17 +250,12 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 		if slices.Contains(dismissed, lower) {
 			continue
 		}
-		st.Labels = append(st.Labels, models.Label{Name: name, Color: pl.Color, Source: config.LabelSourceProvider, AccountIDs: []string{accountID}})
-		st.Labels = config.NormalizeLabels(st.Labels)
-		added := st.Labels[len(st.Labels)-1]
-		for _, l := range st.Labels { // NormalizeLabels may append Junk last
-			if strings.EqualFold(l.Name, name) {
-				added = l
-			}
+		id := config.NewLabelID(st.Labels, name)
+		st.Labels = config.NormalizeLabels(append(st.Labels, models.Label{ID: id, Name: name, Color: pl.Color, Source: config.LabelSourceProvider, AccountIDs: []string{accountID}}))
+		if slices.ContainsFunc(st.Labels, func(l models.Label) bool { return l.ID == id }) {
+			out[lower] = id
+			changed = true
 		}
-		byName[lower] = slices.IndexFunc(st.Labels, func(l models.Label) bool { return l.ID == added.ID })
-		out[lower] = added.ID
-		changed = true
 	}
 	if changed {
 		if err := s.persist(st); err == nil {
@@ -264,6 +269,23 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 		s.emit(models.EventLabelsChanged, models.AccountEvent{AccountID: accountID})
 	}
 	return out
+}
+
+// labelKey identifies a label by mailbox and lower-cased name (names are
+// unique within a mailbox).
+func labelKey(l models.Label) string {
+	return strings.Join(l.AccountIDs, ",") + "\x00" + strings.ToLower(strings.TrimSpace(l.Name))
+}
+
+// dismissedLabels returns account id -> lower-cased names of the provider
+// labels the user deleted in that mailbox.
+func (s *Service) dismissedLabels() map[string][]string {
+	m := map[string][]string{}
+	_ = s.store.GetSetting(dismissedMailboxLabelsKey, &m)
+	if m == nil {
+		m = map[string][]string{}
+	}
+	return m
 }
 
 // labelsChangedLocked records the labels of next that aren't in prev as
@@ -293,7 +315,7 @@ func (s *Service) labelsChangedLocked(prev, next []models.Label) {
 	}
 }
 
-// ---- mailbox scope of labels ----
+// ---- labels per mailbox ----
 
 // accountIDs lists the ids of the accounts on this computer.
 func (s *Service) accountIDs() []string {
@@ -308,18 +330,67 @@ func (s *Service) accountIDs() []string {
 	return ids
 }
 
-// scopeLabels gives labels without a mailbox list their mailboxes:
-// provider labels the accounts whose mail carries them, every other label
-// every mailbox (see config.ScopeLabels). It reports whether a label
-// changed.
-func (s *Service) scopeLabels(labels []models.Label) bool {
+// migrateLabels runs on startup: labels that several mailboxes share
+// (older versions) become one label per mailbox (splitLabels). The first
+// time, it also moves the deleted provider labels to per-mailbox lists and
+// drops the classifier's guesses of imported labels without a description
+// (it is no longer offered them). It reports whether st changed.
+func (s *Service) migrateLabels(st *models.Settings) bool {
+	var ver int
+	_ = s.store.GetSetting(labelsVersionKey, &ver)
+	legacy := ver < labelsVersion
+	if legacy && len(s.accountIDs()) > 0 && slices.ContainsFunc(st.Labels, func(l models.Label) bool { return l.Source != config.LabelSourceSystem }) {
+		slog.Info("labels: giving every mailbox its own labels")
+	}
+	changed := s.splitLabels(st, legacy)
+	if !legacy {
+		return changed
+	}
+	var guesses []string
+	for _, l := range st.Labels {
+		if l.Source == config.LabelSourceProvider && l.Description == "" {
+			guesses = append(guesses, l.ID)
+		}
+	}
+	if err := s.store.DeleteAIAssignments(guesses); err != nil {
+		slog.Warn("labels: removing AI guesses of imported labels failed", "err", err)
+	}
+	var old []string
+	if err := s.store.GetSetting(dismissedLabelsKey, &old); err == nil && len(old) > 0 {
+		dismissed := s.dismissedLabels()
+		for _, a := range s.accountIDs() {
+			for _, n := range old {
+				if n = strings.ToLower(strings.TrimSpace(n)); n != "" && !slices.Contains(dismissed[a], n) {
+					dismissed[a] = append(dismissed[a], n)
+				}
+			}
+		}
+		if s.store.SetSetting(dismissedMailboxLabelsKey, dismissed) == nil {
+			_ = s.store.SetSetting(dismissedLabelsKey, []string{})
+		}
+	}
+	_ = s.store.SetSetting(labelsVersionKey, labelsVersion)
+	return changed
+}
+
+// splitLabels gives every mailbox its own copy of the labels it shares
+// with others (config.SplitLabels) and moves the mailbox's assignments to
+// its copy. Mail that was AI-labeled already keeps its fingerprint, so the
+// new ids don't make it go to the classifier (and cost) again; legacy
+// means the fingerprints are from before imported labels without a
+// description were left out. A provider label without mailboxes (older
+// versions) first gets the mailboxes whose mail carries it. It reports
+// whether st changed.
+func (s *Service) splitLabels(st *models.Settings, legacy bool) bool {
 	ids := s.accountIDs()
 	if len(ids) == 0 {
 		return false
 	}
-	changed := false
+	before := *st
+	before.Labels = slices.Clone(st.Labels)
+	scoped := false
 	var seen map[string][]string
-	for i, l := range labels {
+	for i, l := range st.Labels {
 		if l.Source != config.LabelSourceProvider || len(l.AccountIDs) > 0 {
 			continue
 		}
@@ -329,11 +400,34 @@ func (s *Service) scopeLabels(labels []models.Label) bool {
 			}
 		}
 		if a := seen[l.ID]; len(a) > 0 {
-			labels[i].AccountIDs = slices.Clone(a)
-			changed = true
+			st.Labels[i].AccountIDs = slices.Clone(a)
+			scoped = true
 		}
 	}
-	return config.ScopeLabels(labels, ids) || changed
+	moves, split := config.SplitLabels(st, ids)
+	if split {
+		if err := s.store.MoveLabels(moves); err != nil {
+			slog.Warn("labels: giving mailboxes their own labels failed", "err", err)
+			*st = before
+			return false
+		}
+		config.Normalize(st)
+	}
+	if split || legacy {
+		for _, a := range ids {
+			was := labelDefsOf(before.Labels, a)
+			if legacy {
+				was = nil
+				for _, l := range config.LabelsForAccount(before.Labels, a) {
+					was = append(was, ai.LabelDef{ID: l.ID, Name: l.Name, Description: l.Description})
+				}
+			}
+			if err := s.store.RenameAIHashes(a, labelsetHashOf(before, was), labelsetHashOf(*st, labelDefsOf(st.Labels, a))); err != nil {
+				slog.Warn("labels: keeping AI fingerprints failed", "account", a, "err", err)
+			}
+		}
+	}
+	return split || scoped
 }
 
 // updateLabels changes the stored settings' labels outside SaveSettings
@@ -363,10 +457,10 @@ func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
 	s.emit(models.EventLabelsChanged, models.AccountEvent{})
 }
 
-// labelsGainAccount runs when a mailbox is added: user labels that belonged
-// to every mailbox so far ("All") belong to the new one too, and labels
-// without a list get one. Likewise, when Jev auto-labels every mailbox so
-// far, it auto-labels the new one too.
+// labelsGainAccount runs when a mailbox is added: it gets its own copies
+// of the default labels (unless it has labels already: a restored backup
+// brings its own). Likewise, when Jev auto-labels every mailbox so far, it
+// auto-labels the new one too.
 func (s *Service) labelsGainAccount(accountID string) {
 	var others []string
 	for _, id := range s.accountIDs() {
@@ -375,36 +469,32 @@ func (s *Service) labelsGainAccount(accountID string) {
 		}
 	}
 	s.updateLabels(func(st *models.Settings) bool {
-		changed := false
-		for i, l := range st.Labels {
-			if l.Source != config.LabelSourceUser || len(l.AccountIDs) == 0 || slices.Contains(l.AccountIDs, accountID) {
-				continue
-			}
-			all := true
-			for _, a := range others {
-				if !slices.Contains(l.AccountIDs, a) {
-					all = false
-					break
-				}
-			}
-			if all {
-				st.Labels[i].AccountIDs = append(slices.Clone(l.AccountIDs), accountID)
-				changed = true
-			}
-		}
+		changed := s.ownLabels(st, accountID)
 		if len(others) > 0 && !slices.Contains(st.AutoLabelAccounts, accountID) && allIn(others, st.AutoLabelAccounts) {
 			st.AutoLabelAccounts = append(st.AutoLabelAccounts, accountID)
 			changed = true
 		}
-		return s.scopeLabels(st.Labels) || changed
+		return changed
 	})
 }
 
-// labelsLoseAccount runs when a mailbox is removed: labels forget it.
-// Provider labels of only that mailbox are dropped (their mail is gone);
-// user labels left without a mailbox belong to every remaining one. Rules,
-// quiet labels and the notification mute of that mailbox go too, and rules
-// of other mailboxes lose a label that was dropped.
+// ownLabels gives a mailbox without labels its own copies of the default
+// labels; labels without a mailbox (settings saved before there was one)
+// go to every mailbox first. It reports whether st changed.
+func (s *Service) ownLabels(st *models.Settings, accountID string) bool {
+	changed := s.splitLabels(st, false)
+	if slices.ContainsFunc(st.Labels, func(l models.Label) bool {
+		return l.Source != config.LabelSourceSystem && slices.Contains(l.AccountIDs, accountID)
+	}) {
+		return changed
+	}
+	st.Labels = config.NormalizeLabels(append(st.Labels, config.MailboxDefaultLabels(st.Labels, accountID)...))
+	return true
+}
+
+// labelsLoseAccount runs when a mailbox is removed: its labels, rules,
+// quiet labels, notification mute and other per-mailbox choices go with
+// it.
 func (s *Service) labelsLoseAccount(accountID string) {
 	s.updateLabels(func(st *models.Settings) bool {
 		changed := false
@@ -430,11 +520,11 @@ func (s *Service) labelsLoseAccount(accountID string) {
 		out := st.Labels[:0:0]
 		for _, l := range st.Labels {
 			if i := slices.Index(l.AccountIDs, accountID); i >= 0 {
-				l.AccountIDs = slices.Delete(slices.Clone(l.AccountIDs), i, i+1)
 				changed = true
-				if len(l.AccountIDs) == 0 && l.Source == config.LabelSourceProvider {
+				if len(l.AccountIDs) == 1 {
 					continue
 				}
+				l.AccountIDs = slices.Delete(slices.Clone(l.AccountIDs), i, i+1)
 			}
 			out = append(out, l)
 		}
@@ -446,13 +536,21 @@ func (s *Service) labelsLoseAccount(accountID string) {
 				changed = true
 			}
 		}
-		changed = s.scopeLabels(st.Labels) || changed
 		if changed {
 			// Rules and quiet lists drop the labels that went.
 			config.Normalize(st)
 		}
 		return changed
 	})
+	valid := []string{}
+	for _, l := range s.Settings().Labels {
+		valid = append(valid, l.ID)
+	}
+	_ = s.store.DeleteUnknownLabels(valid)
+	if d := s.dismissedLabels(); d[accountID] != nil {
+		delete(d, accountID)
+		_ = s.store.SetSetting(dismissedMailboxLabelsKey, d)
+	}
 }
 
 // ---- OpenRouter key ----

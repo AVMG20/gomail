@@ -1,6 +1,6 @@
 // Per-mailbox settings that live in the global Settings object, keyed by account id:
-// new-mail notifications (mutedMailboxes), quiet labels (quietLabels), Jev auto-labeling
-// (autoLabelAccounts) and AI corrections of imported labels (aiCorrectsOff).
+// new-mail notifications (mutedMailboxes: a muted mailbox also shows no unread count), quiet
+// labels (quietLabels), Jev auto-labeling (autoLabelAccounts) and AI corrections of imported labels (aiCorrectsOff).
 // Shared by the overview lists and each mailbox's own settings page.
 import { computed } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -21,6 +21,20 @@ export function useMailboxSettings() {
     if (on) next.delete(accountId)
     else next.add(accountId)
     void settings.update({ mutedMailboxes: [...next] }, 0)
+  }
+
+  // ---- mute: no new-mail notifications and no unread count on badges or in All inboxes.
+  const isMuted = (accountId: string) => muted.value.has(accountId)
+  const setMuted = (accountId: string, on: boolean) => setNotify(accountId, !on)
+
+  // ---- other folders (Gmail labels-as-folders aside: Outlook folders like an old "GitHub")
+  const hiddenFolders = computed(() => new Set(settings.settings?.hiddenFolders ?? []))
+  const folderShown = (folderId: string) => !hiddenFolders.value.has(folderId)
+  function setFolderShown(folderId: string, on: boolean) {
+    const next = new Set(hiddenFolders.value)
+    if (on) next.delete(folderId)
+    else next.add(folderId)
+    void settings.update({ hiddenFolders: [...next] }, 0)
   }
 
   // ---- quiet labels. Junk never notifies, so it's left out of the editable list.
@@ -57,5 +71,5 @@ export function useMailboxSettings() {
     void settings.update({ aiCorrectsOff: [...next] }, 0)
   }
 
-  return { notifies, setNotify, quietOptions, quietList, setQuiet, junkLabel, autoLabels, setAutoLabel, corrects, setCorrects }
+  return { notifies, setNotify, isMuted, setMuted, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel, autoLabels, setAutoLabel, corrects, setCorrects }
 }

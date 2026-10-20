@@ -10,9 +10,8 @@ import CmdItem from '@/components/common/cmd/CmdItem.vue'
 import Tip from '@/components/common/Tip.vue'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import { LABEL_COLORS } from '@/lib/color'
-import { labelInAccount, newLabelAccounts } from '@/lib/labelScope'
+import { labelInAccount, nameTaken, newLabelId, openLabelSettings } from '@/lib/labelScope'
 import type { MessageSummary } from '@/lib/types'
-import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
@@ -23,7 +22,6 @@ const mail = useMailStore()
 const settings = useSettingsStore()
 const ai = useAiStore()
 const ui = useUiStore()
-const accounts = useAccountsStore()
 const q = ref('')
 
 // The labels of the message's mailbox, plus any it already has (so they can be taken off).
@@ -51,29 +49,14 @@ function toggle(id: string) {
   else void mail.addLabel([props.message.id], id, true)
 }
 
-// A label of another mailbox with the typed name: "create" adds this mailbox to it (names are unique).
-const elsewhere = computed(() => {
-  const n = q.value.trim().toLowerCase()
-  return settings.labels.find((l) => l.name.toLowerCase() === n && !offered.value.includes(l) && l.source === 'user') ?? null
-})
-const canCreate = computed(() => q.value.trim() && (!!elsewhere.value || !settings.labels.some((l) => l.name.toLowerCase() === q.value.trim().toLowerCase())))
+// Labels are per mailbox: a new label belongs to this message's mailbox only.
+const canCreate = computed(() => !!q.value.trim() && !nameTaken(settings.labels, props.message.accountId, q.value))
 async function create() {
   const name = q.value.trim()
-  if (!name || !settings.settings) return
-  const acct = props.message.accountId
-  const other = elsewhere.value
-  let id: string
-  if (other) {
-    id = other.id
-    await settings.update({ labels: settings.labels.map((l) => (l.id === id ? { ...l, accountIds: [...(l.accountIds ?? []), acct] } : l)) }, 0)
-  } else {
-    id = `lbl_${Date.now().toString(36)}`
-    const color = LABEL_COLORS[settings.labels.length % LABEL_COLORS.length]
-    // New labels belong to the mailbox being viewed (all of them in the unified view), and always to this message's.
-    const all = accounts.accounts.map((a) => a.id)
-    const accountIds = [...new Set([...newLabelAccounts(mail.mailbox.accountId, all), acct].filter(Boolean))]
-    await settings.update({ labels: [...settings.labels, { id, name, description: '', color, source: 'user', accountIds }] }, 0)
-  }
+  if (!name || !settings.settings || !canCreate.value) return
+  const id = newLabelId(settings.labels, name)
+  const color = LABEL_COLORS[settings.labels.length % LABEL_COLORS.length]
+  await settings.update({ labels: [...settings.labels, { id, name, description: '', color, source: 'user', accountIds: [props.message.accountId] }] }, 0)
   q.value = ''
   local.value = [...labels.value, id]
   void mail.addLabel([props.message.id], id, true)
@@ -111,12 +94,12 @@ async function create() {
           </CmdItem>
           <CmdItem v-if="canCreate" value="__create" @select="create">
             <PlusIcon class="text-muted-foreground size-4" />
-            <span>{{ elsewhere ? `Use “${elsewhere.name}” in this mailbox` : `Create “${q.trim()}”` }}</span>
+            <span>Create “{{ q.trim() }}”</span>
           </CmdItem>
           <div v-if="!offered.length && !q" class="text-muted-foreground px-3 py-6 text-center text-xs">Type to create your first label.</div>
         </CmdList>
         <div class="border-border flex items-center justify-between border-t px-2 py-1.5">
-          <Button variant="ghost" size="xs" class="text-muted-foreground" @click="ui.labelPopoverOpen = false; ui.openSettings('labels')">Manage labels</Button>
+          <Button variant="ghost" size="xs" class="text-muted-foreground" @click="ui.labelPopoverOpen = false; openLabelSettings(message.accountId)">Manage labels</Button>
           <Button variant="ghost" size="xs" :disabled="ai.labeling.has(message.id)" @click="ai.labelMessages([message.id])">
             <SparklesIcon class="text-violet-500" /> Label with AI
           </Button>

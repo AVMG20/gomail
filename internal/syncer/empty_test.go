@@ -32,6 +32,24 @@ func TestEmptyTrashKeepsMessagesHidden(t *testing.T) {
 	if err := te.st.AddLabels(ids, "kept"); err != nil {
 		t.Fatal(err)
 	}
+	// Flagged unread mail in Trash: the Flagged view lists it until it's emptied.
+	if _, err := te.st.SetStarred(ids, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := te.st.SetUnread(ids, true); err != nil {
+		t.Fatal(err)
+	}
+	starredCounts := func() (unread, total int) {
+		f, err := te.st.FolderByKind(acct, models.FolderStarred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.Unread, f.Total
+	}
+	if u, n := starredCounts(); u < len(ids) || n < len(ids) {
+		t.Fatalf("starred counts %d/%d before emptying %d flagged", u, n, len(ids))
+	}
+	starredBefore, _ := starredCounts()
 	sums, _ := te.st.Summaries(ids)
 	var stale []mail.Message
 	for _, m := range sums {
@@ -60,6 +78,9 @@ func TestEmptyTrashKeepsMessagesHidden(t *testing.T) {
 		if n := keptCount(); n != 0 {
 			t.Errorf("emptied messages counted while the server empties: %d", n)
 		}
+		if u, _ := starredCounts(); u != starredBefore-len(ids) {
+			t.Errorf("emptied flagged mail still counted in Flagged: %d unread, want %d", u, starredBefore-len(ids))
+		}
 		page, err := te.st.ListMessages(models.ListQuery{Labels: []string{"kept"}}, store.ListOptions{})
 		if err != nil || page.Total != 0 {
 			t.Errorf("emptied messages in the label view: %d %v", page.Total, err)
@@ -78,6 +99,9 @@ func TestEmptyTrashKeepsMessagesHidden(t *testing.T) {
 		}
 		if again, _ := te.st.FolderMessageIDs(trash.ID, false); len(again) != 0 {
 			t.Errorf("stale server state put %d messages back in Trash", len(again))
+		}
+		if u, _ := starredCounts(); u != starredBefore-len(ids) {
+			t.Errorf("a sync counted emptied flagged mail again: %d unread", u)
 		}
 	}
 	if err := te.e.EmptyFolder(trash.ID); err != nil {

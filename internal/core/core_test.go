@@ -318,13 +318,14 @@ func TestLabelsSendAndNewMail(t *testing.T) {
 	s := e.s
 	page, _ := s.ListMessages(models.ListQuery{AccountID: demo.OutlookAccountID, FolderKind: models.FolderInbox})
 	id := page.Messages[0].ID
-	if err := s.AddLabel([]string{id}, "important"); err != nil {
+	important := mailboxLabel(t, s, demo.OutlookAccountID, "Important") // Outlook's own copy
+	if err := s.AddLabel([]string{id}, important); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AddLabel([]string{id}, "nope"); err == nil {
 		t.Fatal("unknown label accepted")
 	}
-	p, _ := s.ListMessages(models.ListQuery{Labels: []string{"important"}})
+	p, _ := s.ListMessages(models.ListQuery{Labels: []string{important}})
 	if p.Total != 1 {
 		t.Fatalf("label filter %d", p.Total)
 	}
@@ -332,7 +333,7 @@ func TestLabelsSendAndNewMail(t *testing.T) {
 	st := s.GetSettings()
 	var kept []models.Label
 	for _, l := range st.Labels {
-		if l.ID != "important" {
+		if l.ID != important {
 			kept = append(kept, l)
 		}
 	}
@@ -340,7 +341,7 @@ func TestLabelsSendAndNewMail(t *testing.T) {
 	if err := s.SaveSettings(st); err != nil {
 		t.Fatal(err)
 	}
-	p, _ = s.ListMessages(models.ListQuery{Labels: []string{"important"}})
+	p, _ = s.ListMessages(models.ListQuery{Labels: []string{important}})
 	if p.Total != 0 {
 		t.Fatal("assignments survived label deletion")
 	}

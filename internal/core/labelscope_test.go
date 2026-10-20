@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,11 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/demo"
-	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/store"
 )
@@ -51,153 +47,6 @@ func setLabels(t *testing.T, s *Service, extra ...models.Label) {
 	st.Labels = append(st.Labels, extra...)
 	if err := s.SaveSettings(st); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// Labels saved before labels were per mailbox keep working everywhere;
-// provider labels belong to the mailboxes they were imported from.
-func TestLabelMailboxMigration(t *testing.T) {
-	e := newEnv(t, "")
-	s := e.s
-	all := []string{demo.GmailAccountID, demo.OutlookAccountID}
-
-	for _, l := range s.Settings().Labels {
-		switch l.Source {
-		case config.LabelSourceSystem:
-			if len(l.AccountIDs) != 0 {
-				t.Errorf("Junk should belong to every mailbox: %v", l.AccountIDs)
-			}
-		default:
-			// Defaults (user) and Travel/Family (in both demo mailboxes).
-			if !sameSet(l.AccountIDs, all) {
-				t.Errorf("label %s mailboxes %v", l.ID, l.AccountIDs)
-			}
-		}
-	}
-
-	// A new label without mailboxes gets every mailbox.
-	setLabels(t, s, models.Label{Name: "Plain", Color: "#123456"})
-	if l := labelByID(t, s, "plain"); !sameSet(l.AccountIDs, all) {
-		t.Fatalf("plain %v", l.AccountIDs)
-	}
-
-	// Stored settings from an older version: no mailbox lists at all.
-	st := s.Settings()
-	var provider string
-	for i, l := range st.Labels {
-		if l.Source == config.LabelSourceProvider && provider == "" {
-			provider = l.ID
-		}
-		st.Labels[i].AccountIDs = nil
-	}
-	if provider == "" {
-		t.Fatal("no provider label imported")
-	}
-	// Pretend the provider label was only ever seen in Gmail.
-	if _, err := s.store.DB().Exec(`DELETE FROM message_labels WHERE label_id = ? AND account_id = ?`, provider, demo.OutlookAccountID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.store.SetSetting(settingsKey, st); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.loadSettings(); err != nil {
-		t.Fatal(err)
-	}
-	if l := labelByID(t, s, "plain"); !sameSet(l.AccountIDs, all) {
-		t.Fatalf("migrated user label %v", l.AccountIDs)
-	}
-	if l := labelByID(t, s, provider); !sameSet(l.AccountIDs, []string{demo.GmailAccountID}) {
-		t.Fatalf("migrated provider label %s: %v", provider, l.AccountIDs)
-	}
-	var stored models.Settings
-	if err := s.store.GetSetting(settingsKey, &stored); err != nil {
-		t.Fatal(err)
-	}
-	for _, l := range stored.Labels {
-		if l.Source != config.LabelSourceSystem && len(l.AccountIDs) == 0 {
-			t.Fatalf("migration not saved: %+v", l)
-		}
-	}
-
-	// The UI can't change a provider label's mailboxes.
-	st = s.GetSettings()
-	for i := range st.Labels {
-		if st.Labels[i].ID == provider {
-			st.Labels[i].AccountIDs = []string{demo.OutlookAccountID}
-		}
-	}
-	if err := s.SaveSettings(st); err != nil {
-		t.Fatal(err)
-	}
-	if l := labelByID(t, s, provider); !sameSet(l.AccountIDs, []string{demo.GmailAccountID}) {
-		t.Fatalf("provider label mailboxes changed by the UI: %v", l.AccountIDs)
-	}
-}
-
-func TestProviderLabelsBelongToTheirMailboxes(t *testing.T) {
-	e := newEnv(t, "")
-	s := e.s
-	ids := s.resolveProviderLabels(demo.GmailAccountID, []mail.Label{{Name: "Receipts", Color: "#16a766"}})
-	id := ids["receipts"]
-	if l := labelByID(t, s, id); l.Source != config.LabelSourceProvider || !sameSet(l.AccountIDs, []string{demo.GmailAccountID}) {
-		t.Fatalf("new provider label %+v", l)
-	}
-	// The same name in another mailbox is the same label.
-	s.resolveProviderLabels(demo.OutlookAccountID, []mail.Label{{Name: "receipts"}})
-	if l := labelByID(t, s, id); !sameSet(l.AccountIDs, []string{demo.GmailAccountID, demo.OutlookAccountID}) {
-		t.Fatalf("shared provider label %v", l.AccountIDs)
-	}
-
-	// Removing a mailbox: labels forget it; a provider label of only that
-	// mailbox goes; user labels of only that mailbox fall back to every one.
-	s.resolveProviderLabels(demo.OutlookAccountID, []mail.Label{{Name: "Outlook Only"}})
-	setLabels(t, s, models.Label{Name: "Outlook Mine", AccountIDs: []string{demo.OutlookAccountID}})
-	if err := s.RemoveAccount(demo.OutlookAccountID); err != nil {
-		t.Fatal(err)
-	}
-	for _, l := range s.Settings().Labels {
-		if slices.Contains(l.AccountIDs, demo.OutlookAccountID) {
-			t.Errorf("label %s still lists the removed mailbox", l.ID)
-		}
-		if l.ID == "outlook-only" {
-			t.Error("provider label of the removed mailbox kept")
-		}
-	}
-	if l := labelByID(t, s, "outlook-mine"); !sameSet(l.AccountIDs, []string{demo.GmailAccountID}) {
-		t.Fatalf("user label of the removed mailbox %v", l.AccountIDs)
-	}
-
-	// Adding a mailbox: labels of every mailbox ("All") include it.
-	setLabels(t, s, models.Label{Name: "Gmail Only", AccountIDs: []string{"elsewhere"}})
-	if err := s.store.InsertAccount(models.Account{ID: "a-new", Provider: models.ProviderGmail, Email: "sam@example.com", DisplayName: "Sam", Color: "#000000", CreatedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	s.labelsGainAccount("a-new")
-	if l := labelByID(t, s, "outlook-mine"); !sameSet(l.AccountIDs, []string{demo.GmailAccountID, "a-new"}) {
-		t.Fatalf("All label after adding a mailbox %v", l.AccountIDs)
-	}
-	if l := labelByID(t, s, "gmail-only"); slices.Contains(l.AccountIDs, "a-new") {
-		t.Fatalf("scoped label gained the new mailbox %v", l.AccountIDs)
-	}
-}
-
-// A label is only added by hand to mail of its mailboxes.
-func TestAddLabelOutsideItsMailbox(t *testing.T) {
-	e := newEnv(t, "")
-	s := e.s
-	setLabels(t, s, models.Label{Name: "Gmail Things", AccountIDs: []string{demo.GmailAccountID}})
-	g, o := firstMessage(t, s, demo.GmailAccountID), firstMessage(t, s, demo.OutlookAccountID)
-	if err := s.AddLabel([]string{o}, "gmail-things"); err == nil {
-		t.Fatal("label added to mail of another mailbox")
-	}
-	if err := s.AddLabel([]string{g, o}, "gmail-things"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := labelOf(t, s.store, g, "gmail-things"); !ok {
-		t.Fatal("gmail message not labeled")
-	}
-	if _, ok := labelOf(t, s.store, o, "gmail-things"); ok {
-		t.Fatal("outlook message labeled")
 	}
 }
 
@@ -308,11 +157,17 @@ func TestClassifierOffersMailboxLabels(t *testing.T) {
 		}
 		return keys
 	}
-	if keys := asked(o); slices.Contains(keys, "gmail_things") || !slices.Contains(keys, "work") || len(keys) == 0 {
+	work := strings.ReplaceAll(mailboxLabel(t, s, demo.OutlookAccountID, "Work"), "-", "_")
+	if keys := asked(o); slices.Contains(keys, "gmail_things") || !slices.Contains(keys, work) || len(keys) == 0 {
 		t.Fatalf("outlook message offered %v", keys)
 	}
 	if keys := asked(g); !slices.Contains(keys, "gmail_things") && !slices.Contains(keys, "gmail-things") {
 		t.Fatalf("gmail message not offered its label: %v", keys)
+	}
+	// Imported labels need a description first.
+	travel := mailboxLabel(t, s, demo.GmailAccountID, "Travel")
+	if keys := asked(g); slices.Contains(keys, strings.ReplaceAll(travel, "-", "_")) {
+		t.Fatalf("imported label without description offered: %v", keys)
 	}
 
 	// Already classified: skipped. Changing the Gmail-only label re-runs
@@ -335,35 +190,5 @@ func TestClassifierOffersMailboxLabels(t *testing.T) {
 	est, err := s.EstimateClassify(models.ListQuery{FolderKind: models.FolderInbox}, false, false)
 	if err != nil || est.Unchanged != 2 {
 		t.Fatalf("estimate %+v %v", est, err)
-	}
-}
-
-// A backup's label mailboxes point at the accounts as they exist here.
-func TestBackupMapsLabelMailboxes(t *testing.T) {
-	src := newEnv(t, "")
-	setLabels(t, src.s, models.Label{Name: "Outlook Stuff", AccountIDs: []string{demo.OutlookAccountID}},
-		models.Label{Name: "Gmail Stuff", AccountIDs: []string{demo.GmailAccountID}})
-	var buf bytes.Buffer
-	if _, err := src.s.WriteBackup(&buf, false); err != nil {
-		t.Fatal(err)
-	}
-
-	// This install has the Gmail mailbox under another id.
-	b := newBlankService(t)
-	if err := b.store.InsertAccount(models.Account{ID: "a-local", Provider: models.ProviderGmail, Email: "alex.demo@gmail.com", DisplayName: "Alex Morgan", Color: "#000000", CreatedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	b.labelsGainAccount("a-local")
-	if _, err := b.ImportBackupFrom(&buf); err != nil {
-		t.Fatal(err)
-	}
-	if l := labelByID(t, b, "gmail-stuff"); !sameSet(l.AccountIDs, []string{"a-local"}) {
-		t.Fatalf("gmail label %v", l.AccountIDs)
-	}
-	if l := labelByID(t, b, "outlook-stuff"); !sameSet(l.AccountIDs, []string{demo.OutlookAccountID}) {
-		t.Fatalf("outlook label %v", l.AccountIDs)
-	}
-	if l := labelByID(t, b, "work"); !sameSet(l.AccountIDs, []string{"a-local", demo.OutlookAccountID}) {
-		t.Fatalf("label of every mailbox %v", l.AccountIDs)
 	}
 }

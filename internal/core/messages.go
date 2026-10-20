@@ -307,48 +307,63 @@ func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
 	if len(ids) > syncer.MaxBulk {
 		return fmt.Errorf("too many messages selected (max %d)", syncer.MaxBulk)
 	}
-	if add {
-		// A label is only added to mail of the mailboxes it belongs to
-		// (removing it is always allowed).
-		if ids, err = s.inLabelMailboxes(ids, l); err != nil {
-			return err
-		}
-		if len(ids) == 0 {
-			return fmt.Errorf("the label “%s” isn’t used in this mailbox; choose its mailboxes in Settings → Labels & rules", l.Name)
-		}
-		err = s.store.AddLabels(ids, labelID)
-	} else {
-		err = s.store.RemoveLabels(ids, labelID)
-	}
+	groups, byID, err := s.mailboxLabels(ids, l)
 	if err != nil {
 		return err
 	}
-	s.messagesChanged(ids)
-	if l.Source == config.LabelSourceProvider {
-		s.engine.PushLabel(ids, l.Name, add)
+	if add && len(groups) == 0 {
+		return fmt.Errorf("this mailbox has no label “%s”", l.Name)
 	}
+	var changed []string
+	for lid, gids := range groups {
+		ml := byID[lid]
+		if add {
+			err = s.store.AddLabels(gids, ml.ID)
+		} else {
+			err = s.store.RemoveLabels(gids, ml.ID)
+		}
+		if err != nil {
+			return err
+		}
+		changed = append(changed, gids...)
+		if ml.Source == config.LabelSourceProvider {
+			s.engine.PushLabel(gids, ml.Name, add)
+		}
+	}
+	s.messagesChanged(changed)
 	return nil
 }
 
-// inLabelMailboxes keeps the messages of mailboxes the label belongs to.
-func (s *Service) inLabelMailboxes(ids []string, l models.Label) ([]string, error) {
+// mailboxLabels groups messages by the id of the label they get for l: every
+// mailbox has its own labels, so mail of another mailbox gets that
+// mailbox's label with the same name (a selection in the unified view).
+// Mail of a mailbox without such a label is left out.
+func (s *Service) mailboxLabels(ids []string, l models.Label) (map[string][]string, map[string]models.Label, error) {
 	sums, err := s.store.Summaries(ids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	ok := map[string]bool{}
+	labels := s.Settings().Labels
+	acct := map[string]string{}
 	for _, m := range sums {
-		if config.LabelInAccount(l, m.AccountID) {
-			ok[m.ID] = true
-		}
+		acct[m.ID] = m.AccountID
 	}
-	out := make([]string, 0, len(ids))
+	out, byID := map[string][]string{}, map[string]models.Label{}
 	for _, id := range ids {
-		if ok[id] {
-			out = append(out, id)
+		a, ok := acct[id]
+		if !ok {
+			continue
 		}
+		ml := l
+		if !config.LabelInAccount(l, a) {
+			if ml, ok = config.LabelNamed(labels, a, l.Name); !ok {
+				continue
+			}
+		}
+		out[ml.ID] = append(out[ml.ID], id)
+		byID[ml.ID] = ml
 	}
-	return out, nil
+	return out, byID, nil
 }
 
 func (s *Service) messagesChanged(ids []string) {

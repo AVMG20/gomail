@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -131,10 +132,21 @@ func (s *Service) SummarizeMessage(id string) (string, error) {
 // ---- classification ----
 
 // labelDefs are the labels offered to the classifier for mail of an
-// account: only the labels of that mailbox ("" = every label).
+// account (see labelDefsOf).
 func (s *Service) labelDefs(accountID string) []ai.LabelDef {
+	return labelDefsOf(s.Settings().Labels, accountID)
+}
+
+// labelDefsOf are the labels of a mailbox ("" = every label) that the
+// classifier is offered. Imported Gmail labels and Outlook categories
+// need a description first: from a name alone ("Categorie Rood") the
+// classifier can only guess.
+func labelDefsOf(labels []models.Label, accountID string) []ai.LabelDef {
 	var out []ai.LabelDef
-	for _, l := range config.LabelsForAccount(s.Settings().Labels, accountID) {
+	for _, l := range config.LabelsForAccount(labels, accountID) {
+		if l.Source == config.LabelSourceProvider && strings.TrimSpace(l.Description) == "" {
+			continue
+		}
 		out = append(out, ai.LabelDef{ID: l.ID, Name: l.Name, Description: l.Description})
 	}
 	return out
@@ -165,9 +177,13 @@ func (s *Service) checkAIReady() error {
 // definitions of the labels offered for that mailbox.
 func (s *Service) labelsetHash(accountID string) string {
 	st := s.Settings()
+	return labelsetHashOf(st, labelDefsOf(st.Labels, accountID))
+}
+
+func labelsetHashOf(st models.Settings, defs []ai.LabelDef) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00", st.ClassifierModel, st.ClassifyInstructions)
-	defs := s.labelDefs(accountID)
+	defs = slices.Clone(defs)
 	sort.Slice(defs, func(i, j int) bool { return defs[i].ID < defs[j].ID })
 	for _, d := range defs {
 		fmt.Fprintf(h, "%s\x00%s\x00%s\x00", d.ID, d.Name, d.Description)
@@ -191,8 +207,15 @@ func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) model
 	if in.AIHash == hash && in.AIScores != nil {
 		res.Scores, res.Skipped = in.AIScores, true
 		// No new scores needed, but the thresholds or provider-label
-		// policy may have changed since: apply them to the stored scores.
-		added, removed, err := s.store.ApplyAIScores(in.ID, in.AIScores, s.policy(in.AccountID), hash)
+		// policy may have changed since: apply them to the stored scores
+		// of the labels the classifier is offered now.
+		offered := map[string]float64{}
+		for _, d := range s.labelDefs(in.AccountID) {
+			if p, ok := in.AIScores[d.ID]; ok {
+				offered[d.ID] = p
+			}
+		}
+		added, removed, err := s.store.ApplyAIScores(in.ID, offered, s.policy(in.AccountID), hash)
 		if err == nil {
 			res.Added, res.Removed = added, removed
 		}
@@ -534,9 +557,35 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 			}
 			s.jobs.mu.Unlock()
 		}()
-		_, final := s.runClassification(ctx, autoJobID, todo, true)
+		results, final := s.runClassification(ctx, autoJobID, todo, true)
+		s.moveAILabeled(results)
 		s.emit(models.EventClassifyFinished, final)
 	})
+}
+
+// moveAILabeled acts on the labels Jev gave new mail: Junk (and a label set
+// to "When added: Junk") moves it to Junk, read; other label actions archive
+// it (see labelactions.go). Like Junk rules it only acts on new mail: mail
+// the user took out of Junk isn't moved back by a later run.
+func (s *Service) moveAILabeled(results []models.ClassificationResult) {
+	labels := map[string]models.Label{}
+	for _, l := range s.Settings().Labels {
+		labels[l.ID] = l
+	}
+	moves := labelMoves{}
+	for _, r := range results {
+		if r.Skipped || r.Error != "" {
+			continue
+		}
+		for _, id := range r.Added {
+			if l, ok := labels[id]; ok {
+				moves.add(r.MessageID, thenKind(l, true), labelWhy(l, true))
+			}
+		}
+	}
+	if moved := s.applyLabelMoves(moves, "AI label action"); len(moved) > 0 {
+		s.messagesChanged(moved)
+	}
 }
 
 // mergeIDs returns a followed by the ids of b not in a, at most limit.

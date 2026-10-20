@@ -3,7 +3,7 @@
 // isn't downloaded yet where the server can do it, e.g. "Mark all as read"). Anything that moves
 // or deletes a lot asks first and says how many messages it affects; moves can be undone.
 import { computed, ref } from 'vue'
-import { ArchiveIcon, CalendarClockIcon, InboxIcon, MailCheckIcon, MailOpenIcon, RefreshCwIcon, SparklesIcon, Trash2Icon } from '@lucide/vue'
+import { ArchiveIcon, CalendarClockIcon, EyeOffIcon, InboxIcon, MailCheckIcon, MailOpenIcon, OctagonAlertIcon, RefreshCwIcon, SparklesIcon, Trash2Icon, UsersIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import {
@@ -14,12 +14,16 @@ import { api, errorMessage, hasMethod } from '@/lib/api'
 import { toYmd } from '@/lib/calendar'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
+import { useCleanupStore } from '@/stores/cleanup'
 import { MAX_RESOLVE, inChunks, useMailStore } from '@/stores/mail'
+import { useMailboxSettings } from '@/components/settings/mailboxSettings'
 
 const props = defineProps<{ kind: string; folderId: string; name: string; unread: number }>()
 const accounts = useAccountsStore()
 const mail = useMailStore()
 const ai = useAiStore()
+const cleanup = useCleanupStore()
+const mb = useMailboxSettings()
 
 /** The concrete folders behind this row: one, or one per account in the unified view. */
 const targets = computed(() => {
@@ -118,6 +122,59 @@ async function archive(search: string, what: string) {
   })
 }
 
+/** Other folders: move everything in it to the Junk folder or the Inbox (undo moves it back). */
+async function moveAll(to: 'spam' | 'inbox') {
+  let groups: Awaited<ReturnType<typeof resolve>>
+  try {
+    groups = await resolve('')
+  } catch (e) {
+    return toast.error('Couldn’t look up the messages', { description: errorMessage(e) })
+  }
+  const n = groups.reduce((s, g) => s + g.ids.length, 0)
+  if (!n) return toast(`${props.name} is empty`)
+  const dest = to === 'spam' ? 'Junk' : 'the Inbox'
+  ask({
+    title: `Move ${plural(n)} to ${dest}?`,
+    text: to === 'spam'
+      ? `Everything in ${props.name} moves to Junk. Tip: right-click a message → Rules for the sender → Always send to Junk, so their new mail skips the inbox.`
+      : `Everything in ${props.name} moves to the Inbox of its mailbox.`,
+    action: `Move to ${to === 'spam' ? 'Junk' : 'Inbox'}`,
+    run: async () => {
+      try {
+        for (const g of groups) {
+          if (to === 'spam') await inChunks(g.ids, api.moveToJunk)
+          else {
+            const inbox = accounts.folderOf(g.accountId, 'inbox')?.id
+            if (inbox) await inChunks(g.ids, (c) => api.moveToFolder(c, inbox))
+          }
+        }
+        toast(`Moved ${plural(n)} to ${dest}`, {
+          action: {
+            label: 'Undo',
+            onClick: async () => {
+              for (const g of groups) await inChunks(g.ids, (c) => api.moveToFolder(c, g.folderId))
+              refresh()
+            },
+          },
+        })
+      } catch (e) {
+        toast.error('Move failed', { description: errorMessage(e) })
+      }
+      refresh()
+    },
+  })
+}
+
+function hide() {
+  if (!props.folderId) return
+  mb.setFolderShown(props.folderId, false)
+  if (mail.mailbox.folderId === props.folderId) mail.goToKind('inbox')
+  toast(`${props.name} is hidden`, {
+    description: 'Show it again in this mailbox’s settings.',
+    action: { label: 'Undo', onClick: () => mb.setFolderShown(props.folderId, true) },
+  })
+}
+
 async function junkToInbox() {
   let groups: Awaited<ReturnType<typeof resolve>>
   try {
@@ -191,9 +248,17 @@ const monthAgo = () => toYmd(new Date(Date.now() - 30 * 86_400_000))
 
       <template v-if="kind === 'inbox'">
         <ContextMenuSeparator />
+        <ContextMenuItem v-if="hasMethod('TopSenders')" @select="cleanup.show(folderId ? (targets[0]?.accountId ?? '') : '')"><UsersIcon /> Clean up by sender…</ContextMenuItem>
         <ContextMenuItem @select="archive('is:read', 'read mail')"><MailOpenIcon /> Archive read mail…</ContextMenuItem>
         <ContextMenuItem @select="archive(`before:${monthAgo()}`, 'mail older than 30 days')"><CalendarClockIcon /> Archive older than 30 days…</ContextMenuItem>
         <ContextMenuItem @select="archive('', 'all mail')"><ArchiveIcon /> Archive everything…</ContextMenuItem>
+      </template>
+
+      <template v-if="kind === 'custom'">
+        <ContextMenuSeparator />
+        <ContextMenuItem @select="moveAll('spam')"><OctagonAlertIcon /> Move everything to Junk…</ContextMenuItem>
+        <ContextMenuItem @select="moveAll('inbox')"><InboxIcon /> Move everything to Inbox…</ContextMenuItem>
+        <ContextMenuItem @select="hide"><EyeOffIcon /> Hide folder</ContextMenuItem>
       </template>
 
       <template v-if="kind === 'spam'">

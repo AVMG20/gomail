@@ -6,12 +6,12 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
-import type { Account, Folder } from '@/lib/types'
+import { groupCount, openLabelSettings } from '@/lib/labelScope'
+import type { Account, Folder, Label, LabelCount } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore, UNIFIED_NAMES } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
-import { useUiStore } from '@/stores/ui'
 import { FOLDER_ICONS } from './folderIcons'
 import AccountMenuTrigger from './AccountMenuTrigger.vue'
 import SidebarLabel from './SidebarLabel.vue'
@@ -27,7 +27,6 @@ const AccountMenu = defineAsyncComponent({
 const accounts = useAccountsStore()
 const mail = useMailStore()
 const settings = useSettingsStore()
-const ui = useUiStore()
 const ai = useAiStore()
 
 const account = computed(() => mail.mailboxAccount)
@@ -50,7 +49,9 @@ const rows = computed<Row[]>(() => {
   return list.map((f) => ({ key: f.id, name: f.kind === 'spam' ? 'Junk' : f.name, kind: f.kind, unread: f.unread, total: f.total, folderId: f.id }))
 })
 const mainRows = computed(() => rows.value.filter((r) => MAIN_KINDS.includes(r.kind)))
-const customRows = computed(() => rows.value.filter((r) => r.kind === 'custom'))
+// Other folders, minus the ones hidden in the folder's menu or the mailbox's settings.
+const hiddenFolders = computed(() => new Set(settings.settings?.hiddenFolders ?? []))
+const customRows = computed(() => rows.value.filter((r) => r.kind === 'custom' && !hiddenFolders.value.has(r.folderId)))
 const trashRow = computed(() => rows.value.find((r) => r.kind === 'trash'))
 
 function isActive(r: Row) {
@@ -62,12 +63,17 @@ function go(r: Row) {
   mail.setMailbox({ accountId: account.value?.id ?? '', folderId: r.folderId, kind: r.kind })
 }
 
-// Only this mailbox's labels (every label in the unified view). The list is the same in every box
-// (imported labels show when the mailbox uses them anywhere); the counts are for the box on screen.
+// Only this mailbox's labels (one per name in the unified view, standing for that label in every
+// mailbox). The list is the same in every box (imported labels show when the mailbox uses them
+// anywhere); the counts are for the box on screen.
+function countOf(l: Label): LabelCount | undefined {
+  const c = groupCount(settings.labels, accounts.labelCounts, l)
+  return c && { labelId: l.id, ...c }
+}
 const labelRows = computed(() =>
   settings.labelsForAccount(account.value?.id ?? '')
-    .filter((l) => l.source === 'user' || !l.source || (accounts.labelTotals.get(l.id)?.total ?? 0) > 0)
-    .map((l) => ({ label: l, count: accounts.labelCounts.get(l.id) })),
+    .filter((l) => l.source === 'user' || !l.source || (groupCount(settings.labels, accounts.labelTotals, l)?.total ?? 0) > 0)
+    .map((l) => ({ label: l, count: countOf(l) })),
 )
 
 // Background backfill of older mail: shown as a quiet suffix, never as a progress bar.
@@ -199,7 +205,7 @@ function formatCount(n: number) {
               Labels
             </button>
           </CollapsibleTrigger>
-          <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-md" aria-label="Manage labels" @click="ui.openSettings('labels')">
+          <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-md" aria-label="Manage labels" @click="openLabelSettings(account?.id ?? '')">
             <PlusIcon class="size-3.5" />
           </button>
         </div>
@@ -207,7 +213,7 @@ function formatCount(n: number) {
           <ul class="space-y-px">
             <SidebarLabel v-for="{ label, count } in labelRows" :key="label.id" :label="label" :count="count" />
             <li v-if="!labelRows.length">
-              <button type="button" class="text-muted-foreground hover:text-foreground flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px]" @click="ui.openSettings('labels')">
+              <button type="button" class="text-muted-foreground hover:text-foreground flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px]" @click="openLabelSettings(account?.id ?? '')">
                 <TagIcon class="size-4" /> Create a label
               </button>
             </li>

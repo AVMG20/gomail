@@ -31,8 +31,9 @@ export type ImportResult =
   | { ok: false; error: string }
   | { ok: true; patch: Partial<Settings>; added: number; updated: number; skipped: number }
 
-/** Merge an export file into the current labels by name (case-insensitive). */
-export function mergeLabelImport(text: string, current: Label[], newId: (i: number) => string): ImportResult {
+/** Merge an export file into the current labels by name (case-insensitive). With accountId, into
+ *  that mailbox's labels: new labels belong to it, and only its labels are matched by name. */
+export function mergeLabelImport(text: string, current: Label[], newId: (i: number) => string, accountId = ''): ImportResult {
   if (text.length > MAX_IMPORT_BYTES) return { ok: false, error: 'That file is too large to be a label export' }
   let data: unknown
   try {
@@ -60,12 +61,12 @@ export function mergeLabelImport(text: string, current: Label[], newId: (i: numb
     seen.add(key)
     const description = typeof l.description === 'string' ? l.description.slice(0, MAX_DESCRIPTION) : undefined
     const color = safeColor(l.color, LABEL_COLORS[next.length % LABEL_COLORS.length])
-    const i = next.findIndex((x) => x.name.trim().toLowerCase() === key)
+    const i = next.findIndex((x) => x.name.trim().toLowerCase() === key && (!accountId || x.source === 'system' || !!x.accountIds?.includes(accountId)))
     if (i >= 0) {
       next[i] = { ...next[i], description: description ?? next[i].description, color }
       updated++
     } else {
-      next.push({ id: newId(added), name, description: description ?? '', color, source: 'user' })
+      next.push({ id: newId(added), name, description: description ?? '', color, source: 'user', ...(accountId ? { accountIds: [accountId] } : {}) })
       added++
     }
   }

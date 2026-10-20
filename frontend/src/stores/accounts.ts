@@ -114,9 +114,10 @@ export const useAccountsStore = defineStore('accounts', () => {
     return folders.value[accountId]?.find((f) => f.kind === kind)
   }
 
-  function unifiedUnread(kind: string): number {
+  /** Unread mail of a folder kind over all mailboxes; skip leaves out mailboxes (muted ones on badges). */
+  function unifiedUnread(kind: string, skip?: ReadonlySet<string>): number {
     let n = 0
-    for (const a of accounts.value) n += folderOf(a.id, kind)?.unread ?? 0
+    for (const a of accounts.value) if (!skip?.has(a.id)) n += folderOf(a.id, kind)?.unread ?? 0
     return n
   }
 
@@ -149,6 +150,22 @@ export const useAccountsStore = defineStore('accounts', () => {
     }
   }
 
+  /** Moves a mailbox to another place in the list (rail, settings, mod+1…9), optimistic. */
+  async function moveAccount(from: number, to: number) {
+    const list = [...accounts.value]
+    if (from === to || from < 0 || from >= list.length) return
+    const [a] = list.splice(from, 1)
+    list.splice(Math.max(0, Math.min(to, list.length)), 0, a)
+    const prev = accounts.value
+    accounts.value = list
+    try {
+      await api.reorderAccounts(list.map((x) => x.id))
+    } catch (e) {
+      accounts.value = prev
+      throw e
+    }
+  }
+
   /** Mailbox color (avatar, accent, calendar group), optimistic. */
   async function setAccountColor(id: string, color: string) {
     const a = accounts.value.find((x) => x.id === id)
@@ -164,7 +181,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   }
 
   return {
-    setAccountColor,
+    setAccountColor, moveAccount,
     accounts, folders, labelCounts, labelTotals, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
     load, saveSignature, loadFolders, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +28,8 @@ import (
 // import too) with a format marker and a version. Version 1 holds:
 //   - settings: the whole models.Settings, marshaled as is (new fields are
 //     included automatically), without OAuth app credentials;
-//   - extra: other stored preferences (dismissed provider labels);
+//   - extra: other stored preferences (deleted provider labels per
+//     mailbox);
 //   - accounts: provider, email, name, color, signature, calendar switches,
 //     plus the account's label marks (by remote message id) and calendar
 //     choices (by remote calendar id). Never OAuth tokens;
@@ -81,7 +83,7 @@ type backupSecrets struct {
 
 // backupExtraKeys are stored settings outside models.Settings that a
 // backup carries.
-var backupExtraKeys = []string{dismissedLabelsKey}
+var backupExtraKeys = []string{dismissedMailboxLabelsKey}
 
 // oauthApp returns the OAuth app credentials of settings (backed up only
 // with secrets).
@@ -287,9 +289,12 @@ func readBackup(r io.Reader) (backupFile, error) {
 
 // ImportBackupFrom merges a backup into this install. Nothing is deleted:
 //   - settings: every setting in the backup replaces the current one
-//     (settings the backup doesn't know keep their value); labels are
-//     merged by id, the backup's version winning; OAuth app credentials
-//     are only changed by a backup that includes secrets;
+//     (settings the backup doesn't know keep their value); OAuth app
+//     credentials are only changed by a backup that includes secrets;
+//   - labels: each backup mailbox's labels are merged into the labels of
+//     that mailbox here by name, the backup's color, description and
+//     action winning; its rules and quiet labels replace that mailbox's
+//     (see restoreLabels);
 //   - accounts: missing ones are recreated, keeping their id, and need a
 //     sign-in (ReauthAccount) unless a sign-in for that id is still stored
 //     on this device. An account that already exists (same provider and
@@ -307,14 +312,27 @@ func (s *Service) ImportBackupFrom(r io.Reader) (models.RestoreSummary, error) {
 	if err := s.restoreSettings(f, &sum); err != nil {
 		return sum, err
 	}
+	idMap := map[string]string{} // backup account id -> id here
+	local := map[string]models.Account{}
+	for _, ba := range f.Accounts {
+		acct, ok, err := s.restoreAccount(ba, idMap, &sum)
+		if err != nil {
+			return sum, err
+		}
+		if ok {
+			local[ba.ID] = acct
+		}
+	}
+	labelMap := s.restoreLabels(f, idMap)
 	known := map[string]bool{}
 	for _, l := range s.Settings().Labels {
 		known[l.ID] = true
 	}
-	idMap := map[string]string{} // backup account id -> id here
 	for _, ba := range f.Accounts {
-		if err := s.restoreAccount(ba, known, idMap, &sum); err != nil {
-			return sum, err
+		if acct, ok := local[ba.ID]; ok {
+			if err := s.restoreMarks(ba, acct, labelMap[ba.ID], known, &sum); err != nil {
+				return sum, err
+			}
 		}
 	}
 	s.remapRestoredAccounts(f, before, idMap)
@@ -351,7 +369,9 @@ func (s *Service) restoreSettings(f backupFile, sum *models.RestoreSummary) erro
 			return err
 		}
 		sum.Labels = len(merged.Labels)
-		merged.Labels = mergeLabels(merged.Labels, cur.Labels)
+		// Labels, rules and quiet labels belong to mailboxes: they are
+		// merged once the accounts are restored (restoreLabels).
+		merged.Labels, merged.LabelRules, merged.QuietLabels = cur.Labels, cur.LabelRules, cur.QuietLabels
 	}
 	// OAuth app credentials only come from a backup with secrets.
 	setOAuthApp(&merged, oauthApp(cur))
@@ -369,21 +389,6 @@ func (s *Service) restoreSettings(f backupFile, sum *models.RestoreSummary) erro
 				return fmt.Errorf("could not store the OpenRouter key: %w", err)
 			}
 			sum.SecretsRestored = true
-		}
-	}
-	// Provider labels the user deleted stay deleted.
-	if raw, ok := f.Extra[dismissedLabelsKey]; ok {
-		var theirs, ours []string
-		if json.Unmarshal(raw, &theirs) == nil {
-			_ = s.store.GetSetting(dismissedLabelsKey, &ours)
-			for _, n := range theirs {
-				if n = strings.ToLower(strings.TrimSpace(n)); n != "" && !slices.Contains(ours, n) {
-					ours = append(ours, n)
-				}
-			}
-			if err := s.store.SetSetting(dismissedLabelsKey, ours); err != nil {
-				return err
-			}
 		}
 	}
 	return s.SaveSettings(merged)
@@ -424,38 +429,194 @@ func overlaySettings(cur models.Settings, fields map[string]json.RawMessage) (mo
 	return out, nil
 }
 
-// mergeLabels returns the backup's labels followed by the current labels
-// it doesn't have (by id or name).
-func mergeLabels(backup, current []models.Label) []models.Label {
-	out := slices.Clone(backup)
-	ids, names := map[string]bool{}, map[string]bool{}
-	for _, l := range backup {
-		ids[l.ID] = true
-		names[strings.ToLower(strings.TrimSpace(l.Name))] = true
+// restoreLabels merges the backup's labels into the labels of its
+// mailboxes here (restored or merged accounts): a label with the same
+// name in that mailbox takes the backup's color, description and action;
+// others are added (keeping their id when it is free). Labels of a backup
+// from before labels were per mailbox are first split per mailbox, as on
+// startup. The backup's rules and quiet labels replace those of its
+// mailboxes, and its deleted provider labels stay deleted. It returns
+// backup account id -> backup label id -> label id here, for the label
+// marks.
+func (s *Service) restoreLabels(f backupFile, idMap map[string]string) map[string]map[string]string {
+	var bs struct {
+		Labels      []models.Label      `json:"labels"`
+		LabelRules  []models.LabelRule  `json:"labelRules"`
+		QuietLabels map[string][]string `json:"quietLabels"`
 	}
-	for _, l := range current {
-		if !ids[l.ID] && !names[strings.ToLower(strings.TrimSpace(l.Name))] {
-			out = append(out, l)
+	if len(f.Settings) > 0 {
+		_ = json.Unmarshal(f.Settings, &bs)
+	}
+	var backupIDs []string
+	for _, ba := range f.Accounts {
+		backupIDs = append(backupIDs, ba.ID)
+	}
+	b := models.Settings{Labels: config.NormalizeLabels(bs.Labels), LabelRules: bs.LabelRules, QuietLabels: bs.QuietLabels}
+	moves, _ := config.SplitLabels(&b, backupIDs)
+	out := map[string]map[string]string{}
+	set := func(acct, from, to string) {
+		if out[acct] == nil {
+			out[acct] = map[string]string{}
 		}
+		out[acct][from] = to
 	}
+	split := map[string]map[string]string{}
+	for _, m := range moves {
+		if split[m.AccountID] == nil {
+			split[m.AccountID] = map[string]string{}
+		}
+		split[m.AccountID][m.From] = m.To
+	}
+	s.updateLabels(func(st *models.Settings) bool {
+		local := s.accountIDs()
+		changed := false
+		for _, l := range b.Labels {
+			if l.Source == config.LabelSourceSystem {
+				i := slices.IndexFunc(st.Labels, func(x models.Label) bool { return x.ID == l.ID })
+				if i >= 0 && (st.Labels[i].Color != l.Color || st.Labels[i].Description != l.Description || st.Labels[i].Name != l.Name) {
+					st.Labels[i].Name, st.Labels[i].Color, st.Labels[i].Description = l.Name, l.Color, l.Description
+					changed = true
+				}
+				for _, ba := range backupIDs {
+					set(ba, l.ID, l.ID)
+				}
+				continue
+			}
+			if len(l.AccountIDs) == 0 { // a backup without mailboxes: every mailbox here
+				for _, a := range local {
+					mergeLabel(st, l, a)
+					changed = true
+				}
+				continue
+			}
+			if a, ok := idMap[l.AccountIDs[0]]; ok {
+				set(l.AccountIDs[0], l.ID, mergeLabel(st, l, a))
+				changed = true
+			}
+		}
+		// Marks name the labels as they were before the split.
+		for ba, m := range split {
+			for from, to := range m {
+				if id, ok := out[ba][to]; ok {
+					set(ba, from, id)
+				}
+			}
+		}
+		if bs.LabelRules != nil {
+			covered := map[string]bool{}
+			for _, ba := range backupIDs {
+				if a, ok := idMap[ba]; ok {
+					covered[a] = true
+				}
+			}
+			rules := slices.DeleteFunc(slices.Clone(st.LabelRules), func(r models.LabelRule) bool { return covered[r.AccountID] })
+			for _, r := range b.LabelRules {
+				a, ok := idMap[r.AccountID]
+				if !ok {
+					continue
+				}
+				if r.LabelID != "" {
+					r.LabelID = out[r.AccountID][r.LabelID]
+				}
+				r.AccountID = a
+				rules = append(rules, r)
+			}
+			st.LabelRules = rules
+			changed = true
+		}
+		if len(b.QuietLabels) > 0 {
+			quiet := maps.Clone(st.QuietLabels)
+			if quiet == nil {
+				quiet = map[string][]string{}
+			}
+			for ba, ids := range b.QuietLabels {
+				a, ok := idMap[ba]
+				if !ok {
+					continue
+				}
+				list := []string{}
+				for _, id := range ids {
+					if to, ok := out[ba][id]; ok {
+						list = append(list, to)
+					}
+				}
+				quiet[a] = list
+			}
+			st.QuietLabels = quiet
+			changed = true
+		}
+		if changed {
+			config.Normalize(st)
+		}
+		return changed
+	})
+	s.restoreDismissed(f, idMap)
 	return out
 }
 
-// remapRestoredAccounts points the restored settings at the accounts as
-// they exist here: a mailbox merged into an existing account (or restored
-// under a new id) has another id than in the backup. Labels from the
-// backup belong to the mailboxes they belonged to there (plus, for a label
-// this install already had, its mailboxes here); a label of no mailbox
-// here (or from a backup made before labels were per mailbox) belongs to
-// every mailbox. Rules, quiet labels and the per-mailbox lists follow the
-// ids; those lists keep the mailboxes this install had on them (before).
-// A backup from before auto-labeling was per mailbox auto-labels its
-// mailboxes when its old switch was on.
+// mergeLabel merges a backup label into the labels of mailbox accountID
+// and returns the id of the label there.
+func mergeLabel(st *models.Settings, l models.Label, accountID string) string {
+	if cur, ok := config.LabelNamed(st.Labels, accountID, l.Name); ok {
+		i := slices.IndexFunc(st.Labels, func(x models.Label) bool { return x.ID == cur.ID })
+		st.Labels[i].Color, st.Labels[i].Then = l.Color, l.Then
+		if l.Description != "" {
+			st.Labels[i].Description = l.Description
+		}
+		return cur.ID
+	}
+	l.AccountIDs = []string{accountID}
+	if slices.ContainsFunc(st.Labels, func(x models.Label) bool { return x.ID == l.ID }) {
+		l.ID = config.NewLabelID(st.Labels, l.Name)
+	}
+	st.Labels = append(st.Labels, l)
+	return l.ID
+}
+
+// restoreDismissed keeps the provider labels deleted in the backup's
+// mailboxes deleted (a backup from before labels were per mailbox lists
+// them for every mailbox).
+func (s *Service) restoreDismissed(f backupFile, idMap map[string]string) {
+	theirs := map[string][]string{}
+	if raw, ok := f.Extra[dismissedMailboxLabelsKey]; ok {
+		_ = json.Unmarshal(raw, &theirs)
+	}
+	if raw, ok := f.Extra[dismissedLabelsKey]; ok {
+		var names []string
+		if json.Unmarshal(raw, &names) == nil {
+			for _, ba := range f.Accounts {
+				theirs[ba.ID] = append(theirs[ba.ID], names...)
+			}
+		}
+	}
+	if len(theirs) == 0 {
+		return
+	}
+	ours := s.dismissedLabels()
+	for ba, names := range theirs {
+		a, ok := idMap[ba]
+		if !ok {
+			continue
+		}
+		for _, n := range names {
+			if n = strings.ToLower(strings.TrimSpace(n)); n != "" && !slices.Contains(ours[a], n) {
+				ours[a] = append(ours[a], n)
+			}
+		}
+	}
+	_ = s.store.SetSetting(dismissedMailboxLabelsKey, ours)
+}
+
+// remapRestoredAccounts points the restored per-mailbox lists at the
+// accounts as they exist here: a mailbox merged into an existing account
+// (or restored under a new id) has another id than in the backup. The
+// lists keep the mailboxes this install had on them (before). A backup
+// from before auto-labeling was per mailbox auto-labels its mailboxes
+// when its old switch was on.
 func (s *Service) remapRestoredAccounts(f backupFile, before models.Settings, idMap map[string]string) {
 	var bs struct {
-		Labels            []models.Label `json:"labels"`
-		AutoClassify      bool           `json:"autoClassify"`
-		AutoLabelAccounts []string       `json:"autoLabelAccounts"`
+		AutoClassify      bool     `json:"autoClassify"`
+		AutoLabelAccounts []string `json:"autoLabelAccounts"`
 	}
 	if len(f.Settings) > 0 {
 		_ = json.Unmarshal(f.Settings, &bs)
@@ -466,53 +627,8 @@ func (s *Service) remapRestoredAccounts(f backupFile, before models.Settings, id
 		}
 		return id
 	}
-	local := s.accountIDs()
-	scope := map[string][]string{}
-	inBackup := map[string]bool{}
-	for _, l := range bs.Labels {
-		inBackup[l.ID] = true
-		for _, a := range l.AccountIDs {
-			scope[l.ID] = append(scope[l.ID], mapID(a))
-		}
-	}
-	for _, l := range before.Labels {
-		if inBackup[l.ID] && len(scope[l.ID]) > 0 {
-			scope[l.ID] = append(scope[l.ID], l.AccountIDs...)
-		}
-	}
 	s.updateLabels(func(st *models.Settings) bool {
 		changed := false
-		for i, l := range st.Labels {
-			if !inBackup[l.ID] || l.Source == config.LabelSourceSystem {
-				continue
-			}
-			ids := []string{}
-			for _, a := range scope[l.ID] {
-				if slices.Contains(local, a) && !slices.Contains(ids, a) {
-					ids = append(ids, a)
-				}
-			}
-			if !slices.Equal(ids, l.AccountIDs) {
-				st.Labels[i].AccountIDs = ids
-				changed = true
-			}
-		}
-		for i, r := range st.LabelRules {
-			if r.AccountID != "" && mapID(r.AccountID) != r.AccountID {
-				st.LabelRules[i].AccountID = mapID(r.AccountID)
-				changed = true
-			}
-		}
-		if len(st.QuietLabels) > 0 {
-			quiet := make(map[string][]string, len(st.QuietLabels))
-			for a, list := range st.QuietLabels {
-				if mapID(a) != a {
-					changed = true
-				}
-				quiet[mapID(a)] = list
-			}
-			st.QuietLabels = quiet
-		}
 		if len(f.Settings) > 0 && bs.AutoLabelAccounts == nil && bs.AutoClassify {
 			for _, ba := range f.Accounts {
 				st.AutoLabelAccounts = append(st.AutoLabelAccounts, ba.ID)
@@ -538,17 +654,19 @@ func (s *Service) remapRestoredAccounts(f backupFile, before models.Settings, id
 				changed = true
 			}
 		}
-		return s.scopeLabels(st.Labels) || changed
+		return changed
 	})
 }
 
 var accountIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, idMap map[string]string, sum *models.RestoreSummary) error {
+// restoreAccount finds or recreates a backup's account (and restores its
+// calendar choices). ok is false for an account that was skipped.
+func (s *Service) restoreAccount(ba backupAccount, idMap map[string]string, sum *models.RestoreSummary) (acct models.Account, ok bool, err error) {
 	email := strings.ToLower(strings.TrimSpace(ba.Email))
 	if (ba.Provider != models.ProviderGmail && ba.Provider != models.ProviderOutlook) || !strings.Contains(email, "@") {
 		sum.AccountsSkipped++
-		return nil
+		return acct, false, nil
 	}
 	signature := ""
 	if strings.TrimSpace(ba.Signature) != "" {
@@ -556,14 +674,14 @@ func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, 
 			signature = ""
 		}
 	}
-	acct, err := s.store.FindAccount(ba.Provider, email)
+	acct, err = s.store.FindAccount(ba.Provider, email)
 	switch {
 	case err == nil:
 		sum.AccountsMerged++
 		idMap[ba.ID] = acct.ID
 		if acct.Signature == "" && signature != "" {
 			if err := s.store.UpdateSignature(acct.ID, signature); err != nil {
-				return err
+				return acct, false, err
 			}
 		}
 	case errors.Is(err, store.ErrNotFound):
@@ -588,11 +706,11 @@ func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, 
 		acct = models.Account{ID: id, Provider: ba.Provider, Email: email, DisplayName: name, Color: color, CreatedAt: created,
 			CalendarEnabled: ba.CalendarEnabled, CalendarMuted: ba.CalendarMuted}
 		if err := s.store.InsertAccount(acct); err != nil {
-			return err
+			return acct, false, err
 		}
 		if signature != "" {
 			if err := s.store.UpdateSignature(id, signature); err != nil {
-				return err
+				return acct, false, err
 			}
 		}
 		// A sign-in can survive in the OS keychain when only the data folder
@@ -601,7 +719,7 @@ func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, 
 			sum.AccountsReady++
 		} else {
 			if err := s.store.SetNeedsReauth(id, true); err != nil {
-				return err
+				return acct, false, err
 			}
 			_ = s.store.SetSyncResult(id, time.Time{}, restoredSyncError)
 			sum.AccountsAdded++
@@ -610,14 +728,37 @@ func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, 
 		idMap[ba.ID] = id
 		s.labelsGainAccount(id)
 	default:
-		return err
+		return acct, false, err
 	}
+	prefs := slices.Clone(ba.Calendars)
+	for i := range prefs {
+		if prefs[i].Color != "" && !config.IsHexColor(prefs[i].Color) {
+			prefs[i].Color = ""
+		}
+	}
+	cals, err := s.store.AddPendingCalendars(acct.Provider, acct.Email, prefs)
+	if err != nil {
+		return acct, false, err
+	}
+	sum.Calendars += cals
+	return acct, true, nil
+}
 
+// restoreMarks queues a backup account's label marks for acct, with the
+// label ids as they are here (labels maps the backup's ids), and applies
+// them to the messages already present.
+func (s *Service) restoreMarks(ba backupAccount, acct models.Account, labels map[string]string, known map[string]bool, sum *models.RestoreSummary) error {
 	marks := make([]store.LabelMark, 0, len(ba.LabelMarks))
 	for _, m := range ba.LabelMarks {
-		if m.Kind == store.MarkClassified || knownLabels[m.LabelID] {
-			marks = append(marks, m)
+		if m.Kind != store.MarkClassified {
+			if id, ok := labels[m.LabelID]; ok {
+				m.LabelID = id
+			}
+			if !known[m.LabelID] {
+				continue
+			}
 		}
+		marks = append(marks, m)
 	}
 	n, err := s.store.AddPendingLabels(acct.Provider, acct.Email, marks)
 	if err != nil {
@@ -629,16 +770,5 @@ func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, 
 		return err
 	}
 	sum.AppliedNow += applied
-	prefs := slices.Clone(ba.Calendars)
-	for i := range prefs {
-		if prefs[i].Color != "" && !config.IsHexColor(prefs[i].Color) {
-			prefs[i].Color = ""
-		}
-	}
-	cals, err := s.store.AddPendingCalendars(acct.Provider, acct.Email, prefs)
-	if err != nil {
-		return err
-	}
-	sum.Calendars += cals
 	return nil
 }

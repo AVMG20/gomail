@@ -75,7 +75,8 @@ func TestLabelRulesAndQuietLabels(t *testing.T) {
 	if err := s.SyncNow(demo.OutlookAccountID); err != nil {
 		t.Fatal(err)
 	}
-	if o, ok := labelsOf(t, e, demo.OutlookAccountID, "Merge request"); !ok || !has(o.Labels, "gitlab") {
+	// The label had no mailbox: Outlook got its own copy, and its rule follows it.
+	if o, ok := labelsOf(t, e, demo.OutlookAccountID, "Merge request"); !ok || !has(o.Labels, mailboxLabel(t, s, demo.OutlookAccountID, "GitLab")) {
 		t.Fatalf("outlook rule not applied: %+v", o.Labels)
 	}
 	if len(e.ui.notified) != notified+1 {
@@ -127,7 +128,8 @@ func TestApplyLabelRulesCountsOnlyChanges(t *testing.T) {
 	if err := s.SyncNow(demo.OutlookAccountID); err != nil {
 		t.Fatal(err)
 	}
-	saveRules(t, s, []models.LabelRule{{ID: "r1", Field: "from", Contains: "gitlab", Action: "label", LabelID: "gitlab"}})
+	saveRules(t, s, []models.LabelRule{{ID: "r1", AccountID: demo.OutlookAccountID, Field: "from", Contains: "gitlab", Action: "label",
+		LabelID: mailboxLabel(t, s, demo.OutlookAccountID, "GitLab")}})
 	if n, err := s.ApplyLabelRules(); err != nil || n != 1 {
 		t.Fatalf("apply changed %d (%v), want 1", n, err)
 	}
@@ -213,15 +215,7 @@ func TestJunkRuleManyMessages(t *testing.T) {
 	e := newEnv(t, "")
 	s := e.s
 	acct := demo.OutlookAccountID
-	work := ""
-	for _, l := range s.Settings().Labels {
-		if l.Name == "Travel" && l.Source == "provider" {
-			work = l.ID
-		}
-	}
-	if work == "" {
-		t.Fatal("no provider Travel label")
-	}
+	work := mailboxLabel(t, s, acct, "Travel")
 	saveRules(t, s, []models.LabelRule{
 		{ID: "r1", AccountID: acct, Field: "from", Contains: "bulk@example.com", Action: "junk"},
 		{ID: "r2", AccountID: acct, Field: "from", Contains: "bulk@example.com", Action: "label", LabelID: work},
@@ -272,7 +266,7 @@ func TestQuietLabelsPerMailbox(t *testing.T) {
 	gitlab := models.Label{ID: "gitlab", Name: "GitLab", Color: "#f97316", Source: "user"}
 	saveRules(t, s, []models.LabelRule{{ID: "r1", Field: "from", Contains: "gitlab", Action: "label", LabelID: "gitlab"}}, gitlab)
 	st := s.Settings()
-	st.QuietLabels = map[string][]string{demo.GmailAccountID: {"deleted-label"}, demo.OutlookAccountID: {"gitlab"}}
+	st.QuietLabels = map[string][]string{demo.GmailAccountID: {"deleted-label"}, demo.OutlookAccountID: {mailboxLabel(t, s, demo.OutlookAccountID, "GitLab")}}
 	if err := s.SaveSettings(st); err != nil {
 		t.Fatal(err)
 	}

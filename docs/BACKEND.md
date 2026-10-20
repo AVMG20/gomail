@@ -183,6 +183,14 @@ failure.
   request, so it returns an explanation instead. Gmail purges Trash itself
   after 30 days.
 
+**Mailbox order, mute and hidden folders.** `ReorderAccounts(ids)` sets
+the order of the mailboxes (`accounts.position`); `GetAccounts` returns
+them in that order and a new mailbox goes last. A muted mailbox
+(`mutedMailboxes`) never notifies, and the UI hides its unread badge and
+leaves it out of the All inboxes and tray counts. `hiddenFolders` (folder
+ids) are left out of the sidebar's other folders; their mail still shows
+in search.
+
 **Notifications.** A single message shows the sender and subject.
 Several show "5 new messages · <account>" with the senders. Clicking one
 shows and focuses the window and emits `notification:open {messageId,
@@ -282,15 +290,62 @@ returned.
 
 **Labels.** Labels are gomail's own concept, separate from folders. A
 message can have several labels. Each assignment has a source: `manual`,
-`ai`, `provider` (Gmail user labels and Outlook categories, merged across
-accounts by case-insensitive name) or `system` (the built-in **Junk** label,
-which every message in Spam/Junk gets). Gmail system labels (INBOX, SPAM,
-TRASH, SENT, DRAFT, STARRED, IMPORTANT, CATEGORY_*) are folders or flags, never
-labels.
+`ai`, `provider` (Gmail user labels and Outlook categories) or `system` (the
+built-in **Junk** label, which every message in Spam/Junk gets). Gmail system
+labels (INBOX, SPAM, TRASH, SENT, DRAFT, STARRED, IMPORTANT, CATEGORY_*) are
+folders or flags, never labels.
+
+Every mailbox has its own labels. `Settings.labels` is one list with
+globally unique ids, and each label's `accountIds` holds exactly one account
+id; only Junk (`source: "system"`) has none and belongs to every mailbox.
+Names are unique within a mailbox (case-insensitive), so two mailboxes can
+both have a "Newsletters" label, with different ids. Editing, recoloring or
+deleting a label never changes another mailbox's.
+
+- A new mailbox gets its own copies of the default labels
+  (`config.MailboxDefaultLabels`; a taken id gets `-2`, `-3`, ...). Removing
+  a mailbox drops its labels, rules, quiet labels and assignments.
+- Gmail labels and Outlook categories are matched to the labels of their
+  mailbox by name; a missing one is added to that mailbox only. Deleting an
+  imported label hides it for that mailbox only
+  (`dismissedMailboxLabels`: account id -> lower-cased names).
+- `AddLabel`/`RemoveLabel` on mail of several mailboxes (the unified view)
+  use each message's own mailbox's label with the same name; mail of a
+  mailbox without one is skipped. `label:<name>` search matches the label
+  of that name in every mailbox. Label counts stay per label id; the UI
+  groups labels by name in the unified view and sums their counts.
+- Rules (`labelRules`) and quiet labels belong to one mailbox each, and
+  only use that mailbox's labels.
+- `Label.then` is what happens to new mail that gets the label: `""` (it
+  stays), `"archive"`, `"junk"` or `"trash"` (not used for Junk). It acts
+  when a rule or Jev's automatic labeling of new mail adds the label
+  (`core/labelactions.go`): Junk and Trash mark the mail read first,
+  Archive only moves mail out of the inbox and keeps it unread. Jev never
+  trashes: its Trash picks go to Junk. New mail Jev labels Junk always
+  goes to Junk, read. Manual "Label with AI" runs don't move mail.
+- Every automatic move is logged in `auto_moves` (kept 30 days).
+  `AutoMoves(accountID, kind, hours)` lists the mail that is still in that
+  folder kind (`spam`, `archive`, `trash`) with the reason, for the "sorted
+  for you" review above those lists.
+
+Older versions shared labels between mailboxes (`accountIds` with several
+ids, or none for "every mailbox", and provider labels merged by name). On
+startup `config.SplitLabels` gives each mailbox its own copy: the first
+mailbox keeps the id, the others get new ids with the same name, color,
+description, source and action. Each mailbox's assignments, overrides,
+rejections, pending backup marks and stored AI scores move to its copy
+(`store.MoveLabels`), and its "already classified" fingerprints are
+renamed so the new ids don't re-run (and re-bill) classification. Rules
+for every mailbox become one rule per mailbox; rules and quiet labels
+follow the copies. The first run (`labelsVersion` 1) also moves the old
+dismissed provider labels to every mailbox and removes AI assignments of
+imported labels without a description. Running it again changes nothing.
 
 The AI classifier (OpenRouter Decisions API, model `typesafe/jev-1.13`)
-asks one `noul` question per label, in chunks of 20 labels per request. It
-works as follows:
+asks one `noul` question per label of the message's mailbox, in chunks of
+20 labels per request. Imported labels are only asked about once they have
+a description (from a name like "Categorie Rood" the model can only guess).
+It works as follows:
 
 - It adds a label (source `ai`) when P(yes) ≥ `classifyThreshold`.
 - On re-classification, AI labels that score below that threshold are
@@ -527,7 +582,8 @@ includesSecrets, settings, extra, accounts, secrets?}`:
 
 - `settings` is the whole `models.Settings`, marshaled as is, so new
   fields are included automatically. The OAuth app credentials are blanked.
-- `extra` holds other stored preferences (dismissed provider labels).
+- `extra` holds other stored preferences (deleted provider labels per
+  mailbox).
 - `accounts` holds the provider, email, name, color, signature and calendar
   switches of each account, never its OAuth tokens. Each account also
   carries `labelMarks` (`{remoteId, labelId, kind: manual|ai|rejected|
@@ -541,8 +597,14 @@ includesSecrets, settings, extra, accounts, secrets?}`:
 (a newer version is rejected), and merges the backup:
 
 - Every setting in the backup replaces the current one. Settings the
-  backup lacks keep their value. Labels are merged by id, and the backup
-  wins on a conflict. Credentials only change when the backup has secrets.
+  backup lacks keep their value. Credentials only change when the backup
+  has secrets.
+- Labels are merged per mailbox, after the accounts: each backup mailbox's
+  labels go to that mailbox here, matched by name (the backup's color,
+  description and action win) or added. A backup from before labels were
+  per mailbox is split first, like on startup. The backup's rules and quiet
+  labels replace those of its mailboxes, and label marks follow the label
+  ids here.
 - Missing accounts are recreated with their id, with `needsReauth` and a
   "Restored from a backup" `syncError`, and `ReauthAccount` finishes them.
   If a token for that id is still in the keychain, it is used. An account

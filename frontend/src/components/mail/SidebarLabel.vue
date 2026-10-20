@@ -13,20 +13,22 @@ import {
   AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { LABEL_COLORS } from '@/lib/color'
+import { openLabelSettings } from '@/lib/labelScope'
 import type { Label, LabelCount } from '@/lib/types'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
-import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ label: Label; count?: LabelCount }>()
 const mail = useMailStore()
 const settings = useSettingsStore()
-const ui = useUiStore()
 
 const shown = computed(() => mail.labelFilter.labels.includes(props.label.id))
 const hidden = computed(() => mail.labelFilter.hidden.includes(props.label.id))
-/** Gmail/Outlook and built-in labels follow the provider: only their color is ours to change. */
-const own = computed(() => !props.label.source || props.label.source === 'user')
+/** Gmail/Outlook and built-in labels follow the provider: only their color is ours to change. In
+ *  the unified view one entry stands for the label of that name in every mailbox: those are edited
+ *  in each mailbox's settings. */
+const inMailbox = computed(() => !!mail.mailbox.accountId)
+const own = computed(() => inMailbox.value && (!props.label.source || props.label.source === 'user'))
 
 function formatCount(n: number) {
   return n > 999 ? `${Math.floor(n / 1000)}k` : String(n)
@@ -103,7 +105,7 @@ function remove() {
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem v-if="own" @click="startRename"><PencilIcon /> Rename</ContextMenuItem>
-        <ContextMenuSub>
+        <ContextMenuSub v-if="inMailbox">
           <ContextMenuSubTrigger class="gap-2"><PaletteIcon class="text-muted-foreground size-4" /> Color</ContextMenuSubTrigger>
           <ContextMenuSubContent class="w-auto p-2">
             <div class="grid grid-cols-5 gap-1.5">
@@ -119,7 +121,7 @@ function remove() {
             </div>
           </ContextMenuSubContent>
         </ContextMenuSub>
-        <ContextMenuItem @click="ui.openSettings('labels')"><SettingsIcon /> Edit in Settings…</ContextMenuItem>
+        <ContextMenuItem @click="openLabelSettings(mail.mailbox.accountId)"><SettingsIcon /> Edit in Settings…</ContextMenuItem>
         <template v-if="own">
           <ContextMenuSeparator />
           <ContextMenuItem variant="destructive" @click="confirmDelete = true"><Trash2Icon /> Delete label…</ContextMenuItem>

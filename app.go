@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -416,9 +417,12 @@ func (m *MailService) scheduleTrayUpdate() {
 		if err != nil {
 			return
 		}
+		muted := m.svc.Settings().MutedMailboxes
 		unread := 0
 		for _, a := range accts {
-			unread += a.UnreadCount
+			if !slices.Contains(muted, a.ID) {
+				unread += a.UnreadCount
+			}
 		}
 		tip := "gomail — no unread mail"
 		label := ""
@@ -477,6 +481,26 @@ func (m *MailService) UpdateAccount(accountID, displayName, color string) error 
 		return err
 	}
 	return uiError(s.UpdateAccount(accountID, displayName, color))
+}
+
+// AutoMoves lists what automations (Jev, rules, label actions) moved into a
+// folder kind (spam, archive, trash) in the last hours ("" = every mailbox).
+func (m *MailService) AutoMoves(accountID, kind string, hours int) ([]models.AutoMove, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	moves, err := s.AutoMoves(accountID, kind, hours)
+	return moves, uiError(err)
+}
+
+// ReorderAccounts sets the order of the mailboxes (account ids in the new order).
+func (m *MailService) ReorderAccounts(ids []string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.ReorderAccounts(ids))
 }
 
 // SyncNow syncs one account ("" = all) and resolves when done.
@@ -584,6 +608,68 @@ func (m *MailService) MoveToJunk(ids []string) error {
 		return err
 	}
 	return uiError(s.MoveToJunk(ids))
+}
+
+// JunkSender sends a sender's mail in one mailbox to Junk from now on (a
+// junk rule) and moves the given messages plus the sender's inbox mail
+// there, marked read. scope is "address" or "domain".
+func (m *MailService) JunkSender(accountID, address, scope string, ids []string) (core.JunkSenderResult, error) {
+	s, err := m.ready()
+	if err != nil {
+		return core.JunkSenderResult{}, err
+	}
+	return uiResult(s.JunkSender(accountID, address, scope, ids))
+}
+
+// NotJunk moves messages back to their inbox and returns the junk rules
+// that still match their senders.
+func (m *MailService) NotJunk(ids []string) (core.NotJunkResult, error) {
+	s, err := m.ready()
+	if err != nil {
+		return core.NotJunkResult{}, err
+	}
+	return uiResult(s.NotJunk(ids))
+}
+
+// LabelSender labels a sender's mail in one mailbox from now on (a label
+// rule) and labels the sender's mail already there. scope is "address" or
+// "domain".
+func (m *MailService) LabelSender(accountID, address, scope, labelID string) (core.LabelSenderResult, error) {
+	s, err := m.ready()
+	if err != nil {
+		return core.LabelSenderResult{}, err
+	}
+	return uiResult(s.LabelSender(accountID, address, scope, labelID))
+}
+
+// RemoveRules deletes label/junk rules by id ("Stop junking", Undo).
+func (m *MailService) RemoveRules(ruleIDs []string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.RemoveRules(ruleIDs))
+}
+
+// TopSenders lists who fills a mailbox's folder kind ("" = inbox), the most
+// mail first, per address or per domain (groupBy "domain"); accountID ""
+// covers every mailbox. For "Clean up by sender".
+func (m *MailService) TopSenders(accountID, folderKind, groupBy string, limit int) ([]models.SenderSummary, error) {
+	s, err := m.ready()
+	if err != nil {
+		return []models.SenderSummary{}, err
+	}
+	return uiResult(s.TopSenders(accountID, folderKind, groupBy, limit))
+}
+
+// SenderMessageIDs lists one sender's mail (an address, or "@domain") in a
+// mailbox's folder kind ("" = inbox), for "Archive all" in Clean up.
+func (m *MailService) SenderMessageIDs(accountID, folderKind, sender string) ([]string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return []string{}, err
+	}
+	return uiResult(s.SenderMessageIDs(accountID, folderKind, sender))
 }
 
 func (m *MailService) MoveToFolder(ids []string, folderID string) error {
@@ -788,6 +874,7 @@ func (m *MailService) SaveSettings(st models.Settings) error {
 	if st.Notifications && !before {
 		m.ensureNotificationPermission()
 	}
+	m.scheduleTrayUpdate() // muted mailboxes don't count in the tray
 	return nil
 }
 

@@ -4,7 +4,7 @@
 // ignores synthetic ones).
 import { computed } from 'vue'
 import {
-  ArchiveIcon, FolderInputIcon, InboxIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MailOpenIcon, OctagonAlertIcon, PanelRightOpenIcon, ReplyAllIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon,
+  ArchiveIcon, FolderInputIcon, InboxIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MailOpenIcon, OctagonAlertIcon, PanelRightOpenIcon, ReplyAllIcon, ShieldBanIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon,
 } from '@lucide/vue'
 import {
   ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuShortcut,
@@ -16,13 +16,17 @@ import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useAccountsStore } from '@/stores/accounts'
 import { shortcutLabel } from '@/lib/platform'
+import { groupByName } from '@/lib/labelScope'
 import { FOLDER_ICONS } from './folderIcons'
+import SenderRulesMenu from './SenderRulesMenu.vue'
+import { useSenderRulesStore } from '@/stores/senderRules'
 
 const props = defineProps<{ messageId: string }>()
 const mail = useMailStore()
 const settings = useSettingsStore()
 const compose = useComposeStore()
 const ai = useAiStore()
+const senderRules = useSenderRulesStore()
 
 const ctxMsg = computed(() => mail.byId.get(props.messageId) ?? null)
 const ctxIds = computed(() => (mail.selection.has(props.messageId) ? [...mail.selection] : [props.messageId]))
@@ -70,11 +74,18 @@ function labelWithAi() {
 const ctxLabels = computed(() => {
   const inSelection = mail.selection.has(props.messageId)
   const accts = inSelection ? mail.selectionAccountIds : [ctxMsg.value?.accountId ?? '']
-  const scoped = new Set(settings.labelsForAccounts(accts).map((l) => l.id))
+  const scoped = settings.labelsForAccounts(accts)
+  const ids = new Set(scoped.map((l) => l.id))
   const present = new Set(ctxIds.value.flatMap((id) => mail.byId.get(id)?.labels ?? []))
-  return settings.labels.filter((l) => scoped.has(l.id) || present.has(l.id))
+  // One entry per name: in a mixed selection it stands for each mailbox's label of that name.
+  return groupByName([...scoped, ...settings.labels.filter((l) => !ids.has(l.id) && present.has(l.id))])
 })
-const labelState = (labelId: string) => ctxIds.value.every((id) => mail.byId.get(id)?.labels.includes(labelId))
+const labelState = (labelId: string) =>
+  ctxIds.value.every((id) => {
+    const m = mail.byId.get(id)
+    const own = m && settings.labelInAccountOf(labelId, m.accountId)?.id
+    return !!own && m.labels.includes(own)
+  })
 
 function toggleCtxLabel(labelId: string) {
   const remove = labelState(labelId)
@@ -126,6 +137,9 @@ function toggleCtxLabel(labelId: string) {
         </ContextMenuItem>
       </ContextMenuSubContent>
     </ContextMenuSub>
+    <SenderRulesMenu v-if="!multi" menu="context" :message="ctxMsg" />
+    <!-- Several selected: each sender of the selection (all N in this view: of its loaded rows). -->
+    <ContextMenuItem v-else-if="senderRules.available() && mail.mailbox.kind !== 'spam'" @click="run((ids) => senderRules.junkSender(ids))"><ShieldBanIcon /> Always send senders to Junk</ContextMenuItem>
     <ContextMenuItem @click="labelWithAi"><SparklesIcon class="text-violet-500" /> Label with AI</ContextMenuItem>
     </ContextMenuContent>
 </template>

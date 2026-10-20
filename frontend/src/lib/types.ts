@@ -226,6 +226,20 @@ export interface SyncProgress {
   total: number
 }
 
+/** Mail an automation (Jev, a rule, a label's "When added") moved: the "sorted for you" review. */
+export interface AutoMove {
+  messageId: string
+  accountId: string
+  /** Folder kind: spam | archive | trash. */
+  to: string
+  reason: string
+  at: string
+  fromName: string
+  fromEmail: string
+  subject: string
+  date: string
+}
+
 export interface MessageLabel {
   labelId: string
   source: 'ai' | 'manual' | string
@@ -334,9 +348,14 @@ export interface Label {
   source?: LabelSource | string
   /** Optional hint (mock only today): provider the label was imported from. */
   provider?: string
-  /** Mailboxes (account ids) the label belongs to; empty/absent = every mailbox (and Junk always). */
+  /** The mailbox (one account id) the label belongs to; every mailbox has its own labels. Empty for
+   *  Junk, which belongs to every mailbox. */
   accountIds?: string[]
+  /** What happens to new mail that gets the label (from Jev or a rule). "" = it stays put. */
+  then?: LabelThen | string
 }
+
+export type LabelThen = '' | 'archive' | 'junk' | 'trash'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type Density = 'comfortable' | 'compact'
@@ -375,6 +394,8 @@ export interface Settings {
   quietLabels?: Record<string, string[]>
   /** Account ids whose new mail never notifies (calendar reminders are separate). */
   mutedMailboxes?: string[]
+  /** Folder ids left out of the sidebar (other folders the user doesn't use). */
+  hiddenFolders?: string[]
   /** Account ids whose new mail Jev labels automatically. */
   autoLabelAccounts?: string[]
   /** Account ids where the AI never removes imported labels (aiCorrectsProviderLabels is the switch for all mailboxes). */

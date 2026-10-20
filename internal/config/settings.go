@@ -46,13 +46,22 @@ const (
 	LabelSourceSystem   = "system"
 )
 
+// What happens to new mail that gets a label (Label.Then); "" keeps it
+// where it is.
+const (
+	LabelThenArchive = "archive"
+	LabelThenJunk    = "junk"
+	LabelThenTrash   = "trash"
+)
+
 // JunkLabel is the built-in system label for mail in Spam/Junk.
 func JunkLabel() models.Label {
 	return models.Label{ID: JunkLabelID, Name: "Junk", Color: "#a16207", Source: LabelSourceSystem,
 		Description: "Unsolicited bulk email, scams, phishing attempts or other spam."}
 }
 
-// DefaultLabels are seeded on first run.
+// DefaultLabels are the labels every new mailbox starts with (each
+// mailbox gets its own copies, see MailboxDefaultLabels), plus Junk.
 func DefaultLabels() []models.Label {
 	return []models.Label{
 		{Source: LabelSourceUser, ID: "important", Name: "Important", Color: "#ef4444", Description: "Time-sensitive or high-priority mail that needs the user's attention or action soon: requests from real people, deadlines, security alerts, appointments."},
@@ -65,6 +74,23 @@ func DefaultLabels() []models.Label {
 		{Source: LabelSourceUser, ID: "finance", Name: "Finance", Color: "#10b981", Description: "Receipts, invoices, bills, bank and payment notices, statements, taxes."},
 		JunkLabel(),
 	}
+}
+
+// MailboxDefaultLabels returns a mailbox's own copies of the default user
+// labels. The ids are unique among labels (a copy whose id is taken gets
+// "-2", "-3", ...).
+func MailboxDefaultLabels(labels []models.Label, accountID string) []models.Label {
+	taken := labelIDs(labels)
+	var out []models.Label
+	for _, l := range DefaultLabels() {
+		if l.Source != LabelSourceUser {
+			continue
+		}
+		l.ID = uniqueID(taken, l.ID)
+		l.AccountIDs = []string{accountID}
+		out = append(out, l)
+	}
+	return out
 }
 
 // DefaultSettings returns the settings used before the user changed anything.
@@ -99,7 +125,7 @@ func DefaultSettings() models.Settings {
 		AIDailyBudgetUSD:         1,
 		CheckUpdates:             true,
 		ShowInTray:               true,
-		Labels:                   DefaultLabels(),
+		Labels:                   []models.Label{JunkLabel()}, // mailboxes bring their own (MailboxDefaultLabels)
 		PrimaryColor:             DefaultPrimaryColor,
 		Radius:                   DefaultRadius,
 	}
@@ -216,13 +242,24 @@ func Normalize(s *models.Settings) {
 		s.Radius = DefaultRadius
 	}
 	s.Labels = NormalizeLabels(s.Labels)
-	// After the labels: rules and quiet lists drop labels that are gone.
+	// After the labels: rules and quiet lists drop labels that are gone
+	// or belong to another mailbox.
 	labels := map[string]bool{}
+	byID := map[string]models.Label{}
 	for _, l := range s.Labels {
 		labels[l.ID] = true
+		byID[l.ID] = l
 	}
 	s.LabelRules = normalizeRules(s.LabelRules, labels)
-	s.QuietLabels = normalizeQuietLabels(s.QuietLabels, labels)
+	for i, r := range s.LabelRules {
+		if r.LabelID != "" && r.AccountID != "" && !LabelInAccount(byID[r.LabelID], r.AccountID) {
+			s.LabelRules[i].LabelID = ""
+		}
+	}
+	s.QuietLabels = normalizeQuietLabels(s.QuietLabels, labels) // new lists: safe to filter in place
+	for acct, ids := range s.QuietLabels {
+		s.QuietLabels[acct] = slices.DeleteFunc(ids, func(id string) bool { return !LabelInAccount(byID[id], acct) })
+	}
 	s.MutedMailboxes = uniqueTrimmed(s.MutedMailboxes)
 	s.AutoLabelAccounts = uniqueTrimmed(s.AutoLabelAccounts)
 	s.AutoClassify = len(s.AutoLabelAccounts) > 0 // for older versions
@@ -258,21 +295,32 @@ func AICorrects(s models.Settings, accountID string) bool {
 	return s.AICorrectsProviderLabels && !slices.Contains(s.AICorrectsOff, accountID)
 }
 
-// NormalizeLabels validates label definitions: unique slug ids, unique
-// names (case-insensitive), valid colors and sources, and makes sure the
-// built-in Junk label exists.
+// NormalizeLabels validates label definitions: unique slug ids, names
+// unique within a mailbox (case-insensitive), valid colors, sources and
+// actions, and makes sure the built-in Junk label exists. Junk belongs to
+// every mailbox, so no other label takes its name.
 func NormalizeLabels(in []models.Label) []models.Label {
 	out := make([]models.Label, 0, len(in)+1)
 	seen := map[string]bool{}
-	names := map[string]bool{}
+	names := map[string]bool{} // mailbox + "\x00" + lower-cased name; "*" = every mailbox
+	junkName := "junk"
+	for _, c := range in {
+		if c.ID == JunkLabelID && strings.TrimSpace(c.Name) != "" {
+			junkName = strings.ToLower(strings.TrimSpace(c.Name))
+		}
+	}
 	hasJunk := false
 	for i, c := range in {
 		c.Name = strings.TrimSpace(c.Name)
 		c.Description = strings.TrimSpace(c.Description)
-		if c.Name == "" || names[strings.ToLower(c.Name)] {
+		if c.Name == "" {
 			continue
 		}
+		lower := strings.ToLower(c.Name)
 		if c.ID == JunkLabelID {
+			if hasJunk {
+				continue
+			}
 			j := JunkLabel()
 			if c.Description != "" {
 				j.Description = c.Description
@@ -283,6 +331,8 @@ func NormalizeLabels(in []models.Label) []models.Label {
 			j.Name = c.Name
 			c = j
 			hasJunk = true
+		} else if lower == junkName {
+			continue
 		}
 		switch c.Source {
 		case LabelSourceProvider, LabelSourceSystem:
@@ -292,25 +342,38 @@ func NormalizeLabels(in []models.Label) []models.Label {
 		if c.Source == LabelSourceSystem && c.ID != JunkLabelID {
 			c.Source = LabelSourceUser
 		}
+		switch c.Then {
+		case LabelThenArchive, LabelThenJunk, LabelThenTrash:
+		default:
+			c.Then = ""
+		}
 		if c.Source == LabelSourceSystem {
 			c.AccountIDs = []string{} // Junk belongs to every mailbox
+			c.Then = ""               // and is the Junk folder already
 		} else {
 			c.AccountIDs = uniqueTrimmed(c.AccountIDs)
+		}
+		keys := []string{"*\x00" + lower}
+		for _, a := range c.AccountIDs {
+			keys = append(keys, a+"\x00"+lower)
+		}
+		if slices.ContainsFunc(keys, func(k string) bool { return names[k] }) {
+			continue
 		}
 		id := Slug(c.ID)
 		if id == "" {
 			id = Slug(c.Name)
 		}
-		if id == "" {
-			id = "label"
+		if c.ID != JunkLabelID && id == JunkLabelID {
+			id = "junk-label"
 		}
-		base, n := id, 2
-		for seen[id] {
-			id = base + "-" + strconv.Itoa(n)
-			n++
+		id = uniqueID(seen, id)
+		if len(c.AccountIDs) == 0 {
+			names[keys[0]] = true
 		}
-		seen[id] = true
-		names[strings.ToLower(c.Name)] = true
+		for _, k := range keys[1:] {
+			names[k] = true
+		}
 		c.ID = id
 		if !IsHexColor(c.Color) {
 			c.Color = categoryPalette[i%len(categoryPalette)]
@@ -323,9 +386,37 @@ func NormalizeLabels(in []models.Label) []models.Label {
 	return out
 }
 
+// uniqueID returns id, or id-2, id-3, ... when taken, and marks it taken.
+func uniqueID(taken map[string]bool, id string) string {
+	if id == "" {
+		id = "label"
+	}
+	base, n := id, 2
+	for taken[id] {
+		id = base + "-" + strconv.Itoa(n)
+		n++
+	}
+	taken[id] = true
+	return id
+}
+
+func labelIDs(labels []models.Label) map[string]bool {
+	m := make(map[string]bool, len(labels))
+	for _, l := range labels {
+		m[l.ID] = true
+	}
+	return m
+}
+
+// NewLabelID returns an unused label id for a label called name.
+func NewLabelID(labels []models.Label, name string) string {
+	return uniqueID(labelIDs(labels), Slug(name))
+}
+
 // LabelInAccount reports whether a label belongs to a mailbox. The
-// built-in Junk label and labels without a mailbox list belong to every
-// mailbox; accountID "" (the unified view) matches every label.
+// built-in Junk label belongs to every mailbox; accountID "" (the unified
+// view) matches every label. A label without a mailbox (only before
+// SplitLabels ran) counts as every mailbox's.
 func LabelInAccount(l models.Label, accountID string) bool {
 	return accountID == "" || l.Source == LabelSourceSystem || len(l.AccountIDs) == 0 || slices.Contains(l.AccountIDs, accountID)
 }
@@ -341,24 +432,143 @@ func LabelsForAccount(labels []models.Label, accountID string) []models.Label {
 	return out
 }
 
-// ScopeLabels gives labels without a mailbox list every mailbox in
-// accountIDs, so labels from before labels were per mailbox keep working
-// everywhere. Junk stays unscoped (it belongs to every mailbox). Ids of
-// mailboxes that aren't in accountIDs are kept: a backup's labels may
-// name accounts that are restored right after the settings. Without any
-// account nothing changes. It reports whether a label changed.
-func ScopeLabels(labels []models.Label, accountIDs []string) bool {
-	if len(accountIDs) == 0 {
-		return false
-	}
-	changed := false
-	for i, l := range labels {
-		if l.Source != LabelSourceSystem && len(l.AccountIDs) == 0 {
-			labels[i].AccountIDs = slices.Clone(accountIDs)
-			changed = true
+// LabelNamed returns the label of a mailbox with that name
+// (case-insensitive), the built-in Junk label included.
+func LabelNamed(labels []models.Label, accountID, name string) (models.Label, bool) {
+	name = strings.TrimSpace(name)
+	for _, l := range labels {
+		if strings.EqualFold(l.Name, name) && (l.Source == LabelSourceSystem || slices.Contains(l.AccountIDs, accountID)) {
+			return l, true
 		}
 	}
-	return changed
+	return models.Label{}, false
+}
+
+// LabelMove says that a mailbox's assignments of label From now belong to
+// label To (SplitLabels gave the mailbox its own copy).
+type LabelMove struct {
+	AccountID string
+	From, To  string
+}
+
+// SplitLabels makes every label belong to exactly one mailbox. A label of
+// several mailboxes (older versions shared labels, and merged Gmail labels
+// and Outlook categories by name) stays with the first one and every other
+// mailbox gets its own copy with a new id; a label without mailboxes is
+// copied to every mailbox of accountIDs (kept as is without accounts).
+// Copies keep name, color, description, source and action. Rules for
+// every mailbox (AccountID "") become one rule per mailbox, and rules and
+// quiet lists follow the copies. The built-in Junk label stays shared.
+//
+// It returns the moves the stored assignments must follow (see
+// store.MoveLabels); nil when nothing changed. Running it again changes
+// nothing.
+func SplitLabels(s *models.Settings, accountIDs []string) (moves []LabelMove, changed bool) {
+	taken := labelIDs(s.Labels)
+	remap := map[string]map[string]string{} // account -> old id -> new id
+	out := make([]models.Label, 0, len(s.Labels))
+	for _, l := range s.Labels {
+		accts := l.AccountIDs
+		if l.Source == LabelSourceSystem || len(accts) == 1 {
+			out = append(out, l)
+			continue
+		}
+		if len(accts) == 0 {
+			if accts = accountIDs; len(accts) == 0 {
+				out = append(out, l)
+				continue
+			}
+		}
+		changed = true
+		for i, a := range accts {
+			c := l
+			c.AccountIDs = []string{a}
+			if i > 0 {
+				c.ID = uniqueID(taken, l.ID)
+				if remap[a] == nil {
+					remap[a] = map[string]string{}
+				}
+				remap[a][l.ID] = c.ID
+				moves = append(moves, LabelMove{AccountID: a, From: l.ID, To: c.ID})
+			}
+			out = append(out, c)
+		}
+	}
+	s.Labels = out
+	mapID := func(acct, id string) string {
+		if to, ok := remap[acct][id]; ok {
+			return to
+		}
+		return id
+	}
+	byID := map[string]models.Label{}
+	for _, l := range out {
+		byID[l.ID] = l
+	}
+	rules := make([]models.LabelRule, 0, len(s.LabelRules))
+	ruleIDs := map[string]bool{}
+	for _, r := range s.LabelRules {
+		ruleIDs[r.ID] = true
+	}
+	for _, r := range s.LabelRules {
+		if r.AccountID != "" {
+			if to := mapID(r.AccountID, r.LabelID); to != r.LabelID {
+				r.LabelID = to
+				changed = true
+			}
+			rules = append(rules, r)
+			continue
+		}
+		if len(accountIDs) == 0 {
+			rules = append(rules, r)
+			continue
+		}
+		// A rule for every mailbox: one per mailbox where its label is.
+		changed = true
+		first := true
+		for _, a := range accountIDs {
+			c := r
+			c.AccountID = a
+			c.LabelID = mapID(a, r.LabelID)
+			if c.Action != "junk" && c.LabelID != "" {
+				if l, ok := byID[c.LabelID]; ok && !LabelInAccount(l, a) {
+					continue
+				}
+			}
+			if !first {
+				c.ID = uniqueRuleID(ruleIDs)
+			}
+			first = false
+			rules = append(rules, c)
+		}
+		if first { // its label is in no mailbox: keep it for the first
+			r.AccountID = accountIDs[0]
+			rules = append(rules, r)
+		}
+	}
+	s.LabelRules = rules
+	if len(remap) > 0 && len(s.QuietLabels) > 0 {
+		quiet := make(map[string][]string, len(s.QuietLabels))
+		for acct, ids := range s.QuietLabels {
+			list := make([]string, len(ids))
+			for i, id := range ids {
+				list[i] = mapID(acct, id)
+			}
+			quiet[acct] = list
+		}
+		s.QuietLabels = quiet
+	}
+	return moves, changed
+}
+
+func uniqueRuleID(taken map[string]bool) string {
+	n := 1
+	for taken["rule_"+strconv.Itoa(n)] {
+		n++
+	}
+	id := "rule_" + strconv.Itoa(n)
+	taken[id] = true
+	return id
 }
 
 // Slug turns a label name into a stable lowercase identifier.

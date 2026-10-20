@@ -6,7 +6,8 @@ import type { Address, ListQuery, Message, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from './accounts'
 import { useSettingsStore } from './settings'
 import { announce } from '@/lib/announce'
-import { labelInAccount } from '@/lib/labelScope'
+import type { RuleRef } from '@/lib/junk'
+import { useSenderRulesStore } from './senderRules'
 
 /** accountId "" = unified across accounts (by folder kind). */
 export interface Mailbox {
@@ -117,9 +118,10 @@ export const useMailStore = defineStore('mail', () => {
     accountId: mailbox.value.accountId,
     folderId: mailbox.value.folderId,
     folderKind: mailbox.value.folderId || mailbox.value.kind === 'all' ? '' : mailbox.value.kind,
-    labels: labelFilter.value.labels,
+    // The unified view's label entries stand for the label of that name in every mailbox.
+    labels: settings.labelGroupIds(labelFilter.value.labels),
     unlabeled: labelFilter.value.unlabeled,
-    excludeLabels: labelFilter.value.hidden,
+    excludeLabels: settings.labelGroupIds(labelFilter.value.hidden),
     search: search.value.trim(),
     unreadOnly: unreadOnly.value,
     limit: PAGE,
@@ -425,16 +427,18 @@ export const useMailStore = defineStore('mail', () => {
     },
   )
 
-  // Drop label filters that reference deleted labels, or labels that no longer belong to this mailbox.
+  // Label filters follow the view's labels: a label of another mailbox (or an id from before
+  // labels were per mailbox) becomes this mailbox's label with that name; deleted labels go.
   watch(
-    () => `${mailbox.value.accountId}|${settings.labels.map((l) => `${l.id}:${l.accountIds?.join('+') ?? ''}`).join(',')}`,
+    () => `${mailbox.value.accountId}|${settings.labels.map((l) => `${l.id}:${l.name}:${l.accountIds?.join('+') ?? ''}`).join(',')}`,
     () => {
       if (!settings.settings) return
-      const valid = new Set(settings.labelsForAccount(mailbox.value.accountId).map((l) => l.id))
+      const acct = mailbox.value.accountId
+      const fix = (ids: string[]) => [...new Set(ids.map((id) => settings.viewLabel(id, acct)).filter((id): id is string => !!id))]
       const f = labelFilter.value
-      if ([...f.labels, ...f.hidden].some((l) => !valid.has(l))) {
-        setLabelFilter({ labels: f.labels.filter((l) => valid.has(l)), unlabeled: f.unlabeled, hidden: f.hidden.filter((l) => valid.has(l)) })
-      }
+      const labels = fix(f.labels)
+      const hidden = fix(f.hidden).filter((id) => !labels.includes(id))
+      if (labels.join() !== f.labels.join() || hidden.join() !== f.hidden.join()) setLabelFilter({ labels, unlabeled: f.unlabeled, hidden })
     },
   )
 
@@ -773,9 +777,18 @@ export const useMailStore = defineStore('mail', () => {
     const undo = undoMove(items, moved.filter((id) => !byId.value.has(id)))
     removeLocal(moved)
     try {
-      for (const [folder, list] of backend) await inChunks(list, (c) => api.moveToFolder(c, folder))
+      // NotJunk also keeps Jev from junking them again and reports junk rules still matching the senders.
+      const viaNotJunk = hasMethod('NotJunk')
+      const stillJunked: RuleRef[] = []
+      for (const [folder, list] of backend) {
+        await inChunks(list, async (c) => {
+          if (viaNotJunk) stillJunked.push(...(await api.notJunk(c)).rules)
+          else await api.moveToFolder(c, folder)
+        })
+      }
       announce(`${rows(moved.length)} moved to Inbox`)
       toast(done(moved.length, 'moved to Inbox'), { action: { label: 'Undo', onClick: undo } })
+      useSenderRulesStore().offerStopJunking([...new Map(stillJunked.map((r) => [r.id, r])).values()])
     } catch (e) {
       restoreLocal(items)
       toast.error('Move failed', { description: errorMessage(e) })
@@ -871,21 +884,27 @@ export const useMailStore = defineStore('mail', () => {
     }
   }
 
+  /** The id of the label a message gets for labelId: its own mailbox's label with that name
+   *  (every mailbox has its own labels; the backend does the same). */
+  const labelFor = (m: MessageSummary, labelId: string) => settings.labelInAccountOf(labelId, m.accountId)?.id
   async function addLabel(ids: string[], labelId: string, quiet = false) {
-    // Only mail of the label's mailboxes gets it (the backend refuses the rest); rows not loaded are
-    // left to the backend.
+    // Mail of a mailbox without a label of that name is skipped (the backend does the same); rows
+    // not loaded are left to the backend.
     const label = settings.labelMap.get(labelId)
     const before = ids.length
-    if (label) ids = ids.filter((id) => { const m = byId.value.get(id); return !m || labelInAccount(label, m.accountId) })
+    if (label) ids = ids.filter((id) => { const m = byId.value.get(id); return !m || !!labelFor(m, labelId) })
     const skipped = before - ids.length
     if (!ids.length) {
-      if (label) toast(`“${label.name}” isn’t a label of this mailbox`, { description: 'Choose its mailboxes in Settings → Labels & rules.' })
+      if (label) toast(`This mailbox has no label “${label.name}”`)
       return
     }
-    patchLocal(ids, (m) => ({
-      labels: m.labels.includes(labelId) ? m.labels : [...m.labels, labelId],
-      labelDetails: [...(m.labelDetails ?? []).filter((d) => d.labelId !== labelId), { labelId, source: 'manual', confidence: 1 }],
-    }))
+    patchLocal(ids, (m) => {
+      const id = labelFor(m, labelId) ?? labelId
+      return {
+        labels: m.labels.includes(id) ? m.labels : [...m.labels, id],
+        labelDetails: [...(m.labelDetails ?? []).filter((d) => d.labelId !== id), { labelId: id, source: 'manual', confidence: 1 }],
+      }
+    })
     try {
       await inChunks(actionIds(ids), (c) => api.addLabel(c, labelId))
       const name = label?.name ?? labelId
@@ -901,10 +920,10 @@ export const useMailStore = defineStore('mail', () => {
 
   async function removeLabel(ids: string[], labelId: string, quiet = false) {
     if (!ids.length) return
-    patchLocal(ids, (m) => ({
-      labels: m.labels.filter((l) => l !== labelId),
-      labelDetails: (m.labelDetails ?? []).filter((d) => d.labelId !== labelId),
-    }))
+    patchLocal(ids, (m) => {
+      const id = labelFor(m, labelId) ?? labelId
+      return { labels: m.labels.filter((l) => l !== id), labelDetails: (m.labelDetails ?? []).filter((d) => d.labelId !== id) }
+    })
     try {
       await inChunks(actionIds(ids), (c) => api.removeLabel(c, labelId))
       if (!quiet && ids.length > 1) toast(`Label “${settings.labelMap.get(labelId)?.name ?? labelId}” removed from ${rows(ids.length)}`)
@@ -972,7 +991,7 @@ export const useMailStore = defineStore('mail', () => {
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
-    actionIds, currentTargets, actOnTargets, markTargetsRead, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
+    actionIds, snapshot, undoMove, currentTargets, actOnTargets, markTargetsRead, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, suggestAddresses,
   }
 })

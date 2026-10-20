@@ -5,6 +5,8 @@ import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
 import { displayName, listDate } from '@/lib/format'
 import type { Account, Label, MessageSummary } from '@/lib/types'
+import { chipLabelIds } from '@/lib/labelScope'
+import { useAccountsStore } from '@/stores/accounts'
 
 const props = defineProps<{
   message: MessageSummary
@@ -38,9 +40,10 @@ const who = computed(() => {
   return displayName(m.from)
 })
 
+const accounts = useAccountsStore()
 const pills = computed(() => {
   const details = new Map((props.message.labelDetails ?? []).map((d) => [d.labelId, d]))
-  return props.message.labels
+  return chipLabelIds(props.message.labels, props.message.folderIds, (f) => accounts.folderMap.get(f)?.kind)
     .map((id) => ({ label: props.labelMap.get(id), detail: details.get(id) }))
     .filter((x): x is { label: Label; detail: typeof x.detail } => !!x.label)
 })

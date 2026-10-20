@@ -171,6 +171,30 @@ export interface Attendee {
 }
 
 /**
+ * AutoMove is mail an automation (Jev, a rule, a label's "When added")
+ * moved, for the "sorted for you" review.
+ */
+export interface AutoMove {
+    "messageId": string;
+    "accountId": string;
+
+    /**
+     * folder kind: spam | archive | trash
+     */
+    "to": string;
+
+    /**
+     * e.g. "Jev: Junk", "Rule: sender contains “github.com”"
+     */
+    "reason": string;
+    "at": string;
+    "fromName": string;
+    "fromEmail": string;
+    "subject": string;
+    "date": string;
+}
+
+/**
  * BackupResult describes a written backup (ExportBackup).
  */
 export interface BackupResult {
@@ -655,12 +679,21 @@ export interface Label {
     "source": string;
 
     /**
-     * AccountIDs are the mailboxes the label belongs to: it is offered,
-     * counted and applied only there. Provider labels list the accounts
-     * they were imported from. Empty means every mailbox (labels saved
-     * before labels were per mailbox, and the built-in Junk label).
+     * AccountIDs is the one mailbox the label belongs to: it is offered,
+     * counted and applied only there, and editing it never changes another
+     * mailbox (every mailbox has its own labels; labels with the same name
+     * are grouped only for display in the unified view). Empty for the
+     * built-in Junk label, which belongs to every mailbox. A list for
+     * settings from older versions, which shared labels between mailboxes
+     * (config.SplitLabels gives each mailbox its own copy).
      */
     "accountIds": string[] | null;
+
+    /**
+     * Then is what happens to new mail that gets the label: "" (stays
+     * where it is), "archive", "junk" or "trash". Not used for Junk.
+     */
+    "then": string;
 }
 
 /**
@@ -679,7 +712,7 @@ export interface LabelRule {
     "id": string;
 
     /**
-     * "" = every mailbox
+     * the mailbox ("" = every mailbox, only in settings from older versions)
      */
     "accountId": string;
 
@@ -1098,6 +1131,59 @@ export interface SearchUpdated {
     "added": number;
 }
 
+/**
+ * SenderSummary is one sender of a mailbox's folder for "Clean up by
+ * sender": an address, or every address at a domain.
+ */
+export interface SenderSummary {
+    "accountId": string;
+
+    /**
+     * the address, or "@domain" for a domain group
+     */
+    "key": string;
+
+    /**
+     * lower-cased; for a domain group, the newest message's
+     */
+    "address": string;
+
+    /**
+     * display name of the newest message
+     */
+    "name": string;
+
+    /**
+     * the address's domain
+     */
+    "domain": string;
+
+    /**
+     * distinct addresses in the group (1 for an address)
+     */
+    "addresses": number;
+
+    /**
+     * messages
+     */
+    "count": number;
+
+    /**
+     * of which unread
+     */
+    "unread": number;
+
+    /**
+     * date of the newest message
+     */
+    "newest": string;
+
+    /**
+     * the newest message offers List-Unsubscribe
+     */
+    "unsubscribe": boolean;
+}
+
 export interface Settings {
     /**
      * "system" | "light" | "dark"
@@ -1336,6 +1422,12 @@ export interface Settings {
      * (calendar reminders are separate: Account.CalendarMuted).
      */
     "mutedMailboxes": string[] | null;
+
+    /**
+     * HiddenFolders lists folder ids (other folders, like an old "GitHub"
+     * folder) left out of the sidebar. Their mail still shows in search.
+     */
+    "hiddenFolders": string[] | null;
 
     /**
      * AutoLabelAccounts lists the account ids whose new mail Jev labels

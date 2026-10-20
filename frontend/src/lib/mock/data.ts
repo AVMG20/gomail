@@ -20,10 +20,16 @@ export const SEED_LABELS: Label[] = [
   { id: 'updates', name: 'Notifications', description: 'Automated notifications from apps and services (GitHub, calendars, security alerts).', color: '#64748b' },
 ]
 
+/** Every mailbox has its own labels: the first mailbox keeps the seed ids, the others get a suffix
+ *  (like the backend's copies). */
+export const mockLabelId = (id: string, acc: string) => (acc === 'acc_personal' ? id : `${id}-${acc.replace(/^acc_/, '')}`)
+const SEED_MAILBOXES = ['acc_personal', 'acc_work', 'acc_side']
+
 export const PROVIDER_LABELS: Label[] = [
   { id: 'junk', name: 'Junk', description: 'Mail in Spam/Junk (built-in, same id as the real backend)', color: '#a1a1aa', source: 'system', provider: 'gmail' },
-  { id: 'gmail-receipts', name: 'Receipts', description: 'Gmail label', color: '#10b981', source: 'provider', provider: 'gmail', accountIds: ['acc_personal', 'acc_side'] },
-  { id: 'outlook-blue', name: 'Blue category', description: 'Outlook category', color: '#0ea5e9', source: 'provider', provider: 'outlook', accountIds: ['acc_work'] },
+  { id: 'gmail-receipts', name: 'Receipts', description: '', color: '#10b981', source: 'provider', provider: 'gmail', accountIds: ['acc_personal'] },
+  { id: 'gmail-receipts-side', name: 'Receipts', description: '', color: '#10b981', source: 'provider', provider: 'gmail', accountIds: ['acc_side'] },
+  { id: 'outlook-blue', name: 'Blue category', description: '', color: '#0ea5e9', source: 'provider', provider: 'outlook', accountIds: ['acc_work'] },
 ]
 
 export const SEED_SETTINGS: Settings = {
@@ -45,7 +51,7 @@ export const SEED_SETTINGS: Settings = {
   autoClassify: true,
   autoLabelAccounts: ['acc_personal', 'acc_work', 'acc_side'],
   aiCorrectsOff: [],
-  labels: SEED_LABELS.map((l) => ({ ...l, source: 'user' })),
+  labels: SEED_MAILBOXES.flatMap((acc) => SEED_LABELS.map((l) => ({ ...l, id: mockLabelId(l.id, acc), source: 'user', accountIds: [acc] }))),
   importProviderLabels: true,
   notifications: true,
   showInTray: true,
@@ -456,7 +462,7 @@ function stripHtml(html: string): string {
 function providerLabelsFor(t: Tpl, folder: string): string[] {
   const out: string[] = []
   if (folder === 'spam' && t.acc === 'acc_personal') out.push('junk')
-  if (folder === 'label:receipts') out.push('gmail-receipts')
+  if (folder === 'label:receipts') out.push(t.acc === 'acc_side' ? 'gmail-receipts-side' : 'gmail-receipts')
   if (t.acc === 'acc_work' && (t.from.email.includes('daniel@') || t.from.email.includes('ines@'))) out.push('outlook-blue')
   return out
 }
@@ -474,8 +480,8 @@ export function buildMessage(t: Tpl, date: number, threadId?: string, overrides:
     id, accountId: t.acc, remoteId: id.toUpperCase(), threadId: threadId ?? `thr_${id}`, folderIds,
     from: t.from, to: t.to ?? [me[t.acc]], subject: t.subject, snippet: snippetOf(text), date: new Date(date).toISOString(),
     unread: !t.read, starred: !!t.starred, hasAttachments: atts.length > 0,
-    labels: [...(t.cat ? [t.cat] : []), ...(t.more ?? []), ...providerLabelsFor(t, folder)],
-    labelDetails: [...(t.cat ? [t.cat] : []), ...(t.more ?? []), ...providerLabelsFor(t, folder)].map((labelId, i) =>
+    labels: [...[...(t.cat ? [t.cat] : []), ...(t.more ?? [])].map((l) => mockLabelId(l, t.acc)), ...providerLabelsFor(t, folder)],
+    labelDetails: [...[...(t.cat ? [t.cat] : []), ...(t.more ?? [])].map((l) => mockLabelId(l, t.acc)), ...providerLabelsFor(t, folder)].map((labelId, i) =>
       labelId.startsWith('gmail-') || labelId.startsWith('outlook-') ? { labelId, source: 'provider', confidence: 1 } :
       hash(id + labelId) % 3 !== 0
         ? { labelId, source: 'ai', confidence: Math.round((0.62 + (hash(id + 'c' + i) % 37) / 100) * 100) / 100 }

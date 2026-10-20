@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,32 +14,38 @@ import (
 	"github.com/AVMG20/gomail/internal/models"
 )
 
-// labelIndex lets search resolve "label:<name>" to label ids.
+// labelIndex lets search resolve "label:<name>" to label ids. Every
+// mailbox has its own labels, so a name can stand for several ids.
 type labelIndex struct {
 	mu     sync.RWMutex
-	byName map[string]string
+	byName map[string][]string
 }
 
 // SetLabels tells the store the current label definitions (used to resolve
 // "label:" search operators by name or id).
 func (s *Store) SetLabels(labels []models.Label) {
-	m := map[string]string{}
+	m := map[string][]string{}
 	for _, l := range labels {
-		m[strings.ToLower(l.ID)] = l.ID
-		m[strings.ToLower(l.Name)] = l.ID
+		for _, k := range []string{strings.ToLower(l.ID), strings.ToLower(l.Name)} {
+			if !slices.Contains(m[k], l.ID) {
+				m[k] = append(m[k], l.ID)
+			}
+		}
 	}
 	s.labels.mu.Lock()
 	s.labels.byName = m
 	s.labels.mu.Unlock()
 }
 
-func (s *Store) resolveLabel(name string) string {
+// resolveLabels returns the ids of the labels called name (or with that
+// id), in any mailbox.
+func (s *Store) resolveLabels(name string) []string {
 	s.labels.mu.RLock()
 	defer s.labels.mu.RUnlock()
-	if id, ok := s.labels.byName[strings.ToLower(name)]; ok {
-		return id
+	if ids, ok := s.labels.byName[strings.ToLower(name)]; ok {
+		return ids
 	}
-	return strings.ToLower(name)
+	return []string{strings.ToLower(name)}
 }
 
 // where accumulates SQL conditions over the "m" (messages) alias.
@@ -181,13 +188,11 @@ func (s *Store) addSearchFilters(w *where, ps ParsedSearch) {
 		addKindFilter(w, ps.In)
 	}
 	if len(ps.Labels) > 0 {
-		ids := make([]string, len(ps.Labels))
-		for i, l := range ps.Labels {
-			ids[i] = s.resolveLabel(l)
-		}
-		// Each label: operator must match (AND semantics, like Gmail).
-		for _, id := range ids {
-			w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = ?`+s.labelCond()+`)`, id)
+		// Each label: operator must match (AND semantics, like Gmail); a
+		// name matches that label in every mailbox.
+		for _, l := range ps.Labels {
+			ids := s.resolveLabels(l)
+			w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (`+placeholders(len(ids))+`)`+s.labelCond()+`)`, anySlice(ids)...)
 		}
 	}
 	if !ps.After.IsZero() {

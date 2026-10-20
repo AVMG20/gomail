@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// Settings → Labels & rules → Rules. Each rule reads as a sentence:
+// A mailbox's rules (its Settings page → Labels & rules). Each rule reads as a sentence:
 //   When [Sender] contains [text]
-//   in [All mailboxes] → [Add “GitLab”]
-// Rules run on every new mail, without AI. "Apply to existing mail" adds labels to what's downloaded
-// (Junk rules only act on new mail, so mail you took out of Junk stays out).
+//   then [Add “GitLab”]
+// Rules run on the mailbox's new mail, without AI. "Apply to existing mail" adds labels to what's
+// downloaded (Junk rules only act on new mail, so mail you took out of Junk stays out).
 import { computed, ref } from 'vue'
 import { CheckIcon, OctagonAlertIcon, PlayIcon, PlusIcon, Trash2Icon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
@@ -13,49 +13,41 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { Spinner } from '@/components/ui/spinner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import type { LabelRule } from '@/lib/types'
-import { useAccountsStore } from '@/stores/accounts'
 import { useSettingsStore } from '@/stores/settings'
 import SettingSection from './SettingSection.vue'
 
+const props = defineProps<{ accountId: string }>()
 const settings = useSettingsStore()
-const accounts = useAccountsStore()
-const rules = computed(() => settings.settings?.labelRules ?? [])
-// Labels a rule can add: the labels of the rule's mailbox (the built-in Junk label is the
-// "Move to Junk" action instead). A rule for every mailbox only labels mail where its label is used.
-const labelOptions = computed(() => settings.labels.filter((l) => l.id !== 'junk'))
-function labelOptionsFor(r: LabelRule) {
-  return settings.labelsForAccount(r.accountId).filter((l) => l.id !== 'junk')
-}
-/** The rule's label exists and belongs to the rule's mailbox. */
+const allRules = computed(() => settings.settings?.labelRules ?? [])
+const rules = computed(() => allRules.value.filter((r) => r.accountId === props.accountId))
+// Labels a rule can add: the mailbox's own labels (the built-in Junk label is the "Move to Junk"
+// action instead).
+const labelOptions = computed(() => settings.labelsForAccount(props.accountId).filter((l) => l.id !== 'junk'))
+/** The rule's label exists and belongs to the mailbox. */
 function labelValid(r: LabelRule): boolean {
-  return labelOptionsFor(r).some((l) => l.id === r.labelId)
+  return labelOptions.value.some((l) => l.id === r.labelId)
 }
-function setAccount(r: LabelRule, accountId: string) {
-  // A label of another mailbox can't be the rule's label: pick again.
-  const keeps = r.action !== 'label' || settings.labelsForAccount(accountId).some((l) => l.id === r.labelId)
-  patch(r.id, keeps ? { accountId } : { accountId, labelId: '' })
-}
-// Select items can't use "" as a value: these stand in for "every mailbox" and "Junk".
-const ALL = '*'
+// Select items can't use "" as a value: this stands in for "Junk".
 const JUNK = '__junk'
 
 function save(next: LabelRule[], delay = 500) {
   void settings.update({ labelRules: next }, delay)
 }
+// Other mailboxes' rules are kept as they are.
 function patch(id: string, p: Partial<LabelRule>) {
   status.value = ''
-  save(rules.value.map((r) => (r.id === id ? { ...r, ...p } : r)))
+  save(allRules.value.map((r) => (r.id === id ? { ...r, ...p } : r)))
 }
 function add() {
   const firstLabel = labelOptions.value.find((l) => l.source === 'user' || !l.source) ?? labelOptions.value[0]
-  save([...rules.value, {
-    id: `rule_${Date.now().toString(36)}`, accountId: '', field: 'from', contains: '',
+  save([...allRules.value, {
+    id: `rule_${Date.now().toString(36)}`, accountId: props.accountId, field: 'from', contains: '',
     action: firstLabel ? 'label' : 'junk', labelId: firstLabel?.id ?? '',
   }], 0)
 }
 function remove(id: string) {
   status.value = ''
-  save(rules.value.filter((r) => r.id !== id), 0)
+  save(allRules.value.filter((r) => r.id !== id), 0)
 }
 function setAction(r: LabelRule, v: string) {
   patch(r.id, v === JUNK ? { action: 'junk', labelId: '' } : { action: 'label', labelId: v })
@@ -65,10 +57,6 @@ function setAction(r: LabelRule, v: string) {
 function actionValue(r: LabelRule): string | undefined {
   if (r.action === 'junk') return JUNK
   return labelValid(r) ? r.labelId : undefined
-}
-/** A rule scoped to a mailbox that was removed keeps showing what it was. */
-function knownAccount(r: LabelRule): boolean {
-  return !r.accountId || accounts.accounts.some((a) => a.id === r.accountId)
 }
 function complete(r: LabelRule): boolean {
   return !!r.contains.trim() && (r.action === 'junk' || labelValid(r))
@@ -98,7 +86,7 @@ async function applyNow() {
 </script>
 
 <template>
-  <SettingSection title="Rules" description="Label new mail by sender or subject, or move it to Junk. Rules run on every new mail, no AI needed.">
+  <SettingSection title="Rules" description="Label this mailbox’s new mail by sender or subject, or move it to Junk. Rules run on every new mail, no AI needed.">
     <div
       v-for="(r, i) in rules"
       :key="r.id"
@@ -127,16 +115,7 @@ async function applyNow() {
           />
         </div>
         <div class="flex items-center gap-1.5">
-          <span class="text-muted-foreground w-9 shrink-0">in</span>
-          <Select :model-value="r.accountId || ALL" @update:model-value="(v) => setAccount(r, v === ALL ? '' : String(v))">
-            <SelectTrigger size="sm" class="w-48 min-w-0" :aria-label="`Rule ${i + 1}: mailbox`"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem :value="ALL">All mailboxes</SelectItem>
-              <SelectItem v-for="a in accounts.accounts" :key="a.id" :value="a.id">{{ a.email }}</SelectItem>
-              <SelectItem v-if="!knownAccount(r)" :value="r.accountId" disabled>Removed mailbox</SelectItem>
-            </SelectContent>
-          </Select>
-          <span class="text-muted-foreground shrink-0" aria-hidden="true">→</span>
+          <span class="text-muted-foreground w-9 shrink-0">then</span>
           <Select :model-value="actionValue(r)" @update:model-value="(v) => setAction(r, String(v))">
             <SelectTrigger
               size="sm"
@@ -147,10 +126,10 @@ async function applyNow() {
               <SelectValue placeholder="Pick a label" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem v-for="l in labelOptionsFor(r)" :key="l.id" :value="l.id">
+              <SelectItem v-for="l in labelOptions" :key="l.id" :value="l.id">
                 <span class="size-2 shrink-0 rounded-full" :style="{ background: l.color }" aria-hidden="true" /> Add “{{ l.name }}”
               </SelectItem>
-              <SelectSeparator v-if="labelOptionsFor(r).length" />
+              <SelectSeparator v-if="labelOptions.length" />
               <SelectItem :value="JUNK"><OctagonAlertIcon class="size-3.5" aria-hidden="true" /> Move to Junk</SelectItem>
             </SelectContent>
           </Select>

@@ -2,8 +2,12 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 
+/** Tabs of a mailbox's settings page; notifications, labels and ai are older ids that open the
+ *  tab holding them now (General, Sorting, Sorting). */
+export type MailboxTab = 'general' | 'sorting' | 'calendar' | 'notifications' | 'labels' | 'ai'
+
 /** Settings pages: app-wide pages, the mailbox overview ("accounts") and one page per mailbox. */
-export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'mail' | 'labels' | 'notifications' | 'calendar' | 'ai' | 'about' | `mailbox:${string}`
+export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'mail' | 'notifications' | 'calendar' | 'ai' | 'about' | `mailbox:${string}`
 
 function readMainView(): 'mail' | 'calendar' {
   try {
@@ -44,9 +48,17 @@ export const useUiStore = defineStore('ui', () => {
   /** Settings → the mailbox's page: the field to focus when it opens (rail menu Rename / Change color / Remove). */
   const focusAccount = ref<{ id: string; field: 'name' | 'color' | 'remove' } | null>(null)
 
-  function openSettings(tab: SettingsTab = 'general') {
+  /** The tab shown on a mailbox's settings page. */
+  const mailboxTab = ref<MailboxTab>('general')
+
+  /** Opens Settings at a page; a mailbox page opens at mailboxTab (default: General). */
+  function openSettings(tab: SettingsTab = 'general', sub?: MailboxTab) {
     // A mailbox's name, color and removal live on that mailbox's own page.
-    if (tab === 'accounts' && focusAccount.value) tab = `mailbox:${focusAccount.value.id}`
+    if (tab === 'accounts' && focusAccount.value) {
+      tab = `mailbox:${focusAccount.value.id}`
+      sub = 'general'
+    }
+    if (sub) mailboxTab.value = sub
     settingsTab.value = tab
     settingsOpen.value = true
   }
@@ -73,6 +85,6 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     settingsOpen, settingsTab, paletteOpen, shortcutsOpen, addAccountOpen, labelPopoverOpen, bulkLabelOpen, folderSidebarOpen, narrow, focusSearchTick,
-    welcomeTick, mainView, newEventPending, openSettings, anyDialogOpen, focusAccount, guardKeys, keyGuarded,
+    welcomeTick, mainView, newEventPending, openSettings, anyDialogOpen, focusAccount, mailboxTab, guardKeys, keyGuarded,
   }
 })

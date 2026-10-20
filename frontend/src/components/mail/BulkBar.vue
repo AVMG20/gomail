@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount } from 'vue'
-import { ArchiveIcon, InboxIcon, MailIcon, MailOpenIcon, OctagonAlertIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, TagsIcon } from '@lucide/vue'
+import { ArchiveIcon, InboxIcon, MailIcon, MailOpenIcon, OctagonAlertIcon, ShieldBanIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, TagsIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import Tip from '@/components/common/Tip.vue'
 import LabelMenuItems from './LabelMenuItems.vue'
+import { groupByName } from '@/lib/labelScope'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
+import { useSenderRulesStore } from '@/stores/senderRules'
 
 const mail = useMailStore()
 const ai = useAiStore()
 const ui = useUiStore()
 const settings = useSettingsStore()
+const senderRules = useSenderRulesStore()
 
 // "Select all in this view" covers rows that never loaded: go by the view's unread count.
 const anyUnread = computed(() => (mail.selectAllQuery ? mail.viewUnreadCount > 0 : [...mail.selection].some((id) => mail.byId.get(id)?.unread)))
@@ -25,7 +28,7 @@ onBeforeUnmount(() => (ui.bulkLabelOpen = false))
 const presentLabels = computed(() => {
   if (mail.selectAllQuery) return null
   const have = new Set([...mail.selection].flatMap((id) => mail.byId.get(id)?.labels ?? []))
-  return settings.labels.filter((l) => have.has(l.id))
+  return groupByName(settings.labels.filter((l) => have.has(l.id))) // one per name: each mailbox's own goes
 })
 
 // run() clears the selection before fn runs, so toggles capture anyUnread/star at click time.
@@ -54,6 +57,10 @@ function toggleRead(read: boolean) {
     <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="run(mail.trash)"><Trash2Icon /></Button></Tip>
     <Tip v-if="mail.mailbox.kind !== 'spam'" label="Move to Junk" shortcut="!"><Button variant="ghost" size="icon-sm" aria-label="Move to Junk" @click="run(mail.junk)"><OctagonAlertIcon /></Button></Tip>
     <Tip v-else label="Not junk" shortcut="!"><Button variant="ghost" size="icon-sm" aria-label="Not junk" @click="run(mail.notJunk)"><InboxIcon /></Button></Tip>
+    <!-- "All in this view" can't name senders of rows that never loaded: only for picked rows. -->
+    <Tip v-if="senderRules.available() && mail.mailbox.kind !== 'spam' && !mail.selectAllQuery" label="Always send senders to Junk">
+      <Button variant="ghost" size="icon-sm" aria-label="Always send senders to Junk" @click="run(senderRules.junkSender)"><ShieldBanIcon /></Button>
+    </Tip>
     <Tip :label="anyUnread ? 'Mark as read' : 'Mark as unread'" :shortcut="anyUnread ? 'shift+i' : 'u'">
       <Button variant="ghost" size="icon-sm" :aria-label="anyUnread ? 'Mark as read' : 'Mark as unread'" @click="toggleRead(anyUnread)">
         <MailOpenIcon v-if="anyUnread" /><MailIcon v-else />

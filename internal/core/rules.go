@@ -30,8 +30,18 @@ func ruleMatches(r models.LabelRule, accountID, fromName, fromEmail, subject str
 // ruleActions groups what the rules decided: label id -> message ids, and
 // the messages to move to Junk.
 type ruleActions struct {
-	labels map[string][]string
-	junk   []string
+	labels  map[string][]string
+	junk    []string
+	junkWhy map[string]string // message id -> the Junk rule, for the review
+}
+
+// ruleWhy describes a Junk rule for the review.
+func ruleWhy(r models.LabelRule) string {
+	what := "sender"
+	if r.Field == "subject" {
+		what = "subject"
+	}
+	return "Your rule: " + what + " contains “" + strings.TrimSpace(r.Contains) + "”"
 }
 
 // planRules decides what the rules do to the candidates. Junk rules only
@@ -40,7 +50,7 @@ type ruleActions struct {
 // its label to mail of a mailbox the label belongs to (a rule for every
 // mailbox skips the others; so does a rule whose label lost its mailbox).
 func planRules(rules []models.LabelRule, labels []models.Label, cands []store.RuleCandidate, junk bool) ruleActions {
-	act := ruleActions{labels: map[string][]string{}}
+	act := ruleActions{labels: map[string][]string{}, junkWhy: map[string]string{}}
 	byID := make(map[string]models.Label, len(labels))
 	for _, l := range labels {
 		byID[l.ID] = l
@@ -55,6 +65,7 @@ func planRules(rules []models.LabelRule, labels []models.Label, cands []store.Ru
 				if junk && !c.InSpam && !junked[c.ID] {
 					junked[c.ID] = true
 					act.junk = append(act.junk, c.ID)
+					act.junkWhy[c.ID] = ruleWhy(r)
 				}
 			} else if l, ok := byID[r.LabelID]; ok && config.LabelInAccount(l, c.AccountID) {
 				act.labels[r.LabelID] = append(act.labels[r.LabelID], c.ID)
@@ -86,6 +97,7 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 		labels[l.ID] = l
 	}
 	changed := map[string]bool{}
+	moves := labelMoves{}
 	for labelID, ids := range act.labels {
 		l, ok := labels[labelID]
 		if !ok {
@@ -98,6 +110,9 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 		}
 		for _, id := range added {
 			changed[id] = true
+			if !slices.Contains(act.junk, id) { // a Junk rule already moves it
+				moves.add(id, thenKind(l, false), labelWhy(l, false))
+			}
 		}
 		if l.Source == config.LabelSourceProvider {
 			for _, b := range batches(added, ruleBatch) {
@@ -105,19 +120,15 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 			}
 		}
 	}
-	var moveErr error
-	for _, batch := range batches(act.junk, ruleBatch) {
-		if err := s.engine.MoveToKind(batch, models.FolderSpam); err != nil {
-			// The engine put the messages back where they were.
-			slog.Warn("junk rule failed", "err", err)
-			if moveErr == nil {
-				moveErr = err
-			}
-			continue
-		}
-		for _, id := range batch {
-			changed[id] = true
-		}
+	unread, err := s.unreadOf(act.junk)
+	if err != nil {
+		slog.Warn("junk rule: lookup failed", "err", err)
+	}
+	moved, moveErr := s.junkRead(unread, act.junk, "junk rule")
+	s.logAutoMoves(moved, func(id string) (string, string) { return models.FolderSpam, act.junkWhy[id] })
+	moved = append(moved, s.applyLabelMoves(moves, "label action")...)
+	for _, id := range moved {
+		changed[id] = true
 	}
 	if len(changed) > 0 {
 		ids := make([]string, 0, len(changed))
@@ -127,6 +138,63 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 		s.messagesChanged(ids)
 	}
 	return len(changed), moveErr
+}
+
+// unreadOf returns the unread messages among ids.
+func (s *Service) unreadOf(ids []string) ([]string, error) {
+	var out []string
+	for _, b := range batches(ids, ruleBatch) {
+		sums, err := s.store.Summaries(b)
+		if err != nil {
+			return out, err
+		}
+		for _, m := range sums {
+			if m.Unread {
+				out = append(out, m.ID)
+			}
+		}
+	}
+	return out, nil
+}
+
+// junkRead marks unread mail read and moves the messages to Junk, in
+// batches under the engine's bulk limit, so junked mail doesn't count as
+// new (like mail Jev junks). Read first: Outlook gives moved mail new ids.
+// Mail a failed move left outside Junk is unread again, so it still
+// notifies and counts. It returns the moved ids and the first move error
+// (the engine put those messages back where they were).
+func (s *Service) junkRead(unread, move []string, what string) ([]string, error) {
+	for _, b := range batches(unread, ruleBatch) {
+		if err := s.engine.MarkRead(b, true); err != nil {
+			slog.Warn(what+": mark read failed", "err", err)
+		}
+	}
+	var moved []string
+	var moveErr error
+	for _, b := range batches(move, ruleBatch) {
+		if err := s.engine.MoveToKind(b, models.FolderSpam); err != nil {
+			slog.Warn(what+" failed", "err", err)
+			if moveErr == nil {
+				moveErr = err
+			}
+			continue
+		}
+		moved = append(moved, b...)
+	}
+	if moveErr != nil && len(unread) > 0 {
+		var back []string
+		if cands, err := s.store.RuleCandidates(unread); err == nil {
+			for _, c := range cands {
+				if !c.InSpam {
+					back = append(back, c.ID)
+				}
+			}
+		}
+		for _, b := range batches(back, ruleBatch) {
+			_ = s.engine.MarkRead(b, false)
+		}
+	}
+	return moved, moveErr
 }
 
 // applyRules runs the label rules on newly synced mail, before it is

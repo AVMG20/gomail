@@ -15,6 +15,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as core$0 from "./internal/core/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as models$0 from "./internal/models/models.js";
 
 /**
@@ -41,6 +44,14 @@ export function ApplyLabelRules(): $CancellablePromise<number> {
 
 export function Archive(ids: string[] | null): $CancellablePromise<void> {
     return $Call.ByID(1112366144, ids);
+}
+
+/**
+ * AutoMoves lists what automations (Jev, rules, label actions) moved into a
+ * folder kind (spam, archive, trash) in the last hours ("" = every mailbox).
+ */
+export function AutoMoves(accountID: string, kind: string, hours: number): $CancellablePromise<models$0.AutoMove[] | null> {
+    return $Call.ByID(1701558133, accountID, kind, hours);
 }
 
 /**
@@ -256,6 +267,24 @@ export function ImproveGrammar(text: string): $CancellablePromise<string> {
 }
 
 /**
+ * JunkSender sends a sender's mail in one mailbox to Junk from now on (a
+ * junk rule) and moves the given messages plus the sender's inbox mail
+ * there, marked read. scope is "address" or "domain".
+ */
+export function JunkSender(accountID: string, address: string, scope: string, ids: string[] | null): $CancellablePromise<core$0.JunkSenderResult> {
+    return $Call.ByID(3847034177, accountID, address, scope, ids);
+}
+
+/**
+ * LabelSender labels a sender's mail in one mailbox from now on (a label
+ * rule) and labels the sender's mail already there. scope is "address" or
+ * "domain".
+ */
+export function LabelSender(accountID: string, address: string, scope: string, labelID: string): $CancellablePromise<core$0.LabelSenderResult> {
+    return $Call.ByID(2617291385, accountID, address, scope, labelID);
+}
+
+/**
  * ListAIModels returns all OpenRouter models (cached for an hour).
  */
 export function ListAIModels(): $CancellablePromise<models$0.AIModel[] | null> {
@@ -324,6 +353,14 @@ export function MoveToJunk(ids: string[] | null): $CancellablePromise<void> {
 }
 
 /**
+ * NotJunk moves messages back to their inbox and returns the junk rules
+ * that still match their senders.
+ */
+export function NotJunk(ids: string[] | null): $CancellablePromise<core$0.NotJunkResult> {
+    return $Call.ByID(3517994825, ids);
+}
+
+/**
  * OpenExternalURL opens an http(s)/mailto link in the system browser.
  */
 export function OpenExternalURL(url: string): $CancellablePromise<void> {
@@ -364,6 +401,20 @@ export function RemoveAccount(accountID: string): $CancellablePromise<void> {
  */
 export function RemoveLabel(ids: string[] | null, labelID: string): $CancellablePromise<void> {
     return $Call.ByID(1816407828, ids, labelID);
+}
+
+/**
+ * RemoveRules deletes label/junk rules by id ("Stop junking", Undo).
+ */
+export function RemoveRules(ruleIDs: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(1780126145, ruleIDs);
+}
+
+/**
+ * ReorderAccounts sets the order of the mailboxes (account ids in the new order).
+ */
+export function ReorderAccounts(ids: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(3281418817, ids);
 }
 
 /**
@@ -420,6 +471,14 @@ export function SearchMessages(q: models$0.SearchQuery): $CancellablePromise<mod
  */
 export function SendMessage(req: models$0.ComposeRequest): $CancellablePromise<void> {
     return $Call.ByID(1323329519, req);
+}
+
+/**
+ * SenderMessageIDs lists one sender's mail (an address, or "@domain") in a
+ * mailbox's folder kind ("" = inbox), for "Archive all" in Clean up.
+ */
+export function SenderMessageIDs(accountID: string, folderKind: string, sender: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2365441248, accountID, folderKind, sender);
 }
 
 /**
@@ -489,6 +548,15 @@ export function SyncNow(accountID: string): $CancellablePromise<void> {
  */
 export function TestOpenRouter(): $CancellablePromise<void> {
     return $Call.ByID(2351850275);
+}
+
+/**
+ * TopSenders lists who fills a mailbox's folder kind ("" = inbox), the most
+ * mail first, per address or per domain (groupBy "domain"); accountID ""
+ * covers every mailbox. For "Clean up by sender".
+ */
+export function TopSenders(accountID: string, folderKind: string, groupBy: string, limit: number): $CancellablePromise<models$0.SenderSummary[] | null> {
+    return $Call.ByID(3329227757, accountID, folderKind, groupBy, limit);
 }
 
 export function Trash(ids: string[] | null): $CancellablePromise<void> {

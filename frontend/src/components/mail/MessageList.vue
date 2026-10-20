@@ -22,6 +22,7 @@ import { hasMethod } from '@/lib/api'
 import ReauthBanner from './ReauthBanner.vue'
 import { defineAsyncComponent, h } from 'vue'
 const BulkBar = defineAsyncComponent(() => import('./BulkBar.vue'))
+const AutoMovesBar = defineAsyncComponent(() => import('./AutoMovesBar.vue'))
 const RowContextMenu = defineAsyncComponent(() => import('./RowContextMenu.vue'))
 const FolderActions = defineAsyncComponent(() => import('./FolderActions.vue'))
 // Static stand-in while the (popover-heavy) filter chunk loads.
@@ -353,6 +354,7 @@ const emptyState = computed(() => {
         <button type="button" class="text-muted-foreground hover:text-foreground ml-1 text-xs" @click="mail.clearLabelFilter()">Clear</button>
       </div>
     </header>
+    <AutoMovesBar />
 
     <ReauthBanner />
 
