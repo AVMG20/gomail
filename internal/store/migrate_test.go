@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -70,10 +71,12 @@ func TestMigrateFromEveryVersion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for i, m := range migrations[:v] {
-				if _, err := db.Exec(m); err != nil {
+			for i := range migrations[:v] {
+				tx, _ := db.Begin()
+				if err := applyMigration(context.Background(), tx, i); err != nil {
 					t.Fatalf("migration %d: %v", i+1, err)
 				}
+				tx.Commit()
 			}
 			stmts := []string{
 				fmt.Sprintf(`PRAGMA user_version = %d`, v),
@@ -139,6 +142,64 @@ func TestMigrateFromEveryVersion(t *testing.T) {
 			row, _ := s.Calendar(CalendarID("a", "c"))
 			if _, err := s.ApplyEvents(row, EventChanges{Upserts: []calendar.Event{{RemoteID: "e", Title: "E", Start: time.Now(), End: time.Now().Add(time.Hour), ETag: "x"}}}); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// devMigration7 is the migration 7 of an early development build
+// (3f83935): it dropped calendar_enabled and had no calendar_muted.
+const devMigration7 = `
+ALTER TABLE calendars ADD COLUMN video_provider TEXT NOT NULL DEFAULT '';
+ALTER TABLE accounts DROP COLUMN calendar_enabled;
+`
+
+// TestUpgradeFromV7 upgrades databases at schema 7, both as committed and
+// from the early development build, and uses the account switches.
+func TestUpgradeFromV7(t *testing.T) {
+	for name, v7 := range map[string]string{"committed": migrations[6], "dev build": devMigration7} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "v7.db")
+			db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, m := range append(append([]string{}, migrations[:6]...), v7) {
+				if _, err := db.Exec(m); err != nil {
+					t.Fatalf("migration %d: %v", i+1, err)
+				}
+			}
+			for _, q := range []string{`PRAGMA user_version = 7`,
+				`INSERT INTO accounts(id, provider, email, created_at, calendar_consent) VALUES('old', 'gmail', 'old@x.com', 1, 1)`} {
+				if _, err := db.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db.Close()
+			s, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var version int
+			s.db.QueryRow(`PRAGMA user_version`).Scan(&version)
+			if version != len(migrations) {
+				t.Fatalf("version %d", version)
+			}
+			if a, err := s.Account("old"); err != nil || !a.CalendarConsent || !a.CalendarEnabled || a.CalendarMuted {
+				t.Fatalf("existing account %+v %v", a, err)
+			}
+			if err := s.InsertAccount(models.Account{ID: "new", Provider: models.ProviderOutlook, Email: "new@x.com", CalendarEnabled: true}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetCalendarMuted("new", true); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetCalendarEnabled("new", false); err != nil {
+				t.Fatal(err)
+			}
+			if a, _ := s.Account("new"); a.CalendarEnabled || !a.CalendarMuted {
+				t.Fatalf("new account %+v", a)
 			}
 		})
 	}

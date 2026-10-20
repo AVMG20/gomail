@@ -167,6 +167,14 @@ describe('calendar choice and visibility', () => {
     hidden.set('g-main', { ...cals[1], visible: false })
     expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g' }), hidden, true)).toBe(false)
   })
+  it('leaves disabled mailboxes out of the picker, the default and the view', () => {
+    const accts = [{ id: 'g', calendarEnabled: false }, { id: 'o' }]
+    expect(editableCalendars(cals, accts).map((c) => c.id)).toEqual(['o-main'])
+    expect(defaultCalendarId(cals, accts, 'g-main')).toBe('o-main')
+    const calMap = new Map(cals.map((c) => [c.id, c]))
+    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g' }), calMap, true, new Set(['g']))).toBe(false)
+    expect(isEventShown(ev({ calendarId: 'o-main', accountId: 'o' }), calMap, true, new Set(['g']))).toBe(true)
+  })
   it('addDays keeps the wall clock', () => {
     expect(addDays(fromYmd('2026-10-24', '09:00'), 2).getHours()).toBe(9)
   })

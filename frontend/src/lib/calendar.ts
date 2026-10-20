@@ -393,8 +393,34 @@ export function formatEventWhen(ev: Pick<CalendarEvent, 'start' | 'end' | 'allDa
     if (last <= s) return `${day(s)} · All day`
     return `${day(s)} – ${day(last)}`
   }
+  if (e.getTime() <= s.getTime()) return `${day(s)} · ${formatClock(s, locale)}`
   if (toYmd(s) === toYmd(e)) return `${day(s)} · ${formatClock(s, locale)} – ${formatClock(e, locale)}`
   return `${day(s)} ${formatClock(s, locale)} – ${day(e)} ${formatClock(e, locale)}`
+}
+
+/**
+ * The same times on the event's own clock, when it was scheduled in another
+ * time zone than ours ("09:00 – 10:00 New York time"); "" when the zones agree
+ * at that moment, for all-day events, or when the zone is unknown.
+ */
+export function formatEventWhenInZone(ev: Pick<CalendarEvent, 'start' | 'end' | 'allDay' | 'timeZone'>, locale = LOCALE(), here = localTimeZone()): string {
+  const tz = ev.timeZone
+  if (ev.allDay || !tz || tz === here || tz === 'UTC' && !here) return ''
+  const s = new Date(ev.start)
+  const e = new Date(ev.end || ev.start)
+  if (Number.isNaN(s.getTime())) return ''
+  try {
+    if (zoneOffsetMinutes(tz, s) === zoneOffsetMinutes(here || 'UTC', s)) return ''
+    const h12 = localeUses12h(locale)
+    const clock = (d: Date) => d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: h12, timeZone: tz })
+    const day = (d: Date) => d.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz })
+    const city = (tz.split('/').pop() ?? tz).replace(/_/g, ' ')
+    const sameDay = day(s) === day(e)
+    const range = e.getTime() <= s.getTime() ? clock(s) : sameDay ? `${clock(s)} – ${clock(e)}` : `${clock(s)} – ${day(e)} ${clock(e)}`
+    return `${day(s)} · ${range} ${city} time`
+  } catch {
+    return ''
+  }
 }
 
 export function formatReminder(min: number): string {

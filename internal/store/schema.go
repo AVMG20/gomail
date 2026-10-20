@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 )
 
 // migrations are applied in order; PRAGMA user_version records how many ran.
@@ -347,6 +348,61 @@ ALTER TABLE events ADD COLUMN etag TEXT NOT NULL DEFAULT '';
 ALTER TABLE calendars ADD COLUMN video_provider TEXT NOT NULL DEFAULT '';
 ALTER TABLE accounts ADD COLUMN calendar_muted INTEGER NOT NULL DEFAULT 0; -- no event reminders
 `,
+	// 8: make sure the per-account calendar switches exist. A development
+	// build shipped a different migration 7 that dropped calendar_enabled
+	// and didn't add calendar_muted; goMigrations[8] repairs such databases.
+	`SELECT 1;`,
+}
+
+// goMigrations run after the SQL of the migration with the same number
+// (1-based), for changes SQL can't express conditionally.
+var goMigrations = map[int]func(ctx context.Context, tx *sql.Tx) error{
+	8: func(ctx context.Context, tx *sql.Tx) error {
+		return ensureColumns(ctx, tx, "accounts", map[string]string{
+			"calendar_enabled": "INTEGER NOT NULL DEFAULT 1",
+			"calendar_muted":   "INTEGER NOT NULL DEFAULT 0",
+		})
+	},
+}
+
+// ensureColumns adds the columns of a table that are missing.
+func ensureColumns(ctx context.Context, tx *sql.Tx, table string, cols map[string]string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			have[n] = true
+		}
+	}
+	rows.Close()
+	names := make([]string, 0, len(cols))
+	for n := range cols {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if !have[n] {
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+n+` `+cols[n]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// applyMigration runs migration i (0-based) in tx.
+func applyMigration(ctx context.Context, tx *sql.Tx, i int) error {
+	if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
+		return err
+	}
+	if f := goMigrations[i+1]; f != nil {
+		return f(ctx, tx)
+	}
+	return nil
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -359,7 +415,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	for i := version; i < len(migrations); i++ {
 		err := s.tx(ctx, func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
+			if err := applyMigration(ctx, tx, i); err != nil {
 				return fmt.Errorf("migration %d: %w", i+1, err)
 			}
 			_, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, i+1))
