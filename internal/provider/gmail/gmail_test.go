@@ -393,3 +393,26 @@ func TestLargeMessagesUseUploadEndpoint(t *testing.T) {
 		t.Fatal("large message went through the JSON endpoint")
 	}
 }
+
+func TestQuotaCost(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+		want         float64
+	}{
+		{"GET", "profile", 1},
+		{"GET", "labels/INBOX", 1},
+		{"GET", "history?startHistoryId=1", 2},
+		{"GET", "messages?maxResults=500", 5},
+		{"GET", "messages/abc?format=metadata", 5},
+		{"POST", "messages/batchModify", 50},
+		{"POST", "messages/send", 100},
+		{"POST", "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart", 100},
+		{"POST", "drafts", 10},
+		{"PUT", "drafts/d1", 15},
+		{"DELETE", "drafts/d1", 10},
+	} {
+		if got := quotaCost(tc.method, tc.path); got != tc.want {
+			t.Errorf("%s %s = %v, want %v", tc.method, tc.path, got, tc.want)
+		}
+	}
+}

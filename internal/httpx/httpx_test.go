@@ -166,3 +166,51 @@ func TestPostIsNotRepeatedAfterAmbiguousFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestPerMinuteQuotaWaitsOutTheWindow(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) <= 3 {
+			w.WriteHeader(403)
+			w.Write([]byte(`{"error":{"code":403,"message":"Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com' for consumer 'project_number:1'.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED"}]}}`))
+			return
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	var slept time.Duration
+	c := &Client{BaseURL: srv.URL, Service: "Gmail", Sleep: func(_ context.Context, d time.Duration) error { slept += d; return nil }}
+	if err := c.JSON(context.Background(), "GET", "/", nil, nil); err != nil || calls != 4 {
+		t.Fatalf("%v calls=%d", err, calls)
+	}
+	if slept < 35*time.Second {
+		t.Errorf("waited only %v for a per-minute quota", slept)
+	}
+	// Once retries run out, the error reads as rate limiting, not as denied access.
+	calls = -100
+	c.MaxRetries = -1
+	err := c.JSON(context.Background(), "GET", "/", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "rate limiting") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestBudgetPacesSpending(t *testing.T) {
+	b := NewBudget(100, 50)
+	var slept time.Duration
+	sleep := func(_ context.Context, d time.Duration) error { slept += d; return nil }
+	for range 10 {
+		if err := b.Take(context.Background(), 5, sleep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if slept != 0 {
+		t.Fatalf("burst should not wait, slept %v", slept)
+	}
+	if err := b.Take(context.Background(), 50, sleep); err != nil {
+		t.Fatal(err)
+	}
+	if slept < 450*time.Millisecond || slept > 550*time.Millisecond {
+		t.Fatalf("slept %v, want ~500ms", slept)
+	}
+}

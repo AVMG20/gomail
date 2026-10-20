@@ -371,8 +371,10 @@ func HumanError(acct models.Account, err error) string {
 	case IsNetworkError(err):
 		return fmt.Sprintf("Can't reach %s. Check your internet connection.", service)
 	}
+	var apiErr *httpx.Error
+	quota := errors.As(err, &apiErr) && apiErr.Retryable() && apiErr.Status < 500
 	switch s := httpx.StatusOf(err); {
-	case s == 429:
+	case s == 429 || quota:
 		return fmt.Sprintf("%s is limiting requests right now. gomail will try again later.", service)
 	case s >= 500:
 		return fmt.Sprintf("%s is having problems (HTTP %d). gomail will try again later.", service, s)

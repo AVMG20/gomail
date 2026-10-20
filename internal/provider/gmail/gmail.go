@@ -32,6 +32,14 @@ const AllMail = "ALL_MAIL"
 // Concurrency for metadata fetches.
 const workers = 8
 
+// Gmail allows 15,000 quota units per user per minute. Pacing at 200 units/s
+// with a 1,000 unit burst stays under 13,000 in any minute, leaving room for
+// a second gomail instance or another client of the same project.
+const (
+	quotaPerSecond = 200
+	quotaBurst     = 1000
+)
+
 var systemFolders = []struct{ id, name, kind string }{
 	{"INBOX", "Inbox", models.FolderInbox},
 	{"STARRED", "Starred", models.FolderStarred},
@@ -59,11 +67,40 @@ func New(tokens httpx.TokenSource, base string) *Client {
 	if base == "" {
 		base = BaseURL
 	}
-	return &Client{
+	c := &Client{
 		api:    &httpx.Client{BaseURL: base + "/gmail/v1/users/me", Tokens: tokens, Service: "Gmail"},
 		base:   base,
 		labels: map[string]gLabel{},
 	}
+	budget := httpx.NewBudget(quotaPerSecond, quotaBurst)
+	c.api.Throttle = func(ctx context.Context, r httpx.Request) error {
+		return budget.Take(ctx, quotaCost(r.Method, r.Path), c.api.Sleep)
+	}
+	return c
+}
+
+// quotaCost is the Gmail quota cost of a call, per
+// https://developers.google.com/workspace/gmail/api/reference/quota.
+func quotaCost(method, path string) float64 {
+	if i := strings.Index(path, "/users/me/"); i >= 0 {
+		path = path[i+len("/users/me/"):] // multipart upload URL
+	}
+	path, _, _ = strings.Cut(path, "?")
+	switch {
+	case path == "profile" || (strings.HasPrefix(path, "labels") && method == http.MethodGet):
+		return 1
+	case path == "history":
+		return 2
+	case path == "messages/batchModify":
+		return 50
+	case path == "messages/send" || path == "drafts/send":
+		return 100
+	case path == "drafts" && method == http.MethodPost, strings.HasPrefix(path, "drafts/") && method == http.MethodDelete:
+		return 10
+	case strings.HasPrefix(path, "drafts/") && method == http.MethodPut:
+		return 15
+	}
+	return 5 // messages.list/get/trash, attachments, drafts.list, labels.create
 }
 
 // SetSleep replaces the backoff sleeper (tests).

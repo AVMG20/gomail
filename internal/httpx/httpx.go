@@ -46,6 +46,9 @@ type Client struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 	// RetryStatus decides whether a status is retryable (default: 429, 5xx).
 	RetryStatus func(int) bool
+	// Throttle, if set, runs before every attempt (retries included), e.g.
+	// to stay under a per-user quota.
+	Throttle func(ctx context.Context, r Request) error
 }
 
 // DefaultHTTPClient has sane timeouts for API calls.
@@ -64,11 +67,23 @@ type Error struct {
 // retryableReasons are quota errors Google reports as HTTP 403.
 var retryableReasons = map[string]bool{
 	"rateLimitExceeded": true, "userRateLimitExceeded": true, "backendError": true, "concurrentLimitExceeded": true,
+	"RATE_LIMIT_EXCEEDED": true,
 }
 
 // Retryable reports whether the error is a transient quota/rate error.
 func (e *Error) Retryable() bool {
-	return retryableReasons[e.Reason] || (e.Status == http.StatusForbidden && strings.EqualFold(e.Code, "ApplicationThrottled"))
+	return retryableReasons[e.Reason] || e.rateQuota() || (e.Status == http.StatusForbidden && strings.EqualFold(e.Code, "ApplicationThrottled"))
+}
+
+// rateQuota reports a Google per-minute/per-user quota error. Its window is
+// a minute, so it needs a longer backoff than a transient server error.
+func (e *Error) rateQuota() bool {
+	switch e.Reason {
+	case "rateLimitExceeded", "userRateLimitExceeded", "RATE_LIMIT_EXCEEDED":
+		return true
+	}
+	// "Quota exceeded for quota metric '...' and limit 'Units per minute per user'"
+	return strings.HasPrefix(e.Message, "Quota exceeded") && strings.Contains(e.Message, "per minute")
 }
 
 func (e *Error) Error() string {
@@ -80,6 +95,9 @@ func (e *Error) Error() string {
 	if msg == "" {
 		msg = http.StatusText(e.Status)
 	}
+	if e.Status != http.StatusUnauthorized && e.Retryable() {
+		return fmt.Sprintf("%s is rate limiting requests, please try again shortly", svc)
+	}
 	switch e.Status {
 	case http.StatusUnauthorized:
 		return fmt.Sprintf("%s rejected the credentials (%s)", svc, msg)
@@ -88,9 +106,6 @@ func (e *Error) Error() string {
 	case http.StatusNotFound:
 		return fmt.Sprintf("%s: not found (%s)", svc, msg)
 	case http.StatusTooManyRequests:
-		return fmt.Sprintf("%s is rate limiting requests, please try again shortly", svc)
-	}
-	if e.Retryable() {
 		return fmt.Sprintf("%s is rate limiting requests, please try again shortly", svc)
 	}
 	if e.Status >= 500 {
@@ -193,6 +208,11 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, error) {
 		for k, v := range r.Headers {
 			req.Header.Set(k, v)
 		}
+		if c.Throttle != nil {
+			if err := c.Throttle(ctx, r); err != nil {
+				return nil, err
+			}
+		}
 		if c.Tokens != nil {
 			tok, err := c.Tokens.AccessToken(ctx)
 			if err != nil {
@@ -225,6 +245,9 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, error) {
 		safeToRetry := r.idempotent() || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || apiErr.Retryable()
 		if (retryable(resp.StatusCode) || apiErr.Retryable()) && safeToRetry && attempt < maxRetries {
 			d := backoff(attempt, apiErr.RetryAfter)
+			if apiErr.rateQuota() && apiErr.RetryAfter == 0 {
+				d = quotaBackoff(attempt)
+			}
 			slog.Debug("retrying request", "service", c.service(), "status", resp.StatusCode, "wait", d)
 			if serr := sleep(ctx, d); serr != nil {
 				return nil, serr
@@ -248,6 +271,13 @@ func backoff(attempt int, retryAfter time.Duration) time.Duration {
 	}
 	d := time.Duration(500<<attempt) * time.Millisecond
 	d = min(d, 30*time.Second)
+	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+}
+
+// quotaBackoff waits out a per-minute quota window: 5-10s, 10-20s, 20-40s,
+// then 30-60s, so five retries span well over a minute.
+func quotaBackoff(attempt int) time.Duration {
+	d := min(10*time.Second<<attempt, time.Minute)
 	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 }
 
@@ -277,6 +307,9 @@ func readError(resp *http.Response, service string) *Error {
 			Errors  []struct {
 				Reason string `json:"reason"`
 			} `json:"errors"`
+			Details []struct {
+				Reason string `json:"reason"`
+			} `json:"details"`
 		}
 		var str string
 		switch {
@@ -284,6 +317,11 @@ func readError(resp *http.Response, service string) *Error {
 			e.Message = obj.Message
 			if len(obj.Errors) > 0 {
 				e.Reason = obj.Errors[0].Reason
+			}
+			for _, d := range obj.Details {
+				if e.Reason == "" && d.Reason != "" {
+					e.Reason = d.Reason // google.rpc.ErrorInfo
+				}
 			}
 			if s, ok := obj.Code.(string); ok {
 				e.Code = s
