@@ -2,8 +2,9 @@ name: Release
 
 # Builds the desktop app for Linux, macOS and Windows and attaches the
 # packages to the GitHub release. Push a version tag (git tag v1.0.0 && git
-# push origin v1.0.0: the release is created with generated notes) or
-# publish a release to run it, or start it manually for an existing tag.
+# push origin v1.0.0: the release is created with generated notes), publish
+# a release, or start it by hand with a tag (a new one is created at the
+# chosen branch's latest commit).
 #
 # Optional repository secrets bake default OAuth client IDs into the build so
 # end users don't have to create their own:
@@ -17,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build and upload to (e.g. v1.0.0)
+        description: Version tag to release (e.g. v1.0.0); a new tag is made at the chosen branch's latest commit
         required: true
 
 permissions:
@@ -36,21 +37,25 @@ concurrency:
 jobs:
   release:
     name: Create release
-    if: github.event_name == 'push'
+    if: github.event_name != 'release'
     runs-on: ubuntu-24.04
     steps:
       - name: Create the release if it doesn't exist
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
-            gh release create "$TAG" --repo "${{ github.repository }}" --verify-tag --title "$TAG" --generate-notes \
-              $([[ "$TAG" == *-* ]] && echo --prerelease) # v1.2.0-beta.1: not offered as an update
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 && exit 0
+          # A pushed tag must exist; started by hand, a missing tag is made at this commit.
+          where=(--verify-tag)
+          [ "${{ github.event_name }}" = workflow_dispatch ] && where=(--target "${{ github.sha }}")
+          pre=()
+          [[ "$TAG" == *-* ]] && pre=(--prerelease) # v1.2.0-beta.1: not offered as an update
+          gh release create "$TAG" --repo "${{ github.repository }}" "${where[@]}" "${pre[@]}" --title "$TAG" --generate-notes
 
   build:
     name: Build (${{ matrix.name }})
     needs: release
-    # Also when the release job was skipped (release published, or started by hand).
+    # Also when the release job was skipped (a release published in the UI).
     if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
