@@ -46,13 +46,10 @@ export const useCalendarStore = defineStore('calendar', () => {
   const calendarMap = computed(() => new Map(calendars.value.map((c) => [c.id, c])))
   const weekStart = computed(() => effectiveWeekStart(settings.settings?.calendarWeekStart))
   const showDeclined = computed(() => !!settings.settings?.calendarShowDeclined)
-  const accountMap = computed(() => new Map(accounts.accounts.map((a) => [a.id, a])))
 
-  const visibleEvents = computed(() =>
-    events.value.filter((e) => isEventShown(e, calendarMap.value, accountMap.value, showDeclined.value)),
-  )
-  const writableCalendars = computed(() => editableCalendars(calendars.value, accounts.accounts.filter((a) => a.calendarConsent !== false)))
-  const defaultCalendar = computed(() => defaultCalendarId(calendars.value, accounts.accounts.filter((a) => a.calendarConsent !== false), lastCalendarId.value))
+  const visibleEvents = computed(() => events.value.filter((e) => isEventShown(e, calendarMap.value, showDeclined.value)))
+  const writableCalendars = computed(() => editableCalendars(calendars.value, accounts.accounts))
+  const defaultCalendar = computed(() => defaultCalendarId(calendars.value, accounts.accounts, lastCalendarId.value))
 
   // The backend leaves declined invitations out unless asked: refetch when the setting flips.
   watch(showDeclined, () => void fetchEvents())
@@ -112,17 +109,17 @@ export const useCalendarStore = defineStore('calendar', () => {
     }
   }
 
-  async function setAccountEnabled(accountId: string, enabled: boolean) {
-    const a = accounts.accounts.find((x) => x.id === accountId)
-    if (!a) return
-    const was = a.calendarEnabled
-    a.calendarEnabled = enabled
+  /** Alt/Option-click: show only this calendar (or everything again when it already is the only one). */
+  async function soloCalendar(id: string) {
+    const onlyThis = calendars.value.every((c) => c.visible === (c.id === id))
+    const target = new Map(calendars.value.map((c) => [c.id, onlyThis ? true : c.id === id]))
+    const changes = calendars.value.filter((c) => c.visible !== target.get(c.id))
+    calendars.value = calendars.value.map((c) => ({ ...c, visible: target.get(c.id)! }))
     try {
-      await api.setAccountCalendarEnabled(accountId, enabled)
-      if (enabled) void fetchEvents()
+      await Promise.all(changes.map((c) => api.setCalendarVisible(c.id, target.get(c.id)!)))
     } catch (e) {
-      a.calendarEnabled = was
-      toast.error('Couldn’t update the mailbox', { description: errorMessage(e) })
+      toast.error('Couldn’t update the calendars', { description: errorMessage(e) })
+      void loadCalendars()
     }
   }
 
@@ -170,10 +167,18 @@ export const useCalendarStore = defineStore('calendar', () => {
         replaceLocal(temp.id, null)
         void fetchEvents() // occurrences come from the backend
       } else replaceLocal(temp.id, created)
-      toast.success('Event created', {
-        description: created.title,
-        action: { label: 'Undo', onClick: () => void remove(created, 'series', true) },
-      })
+      const target = calendarMap.value.get(created.calendarId) ?? cal
+      if (target && !target.visible) {
+        toast(`Event created in ${target.name}, which is hidden. Show it?`, {
+          description: created.title,
+          action: { label: 'Show', onClick: () => void setCalendarVisible(target.id, true) },
+        })
+      } else {
+        toast.success('Event created', {
+          description: created.title,
+          action: { label: 'Undo', onClick: () => void remove(created, 'series', true) },
+        })
+      }
       return created
     } catch (e) {
       replaceLocal(temp.id, null)
@@ -267,6 +272,6 @@ export const useCalendarStore = defineStore('calendar', () => {
   return {
     calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, openEventId, canEditEvent, available, calendarMap, weekStart, showDeclined,
     visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible,
-    setAccountEnabled, connect, create, update, move, remove, respond,
+    soloCalendar, connect, create, update, move, remove, respond,
   }
 })

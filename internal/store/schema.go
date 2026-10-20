@@ -345,6 +345,8 @@ ALTER TABLE events ADD COLUMN etag TEXT NOT NULL DEFAULT '';
 	// 7: video call support per calendar
 	`
 ALTER TABLE calendars ADD COLUMN video_provider TEXT NOT NULL DEFAULT '';
+-- The per-account calendar switch was replaced by per-calendar visibility.
+ALTER TABLE accounts DROP COLUMN calendar_enabled;
 `,
 }
 

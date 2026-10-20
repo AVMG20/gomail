@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  addDays, buildRRule, defaultCalendarId, effectiveWeekStart, expandOccurrences, fromYmd, isEventShown, localeUses12h, localeWeekStart,
+  addDays, buildRRule, defaultCalendarId, editableCalendars, effectiveWeekStart, expandOccurrences, fromYmd, isEventShown, localeUses12h, localeWeekStart,
   needsScopeChoice, overlaps, parseRRule, scopeTargetId, seriesMoveInput, shiftTimes, stepDate, toRfc3339, toYmd, utcToZoned, viewRange,
   zonedToUtc, zoneOffsetMinutes,
 } from '@/lib/calendar'
@@ -144,24 +144,28 @@ describe('calendar choice and visibility', () => {
     { id: 'g-main', accountId: 'g', name: 'Alex', color: '#f00', primary: true, canEdit: true, visible: true },
     { id: 'o-main', accountId: 'o', name: 'Calendar', color: '#00f', primary: true, canEdit: true, visible: true },
   ]
-  it('defaults to the last used, else an enabled primary calendar', () => {
+  it('defaults to the last used visible calendar, else a visible primary', () => {
     expect(defaultCalendarId(cals, [{ id: 'g' }, { id: 'o' }], 'o-main')).toBe('o-main')
-    expect(defaultCalendarId(cals, [{ id: 'g', calendarEnabled: false }, { id: 'o' }], 'g-main')).toBe('o-main')
+    expect(defaultCalendarId(cals, [{ id: 'g', calendarConsent: false }, { id: 'o' }], 'g-main')).toBe('o-main')
     expect(defaultCalendarId(cals, [{ id: 'g' }, { id: 'o' }], 'g-ro')).toBe('g-main')
-    expect(defaultCalendarId(cals, [{ id: 'g', calendarEnabled: false }, { id: 'o', calendarEnabled: false }])).toBe('')
+    const hiddenG = cals.map((c) => (c.id === 'g-main' ? { ...c, visible: false } : c))
+    expect(defaultCalendarId(hiddenG, [{ id: 'g' }, { id: 'o' }], 'g-main')).toBe('o-main')
+    expect(defaultCalendarId(cals, [{ id: 'g', calendarConsent: false }, { id: 'o', calendarConsent: false }])).toBe('')
   })
-  it('hides events of hidden calendars, disabled mailboxes, cancelled and (optionally) declined', () => {
+  it('lists hidden calendars as editable (the picker marks them)', () => {
+    const hiddenG = cals.map((c) => (c.id === 'g-main' ? { ...c, visible: false } : c))
+    expect(editableCalendars(hiddenG, [{ id: 'g' }, { id: 'o' }]).map((c) => c.id)).toEqual(['g-main', 'o-main'])
+  })
+  it('hides events of hidden calendars, cancelled and (optionally) declined', () => {
     const calMap = new Map(cals.map((c) => [c.id, c]))
-    const accs = new Map([['g', { calendarEnabled: true }], ['o', { calendarEnabled: false }]])
-    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g' }), calMap, accs, true)).toBe(true)
-    expect(isEventShown(ev({ calendarId: 'o-main', accountId: 'o' }), calMap, accs, true)).toBe(false)
-    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g', myResponse: 'declined' }), calMap, accs, false)).toBe(false)
-    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g', myResponse: 'declined' }), calMap, accs, true)).toBe(true)
-    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g', status: 'cancelled' }), calMap, accs, true)).toBe(false)
-    expect(isEventShown(ev({ calendarId: 'nope' }), calMap, accs, true)).toBe(false)
+    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g' }), calMap, true)).toBe(true)
+    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g', myResponse: 'declined' }), calMap, false)).toBe(false)
+    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g', myResponse: 'declined' }), calMap, true)).toBe(true)
+    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g', status: 'cancelled' }), calMap, true)).toBe(false)
+    expect(isEventShown(ev({ calendarId: 'nope' }), calMap, true)).toBe(false)
     const hidden = new Map(calMap)
     hidden.set('g-main', { ...cals[1], visible: false })
-    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g' }), hidden, accs, true)).toBe(false)
+    expect(isEventShown(ev({ calendarId: 'g-main', accountId: 'g' }), hidden, true)).toBe(false)
   })
   it('addDays keeps the wall clock', () => {
     expect(addDays(fromYmd('2026-10-24', '09:00'), 2).getHours()).toBe(9)

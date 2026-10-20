@@ -4,6 +4,8 @@ package gcal
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
@@ -74,6 +76,9 @@ func (c *Client) Calendars(ctx context.Context) ([]calendar.Calendar, error) {
 				TimeZone         string      `json:"timeZone"`
 				Deleted          bool        `json:"deleted"`
 				DefaultReminders []gReminder `json:"defaultReminders"`
+				Conference       struct {
+					Allowed []string `json:"allowedConferenceSolutionTypes"`
+				} `json:"conferenceProperties"`
 			} `json:"items"`
 			NextPageToken string `json:"nextPageToken"`
 		}
@@ -90,6 +95,11 @@ func (c *Client) Calendars(ctx context.Context) ([]calendar.Calendar, error) {
 			}
 			cal := calendar.Calendar{RemoteID: it.ID, Name: name, Color: it.BackgroundColor, Primary: it.Primary,
 				CanEdit: it.AccessRole == "owner" || it.AccessRole == "writer", TimeZone: calendar.IANAZone(it.TimeZone)}
+			for _, t := range it.Conference.Allowed {
+				if t == "hangoutsMeet" {
+					cal.VideoCallProvider = "meet"
+				}
+			}
 			for _, r := range it.DefaultReminders {
 				if r.Method == "popup" || r.Method == "" {
 					cal.DefaultReminders = append(cal.DefaultReminders, r.Minutes)
@@ -254,6 +264,9 @@ func (c *Client) toEvent(g gEvent, cal calendar.Calendar) calendar.Event {
 	}
 	ev.CanEdit = cal.CanEdit && (ev.IsOrganizer || g.GuestsCanModify || g.Organizer == nil)
 	ev.ETag = g.Etag
+	if ev.MeetingURL == "" {
+		ev.MeetingURL = calendar.DetectMeetingURL(ev.Location, ev.Description)
+	}
 	if t, err := time.Parse(time.RFC3339, g.Updated); err == nil {
 		ev.Updated = t.UTC()
 	}
@@ -405,17 +418,34 @@ func body(ev calendar.Event) map[string]any {
 	if ev.RRule != "" {
 		b["recurrence"] = []string{"RRULE:" + ev.RRule}
 	}
+	if ev.AddVideoCall {
+		b["conferenceData"] = map[string]any{"createRequest": map[string]any{"requestId": requestID(),
+			"conferenceSolutionKey": map[string]string{"type": "hangoutsMeet"}}}
+	}
 	return b
 }
 
+func requestID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 const sendUpdates = "?sendUpdates=all"
+
+// writeQuery is used for insert/patch: conferenceDataVersion=1 lets
+// conferenceData (Meet links) be created and kept.
+const writeQuery = "?sendUpdates=all&conferenceDataVersion=1"
 
 func (c *Client) Create(ctx context.Context, cal calendar.Calendar, ev calendar.Event) (calendar.Event, error) {
 	if !cal.CanEdit {
 		return calendar.Event{}, calendar.ErrReadOnly
 	}
 	var g gEvent
-	if err := c.api.JSON(ctx, http.MethodPost, c.eventsPath(cal)+sendUpdates, body(ev), &g); err != nil {
+	if ev.AddVideoCall && cal.VideoCallProvider != "meet" {
+		ev.AddVideoCall = false
+	}
+	if err := c.api.JSON(ctx, http.MethodPost, c.eventsPath(cal)+writeQuery, body(ev), &g); err != nil {
 		return calendar.Event{}, wrap(err)
 	}
 	return c.toEvent(g, cal), nil
@@ -455,7 +485,7 @@ func (c *Client) Update(ctx context.Context, cal calendar.Calendar, remoteID str
 		hdr = map[string]string{"If-Match": ev.ETag}
 	}
 	var g gEvent
-	if err := c.api.JSONHeaders(ctx, http.MethodPatch, c.eventsPath(cal)+"/"+url.PathEscape(target)+sendUpdates, hdr, b, &g); err != nil {
+	if err := c.api.JSONHeaders(ctx, http.MethodPatch, c.eventsPath(cal)+"/"+url.PathEscape(target)+writeQuery, hdr, b, &g); err != nil {
 		return calendar.Event{}, wrap(err)
 	}
 	return c.toEvent(g, cal), nil

@@ -352,24 +352,23 @@ export function seriesMoveInput(master: CalendarEvent, startDeltaMs: number, end
 
 // ------------------------------------------------------------------ calendars
 
-/** Calendars an event can be created in: editable calendars of enabled mailboxes. */
-export function editableCalendars(calendars: Calendar[], accounts: Pick<Account, 'id' | 'calendarEnabled'>[]): Calendar[] {
-  const enabled = new Set(accounts.filter((a) => a.calendarEnabled !== false).map((a) => a.id))
-  return calendars.filter((c) => c.canEdit && enabled.has(c.accountId))
+/** Calendars an event can be created in: editable calendars of mailboxes with calendar access (hidden ones included). */
+export function editableCalendars(calendars: Calendar[], accounts: Pick<Account, 'id' | 'calendarConsent'>[]): Calendar[] {
+  const ok = new Set(accounts.filter((a) => a.calendarConsent !== false).map((a) => a.id))
+  return calendars.filter((c) => c.canEdit && ok.has(c.accountId))
 }
 
-/** Default calendar for new events: the last used one, else a primary calendar, else the first editable. */
-export function defaultCalendarId(calendars: Calendar[], accounts: Pick<Account, 'id' | 'calendarEnabled'>[], lastUsed = ''): string {
+/** Default calendar for new events: the last used one, else a visible primary, else any visible, else the first editable. */
+export function defaultCalendarId(calendars: Calendar[], accounts: Pick<Account, 'id' | 'calendarConsent'>[], lastUsed = ''): string {
   const list = editableCalendars(calendars, accounts)
-  if (lastUsed && list.some((c) => c.id === lastUsed)) return lastUsed
-  return (list.find((c) => c.primary && c.visible) ?? list.find((c) => c.primary) ?? list[0])?.id ?? ''
+  if (lastUsed && list.some((c) => c.id === lastUsed && c.visible)) return lastUsed
+  return (list.find((c) => c.primary && c.visible) ?? list.find((c) => c.visible) ?? list.find((c) => c.primary) ?? list[0])?.id ?? ''
 }
 
-/** Event visibility given mailbox switches, calendar checkboxes and the "show declined" setting. */
-export function isEventShown(ev: CalendarEvent, calendars: Map<string, Calendar>, accounts: Map<string, Pick<Account, 'calendarEnabled'>>, showDeclined: boolean): boolean {
+/** Event visibility given the calendar checkboxes and the "show declined" setting. */
+export function isEventShown(ev: CalendarEvent, calendars: Map<string, Calendar>, showDeclined: boolean): boolean {
   const cal = calendars.get(ev.calendarId)
   if (!cal || !cal.visible) return false
-  if (accounts.get(ev.accountId)?.calendarEnabled === false) return false
   if (ev.status === 'cancelled') return false
   if (!showDeclined && ev.myResponse === 'declined') return false
   return true

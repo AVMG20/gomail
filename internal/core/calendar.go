@@ -114,10 +114,22 @@ func (s *Service) calendarAccount(accountID string) (models.Account, error) {
 	if !acct.CalendarConsent {
 		return acct, fmt.Errorf("calendar access isn't enabled for %s yet. Choose \"Enable calendar\" to grant it", acct.Email)
 	}
-	if !acct.CalendarEnabled {
-		return acct, fmt.Errorf("the calendar of %s is turned off", acct.Email)
-	}
 	return acct, nil
+}
+
+// allHidden reports whether an account has calendars and all are hidden
+// (its calendars are then not synced).
+func (s *Service) allHidden(accountID string) bool {
+	rows, err := s.store.Calendars(accountID)
+	if err != nil || len(rows) == 0 {
+		return false
+	}
+	for _, r := range rows {
+		if r.Visible {
+			return false
+		}
+	}
+	return true
 }
 
 // calendarError makes provider errors readable and withdraws consent when
@@ -146,11 +158,12 @@ func (s *Service) syncCalendarsQuiet(ctx context.Context, accountID string) {
 	}
 }
 
-// syncCalendars syncs every calendar of an account (no-op without consent
-// or with the calendar turned off).
+// syncCalendars syncs every calendar of an account, hidden ones included
+// so showing them again is instant. It is a no-op without consent or when
+// all of the account's calendars are hidden.
 func (s *Service) syncCalendars(ctx context.Context, accountID string) error {
 	acct, err := s.store.Account(accountID)
-	if err != nil || !acct.CalendarConsent || !acct.CalendarEnabled {
+	if err != nil || !acct.CalendarConsent || s.allHidden(accountID) {
 		return nil
 	}
 	l := s.cal.lock(accountID)
@@ -267,31 +280,20 @@ func (s *Service) ListCalendars() ([]models.Calendar, error) {
 }
 
 // SetCalendarVisible shows or hides one calendar in the unified view.
+// Showing one of an account whose calendars were all hidden (and so not
+// synced) syncs the account right away.
 func (s *Service) SetCalendarVisible(calendarID string, visible bool) error {
 	row, err := s.store.Calendar(calendarID)
 	if err != nil {
 		return errors.New("calendar not found")
 	}
+	wasHidden := s.allHidden(row.AccountID)
 	if err := s.store.SetCalendarVisible(calendarID, visible); err != nil {
 		return err
 	}
 	s.emitCalendar(row.AccountID)
-	return nil
-}
-
-// SetAccountCalendarEnabled turns an account's calendars on or off.
-// Turned off, its events are hidden and its calendars aren't synced.
-func (s *Service) SetAccountCalendarEnabled(accountID string, enabled bool) error {
-	if err := s.store.SetCalendarEnabled(accountID, enabled); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return errors.New("account not found")
-		}
-		return err
-	}
-	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
-	s.emitCalendar(accountID)
-	if enabled {
-		s.goBG(func() { s.syncCalendarsQuiet(s.ctx, accountID) })
+	if visible && wasHidden {
+		s.goBG(func() { s.syncCalendarsQuiet(s.ctx, row.AccountID) })
 	}
 	return nil
 }
@@ -324,7 +326,6 @@ func (s *Service) EnableCalendar(accountID string) (models.Account, error) {
 	if err := s.store.SetCalendarConsent(acct.ID, true); err != nil {
 		return acct, err
 	}
-	_ = s.store.SetCalendarEnabled(acct.ID, true)
 	slog.Info("calendar enabled", "account", acct.ID)
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: acct.ID})
 	s.goBG(func() { s.syncCalendarsQuiet(s.ctx, acct.ID) })
@@ -363,7 +364,7 @@ func (s *Service) fetchOutsideWindow(start, end time.Time) {
 		return
 	}
 	for _, a := range accts {
-		if !a.CalendarConsent || !a.CalendarEnabled {
+		if !a.CalendarConsent {
 			continue
 		}
 		rows, err := s.store.Calendars(a.ID)
@@ -488,6 +489,9 @@ func (s *Service) CreateEvent(in models.EventInput) (models.CalendarEvent, error
 	if !row.CanEdit {
 		return models.CalendarEvent{}, errors.New("this calendar is read-only")
 	}
+	if in.AddVideoCall && row.VideoCallProvider == "" {
+		return models.CalendarEvent{}, errors.New("this calendar can't add video calls; paste a meeting link instead")
+	}
 	p, err := s.calendarProvider(acct)
 	if err != nil {
 		return models.CalendarEvent{}, err
@@ -591,7 +595,11 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 	if in.CalendarID != "" && in.CalendarID != cur.CalendarID {
 		return s.moveEvent(cur, row, acct, p, in, scope)
 	}
+	if in.AddVideoCall && row.VideoCallProvider == "" && cur.MeetingURL == "" {
+		return models.CalendarEvent{}, errors.New("this calendar can't add video calls; paste a meeting link instead")
+	}
 	ev := calendar.FromInput(in)
+	ev.AddVideoCall = in.AddVideoCall && cur.MeetingURL == "" // keep an existing call
 	ev.SeriesRemoteID, ev.OriginalStart, ev.ICalUID = cur.SeriesRemoteID, cur.Start, cur.ICalUID
 	if scope == models.ScopeThis {
 		ev.ETag = cur.ETag
@@ -613,6 +621,9 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 	for _, o := range old {
 		n := o.ToProvider()
 		n.Title, n.Location, n.Description, n.AllDay, n.TimeZone = ev.Title, ev.Location, ev.Description, ev.AllDay, ev.TimeZone
+		if ev.MeetingURL != "" {
+			n.MeetingURL = ev.MeetingURL
+		}
 		if in.Attendees != nil {
 			n.Attendees = in.Attendees
 		}
@@ -756,7 +767,7 @@ func (s *Service) inviteEvent(m *models.Message) {
 		return
 	}
 	acct, err := s.store.Account(m.AccountID)
-	if err != nil || !acct.CalendarConsent || !acct.CalendarEnabled {
+	if err != nil || !acct.CalendarConsent {
 		return
 	}
 	evs, err := s.store.EventsByICalUID(m.AccountID, m.Invite.UID)

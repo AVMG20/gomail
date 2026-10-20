@@ -544,7 +544,7 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 	if errors.Is(err, store.ErrNotFound) {
 		granted, _ := auth.CalendarGranted(kind, tok)
 		acct = models.Account{ID: randomID("a"), Provider: kind, Email: strings.ToLower(prof.Email), DisplayName: prof.Name,
-			Color: s.pickColor(), CreatedAt: time.Now(), CalendarConsent: granted, CalendarEnabled: true}
+			Color: s.pickColor(), CreatedAt: time.Now(), CalendarConsent: granted}
 		if acct.DisplayName == "" {
 			acct.DisplayName = acct.Email
 		}

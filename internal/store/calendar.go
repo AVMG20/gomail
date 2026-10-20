@@ -283,13 +283,13 @@ func nonNilInts(a []int) []int {
 }
 
 // Events lists events overlapping [start, end) of visible calendars of
-// accounts with calendars enabled, ordered by start. Declined invitations
+// accounts with calendar access, ordered by start. Declined invitations
 // are left out unless showDeclined.
 func (s *Store) Events(start, end time.Time, showDeclined bool) ([]models.CalendarEvent, error) {
 	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events e
 		JOIN calendars c ON c.id = e.calendar_id
 		JOIN accounts a ON a.id = c.account_id
-		WHERE c.visible = 1 AND a.calendar_enabled = 1 AND a.calendar_consent = 1 AND e.status != 'cancelled'
+		WHERE c.visible = 1 AND a.calendar_consent = 1 AND e.status != 'cancelled'
 			AND e.start_ms < ? AND e.end_ms > ? AND (? OR e.my_response != 'declined')
 		ORDER BY e.start_ms, e.end_ms DESC, e.id`, toMillis(end), toMillis(start), showDeclined)
 	if err != nil {

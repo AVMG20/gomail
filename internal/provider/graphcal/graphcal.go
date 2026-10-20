@@ -59,18 +59,35 @@ var presetColors = map[string]string{
 	"lightTeal": "#78d9ec", "lightPink": "#ff8bcb", "lightBrown": "#c8a588", "lightRed": "#f28b82", "maxColor": "",
 }
 
+// videoProvider picks the online meeting provider gomail can create.
+func videoProvider(allowed []string) string {
+	p := ""
+	for _, a := range allowed {
+		switch a {
+		case "teamsForBusiness":
+			return "teams"
+		case "skypeForConsumer":
+			p = "skype"
+		}
+	}
+	return p
+}
+
+var onlineProviders = map[string]string{"teams": "teamsForBusiness", "skype": "skypeForConsumer"}
+
 func (c *Client) Calendars(ctx context.Context) ([]calendar.Calendar, error) {
 	var out []calendar.Calendar
-	next := "me/calendars?$top=100&$select=id,name,color,hexColor,isDefaultCalendar,canEdit"
+	next := "me/calendars?$top=100&$select=id,name,color,hexColor,isDefaultCalendar,canEdit,allowedOnlineMeetingProviders"
 	for i := 0; next != "" && i < 20; i++ {
 		var resp struct {
 			Value []struct {
-				ID                string `json:"id"`
-				Name              string `json:"name"`
-				Color             string `json:"color"`
-				HexColor          string `json:"hexColor"`
-				IsDefaultCalendar bool   `json:"isDefaultCalendar"`
-				CanEdit           bool   `json:"canEdit"`
+				ID                string   `json:"id"`
+				Name              string   `json:"name"`
+				Color             string   `json:"color"`
+				HexColor          string   `json:"hexColor"`
+				IsDefaultCalendar bool     `json:"isDefaultCalendar"`
+				CanEdit           bool     `json:"canEdit"`
+				Providers         []string `json:"allowedOnlineMeetingProviders"`
 			} `json:"value"`
 			NextLink string `json:"@odata.nextLink"`
 		}
@@ -82,7 +99,8 @@ func (c *Client) Calendars(ctx context.Context) ([]calendar.Calendar, error) {
 			if color == "" {
 				color = presetColors[v.Color]
 			}
-			out = append(out, calendar.Calendar{RemoteID: v.ID, Name: v.Name, Color: color, Primary: v.IsDefaultCalendar, CanEdit: v.CanEdit})
+			out = append(out, calendar.Calendar{RemoteID: v.ID, Name: v.Name, Color: color, Primary: v.IsDefaultCalendar, CanEdit: v.CanEdit,
+				VideoCallProvider: videoProvider(v.Providers)})
 		}
 		next = resp.NextLink
 	}
@@ -297,6 +315,9 @@ func toEvent(g gEvent, cal calendar.Calendar) calendar.Event {
 		ev.Reminders = []int{g.ReminderMinutesBeforeStart}
 	}
 	ev.CanEdit = cal.CanEdit && g.IsOrganizer
+	if ev.MeetingURL == "" {
+		ev.MeetingURL = calendar.DetectMeetingURL(ev.Location, ev.Description)
+	}
 	if t, err := time.Parse(time.RFC3339, g.LastModifiedDateTime); err == nil {
 		ev.Updated = t.UTC()
 	}
@@ -444,7 +465,7 @@ var graphDays = []string{"sunday", "monday", "tuesday", "wednesday", "thursday",
 
 // body renders an event for create/update. Times are sent in the event's
 // zone (Windows id when known) so recurrences follow its DST rules.
-func body(ev calendar.Event, withRecurrence bool) map[string]any {
+func body(ev calendar.Event, withRecurrence bool, videoProvider string) map[string]any {
 	b := map[string]any{"subject": ev.Title, "body": map[string]string{"contentType": "text", "content": ev.Description},
 		"location": map[string]string{"displayName": ev.Location}, "isAllDay": ev.AllDay}
 	tzName, loc := "UTC", time.UTC
@@ -481,6 +502,10 @@ func body(ev calendar.Event, withRecurrence bool) map[string]any {
 		if len(ev.Reminders) > 0 {
 			b["reminderMinutesBeforeStart"] = ev.Reminders[0]
 		}
+	}
+	if p := onlineProviders[videoProvider]; ev.AddVideoCall && p != "" {
+		b["isOnlineMeeting"] = true
+		b["onlineMeetingProvider"] = p
 	}
 	if withRecurrence && ev.RRule != "" {
 		if r := recurrenceOf(ev.RRule, ev.Start.In(loc), tzName); r != nil {
@@ -528,7 +553,7 @@ func (c *Client) Create(ctx context.Context, cal calendar.Calendar, ev calendar.
 		return calendar.Event{}, calendar.ErrReadOnly
 	}
 	var g gEvent
-	if err := c.api.JSON(ctx, http.MethodPost, "me/calendars/"+url.PathEscape(cal.RemoteID)+"/events", body(ev, true), &g); err != nil {
+	if err := c.api.JSON(ctx, http.MethodPost, "me/calendars/"+url.PathEscape(cal.RemoteID)+"/events", body(ev, true, cal.VideoCallProvider), &g); err != nil {
 		return calendar.Event{}, wrap(err)
 	}
 	return toEvent(g, cal), nil
@@ -550,9 +575,9 @@ func (c *Client) Update(ctx context.Context, cal calendar.Calendar, remoteID str
 			shifted.Start = mev.Start.Add(ev.Start.Sub(ev.OriginalStart))
 		}
 		shifted.End = shifted.Start.Add(ev.End.Sub(ev.Start))
-		b = body(shifted, ev.RRule != "")
+		b = body(shifted, ev.RRule != "", cal.VideoCallProvider)
 	} else {
-		b = body(ev, ev.SeriesRemoteID == "" && ev.RRule != "")
+		b = body(ev, ev.SeriesRemoteID == "" && ev.RRule != "", cal.VideoCallProvider)
 	}
 	var hdr map[string]string
 	if target == remoteID && ev.ETag != "" {

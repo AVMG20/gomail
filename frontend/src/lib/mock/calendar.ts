@@ -29,11 +29,12 @@ interface Master extends CalendarEvent {
 
 export class MockCalendar {
   calendars: Calendar[] = [
-    { id: 'cal_personal', accountId: 'acc_personal', name: 'Alex Morgan', color: '#7c3aed', primary: true, canEdit: true, visible: true },
-    { id: 'cal_family', accountId: 'acc_personal', name: 'Family', color: '#ec4899', primary: false, canEdit: true, visible: true },
-    { id: 'cal_holidays', accountId: 'acc_personal', name: 'Holidays in the Netherlands', color: '#16a34a', primary: false, canEdit: false, visible: true },
-    { id: 'cal_work', accountId: 'acc_work', name: 'Calendar', color: '#2563eb', primary: true, canEdit: true, visible: true },
-    { id: 'cal_atlas', accountId: 'acc_work', name: 'Atlas project', color: '#0891b2', primary: false, canEdit: true, visible: true },
+    { id: 'cal_personal', accountId: 'acc_personal', name: 'Alex Morgan', color: '#7c3aed', primary: true, canEdit: true, visible: true, videoCallProvider: 'meet' },
+    { id: 'cal_family', accountId: 'acc_personal', name: 'Family', color: '#ec4899', primary: false, canEdit: true, visible: true, videoCallProvider: 'meet' },
+    { id: 'cal_birthdays', accountId: 'acc_personal', name: 'Birthdays', color: '#eab308', primary: false, canEdit: false, visible: true, videoCallProvider: '' },
+    { id: 'cal_holidays', accountId: 'acc_personal', name: 'Holidays in the Netherlands', color: '#16a34a', primary: false, canEdit: false, visible: true, videoCallProvider: '' },
+    { id: 'cal_work', accountId: 'acc_work', name: 'Calendar', color: '#2563eb', primary: true, canEdit: true, visible: true, videoCallProvider: 'teams' },
+    { id: 'cal_atlas', accountId: 'acc_work', name: 'Atlas project', color: '#0891b2', primary: false, canEdit: true, visible: true, videoCallProvider: 'teams' },
   ]
   private masters = new Map<string, Master>()
   /** Edited single occurrences of a series, keyed by occurrence id. */
@@ -116,6 +117,7 @@ export class MockCalendar {
     this.add({ calendarId: 'cal_personal', title: 'Flight KL1689 AMS → LIS', start: at(17, '07:10'), end: at(17, '09:40'), location: 'Schiphol', timeZone: 'Europe/Amsterdam' })
     this.add({ calendarId: 'cal_personal', title: 'Gym', start: wd(1, '07:00'), end: wd(1, '08:00'), recurrence: 'FREQ=WEEKLY;BYDAY=MO,TH', reminders: [] })
     this.add({ calendarId: 'cal_family', title: 'Mom’s birthday', start: ymd(5), end: ymd(6), allDay: true, recurrence: 'FREQ=YEARLY', reminders: [1440] })
+    this.add({ calendarId: 'cal_birthdays', title: 'Sam’s birthday', start: ymd(2), end: ymd(3), allDay: true, recurrence: 'FREQ=YEARLY', organizer: { name: 'Birthdays', email: '' }, isOrganizer: false, reminders: [] })
     this.add({ calendarId: 'cal_holidays', title: 'Daylight saving time ends', start: toYmd(lastSunday(today.getFullYear(), 9)), end: toYmd(addDays(lastSunday(today.getFullYear(), 9), 1)), allDay: true, organizer: { name: 'Holidays', email: '' }, isOrganizer: false, reminders: [] })
     this.add({ calendarId: 'cal_holidays', title: 'Sinterklaas', start: `${today.getFullYear()}-12-05`, end: `${today.getFullYear()}-12-06`, allDay: true, organizer: { name: 'Holidays', email: '' }, isOrganizer: false, reminders: [] })
   }
@@ -189,8 +191,17 @@ export class MockCalendar {
     return cal
   }
 
+  /** Like the providers: "add a video call" attaches a Meet/Teams link. */
+  private withVideo(input: EventInput, cal: Calendar, existing = ''): EventInput {
+    if (!input.addVideoCall || input.meetingUrl || existing) return { ...input, meetingUrl: input.meetingUrl || existing }
+    const code = Math.random().toString(36).slice(2, 12)
+    const url = cal.videoCallProvider === 'teams' ? `https://teams.microsoft.com/l/meetup-join/${code}` : cal.videoCallProvider === 'meet' ? `https://meet.google.com/${code.slice(0, 3)}-${code.slice(3, 7)}-${code.slice(7, 10)}` : ''
+    return { ...input, meetingUrl: url }
+  }
+
   create(input: EventInput): CalendarEvent {
     const cal = this.canEdit(input.calendarId)
+    input = this.withVideo(input, cal)
     const ev = this.add({ ...clone(input), isOrganizer: true, organizer: ME[cal.accountId], myResponse: '' })
     this.onChange(cal.accountId)
     return this.get(ev.id)
@@ -198,6 +209,7 @@ export class MockCalendar {
 
   update(id: string, input: EventInput, scope: RecurrenceScope): CalendarEvent {
     const cal = this.canEdit(input.calendarId)
+    input = this.withVideo(input, cal, this.get(id).meetingUrl)
     const master = this.masters.get(id)
     const [masterId] = splitOccurrence(id)
     if (master || scope === 'series') {
@@ -256,7 +268,7 @@ export class MockCalendar {
   /** "Connect calendar": grants consent and adds the mailbox's calendar. */
   connect(accountId: string) {
     if (!this.calendars.some((c) => c.accountId === accountId)) {
-      this.calendars.push({ id: `cal_${accountId}`, accountId, name: 'Pixelforge', color: '#14b8a6', primary: true, canEdit: true, visible: true })
+      this.calendars.push({ id: `cal_${accountId}`, accountId, name: 'Pixelforge', color: '#14b8a6', primary: true, canEdit: true, visible: true, videoCallProvider: 'meet' })
       const today = startOfDay(new Date())
       this.add({ calendarId: `cal_${accountId}`, title: 'Client call: Lumen rebrand', start: toRfc3339(fromYmd(toYmd(addDays(today, 1)), '16:00')), end: toRfc3339(fromYmd(toYmd(addDays(today, 1)), '16:45')), attendees: [{ ...PEOPLE.rachel, response: 'accepted' }], meetingUrl: 'https://meet.google.com/abc-defg-hij' })
     }
@@ -281,13 +293,8 @@ export function fromWireInput(w: Record<string, unknown> & Partial<EventInput>):
   const recurrence = typeof rec === 'string'
     ? rec
     : buildRRule({ freq: (rec.frequency as RepeatFreq) || 'none', until: rec.until ? toYmd(new Date(rec.until)) : '', count: rec.count || undefined })
-  let description = String(w.description ?? '')
-  let meetingUrl = String(w.meetingUrl ?? '')
-  const m = /(?:^|\n)Join: (https?:\/\/\S+)\s*$/.exec(description)
-  if (m) {
-    meetingUrl = m[1]
-    description = description.slice(0, m.index).trim()
-  }
+  const description = String(w.description ?? '')
+  const meetingUrl = String(w.meetingUrl ?? '')
   const attendees = ((w.attendees as { name: string; email: string; response: string }[] | null) ?? []).map((a) => ({ name: a.name, email: a.email, response: a.response === 'none' ? 'needsAction' : a.response }))
   return {
     calendarId: String(w.calendarId ?? ''),
@@ -300,6 +307,7 @@ export function fromWireInput(w: Record<string, unknown> & Partial<EventInput>):
     description,
     attendees,
     meetingUrl,
+    addVideoCall: !!w.addVideoCall,
     recurrence,
     reminders: ((w.reminderMinutes ?? w.reminders) as number[] | null) ?? [],
   }

@@ -899,15 +899,6 @@ func (m *MailService) SetCalendarVisible(calendarID string, visible bool) error 
 	return uiError(s.SetCalendarVisible(calendarID, visible))
 }
 
-// SetAccountCalendarEnabled turns an account's calendars on or off.
-func (m *MailService) SetAccountCalendarEnabled(accountID string, enabled bool) error {
-	s, err := m.ready()
-	if err != nil {
-		return err
-	}
-	return uiError(s.SetAccountCalendarEnabled(accountID, enabled))
-}
-
 // EnableCalendar signs in again to grant calendar access (mail is kept).
 func (m *MailService) EnableCalendar(accountID string) (models.Account, error) {
 	s, err := m.ready()

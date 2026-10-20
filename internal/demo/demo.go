@@ -33,9 +33,9 @@ const (
 func Accounts() []models.Account {
 	return []models.Account{
 		{ID: GmailAccountID, Provider: models.ProviderGmail, Email: "alex.demo@gmail.com", DisplayName: "Alex (Gmail)", Color: "#ea4335",
-			CalendarConsent: true, CalendarEnabled: true},
+			CalendarConsent: true},
 		{ID: OutlookAccountID, Provider: models.ProviderOutlook, Email: "alex.demo@outlook.com", DisplayName: "Alex (Outlook)", Color: "#0078d4",
-			CalendarConsent: true, CalendarEnabled: true},
+			CalendarConsent: true},
 	}
 }
 

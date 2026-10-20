@@ -32,12 +32,13 @@ func NewCalendar(acct models.Account) *CalendarProvider {
 	tz := demoTZ(acct.Provider)
 	names := [2]string{"Personal", "Work"}
 	colors := [2]string{"#16a34a", "#2563eb"}
+	video := "meet"
 	if acct.Provider == models.ProviderOutlook {
-		names, colors = [2]string{"Calendar", "Team"}, [2]string{"#0078d4", "#c239b3"}
+		names, colors, video = [2]string{"Calendar", "Team"}, [2]string{"#0078d4", "#c239b3"}, "teams"
 	}
 	for i, n := range names {
 		c := calendar.Calendar{RemoteID: strings.ToLower(n), Name: n, Color: colors[i], Primary: i == 0, CanEdit: true,
-			TimeZone: tz, DefaultReminders: []int{10}}
+			TimeZone: tz, DefaultReminders: []int{10}, VideoCallProvider: video}
 		p.cals = append(p.cals, c)
 		p.events[c.RemoteID] = map[string]*calendar.Event{}
 	}
@@ -54,6 +55,26 @@ func (p *CalendarProvider) sleep(ctx context.Context) error {
 		return ctx.Err()
 	case <-time.After(p.Latency):
 		return nil
+	}
+}
+
+// videoLink fakes the conference link the providers would create.
+func (p *CalendarProvider) videoLink(cal calendar.Calendar, id string) string {
+	if cal.VideoCallProvider == "teams" {
+		return "https://teams.microsoft.com/l/meetup-join/demo-" + id
+	}
+	return "https://meet.google.com/demo-" + id
+}
+
+// meeting fills the meeting link of a created/updated event.
+func (p *CalendarProvider) meeting(cal calendar.Calendar, ev *calendar.Event, req calendar.Event) {
+	switch {
+	case req.MeetingURL != "":
+		ev.MeetingURL = req.MeetingURL
+	case req.AddVideoCall && ev.MeetingURL == "" && cal.VideoCallProvider != "":
+		ev.MeetingURL = p.videoLink(cal, ev.RemoteID)
+	case ev.MeetingURL == "":
+		ev.MeetingURL = calendar.DetectMeetingURL(ev.Location, ev.Description)
 	}
 }
 
@@ -319,6 +340,7 @@ func (p *CalendarProvider) Create(ctx context.Context, cal calendar.Calendar, ev
 	if ev.Status == "" {
 		ev.Status = models.EventConfirmed
 	}
+	p.meeting(cal, &ev, ev)
 	p.people(&ev, "", "", nil)
 	if len(ev.Attendees) > 0 && ev.Attendees[0].Email != p.me.Email {
 		ev.Attendees = append([]models.Attendee{{Name: p.me.Name, Email: p.me.Email, Response: models.ResponseOrganizer}}, ev.Attendees...)
@@ -358,6 +380,7 @@ func (p *CalendarProvider) Update(ctx context.Context, cal calendar.Calendar, re
 		if ev.Reminders != nil {
 			t.Reminders = ev.Reminders
 		}
+		p.meeting(cal, t, ev)
 		t.Updated = time.Now().UTC()
 	}
 	if scope == models.ScopeSeries && cur.SeriesRemoteID != "" {
