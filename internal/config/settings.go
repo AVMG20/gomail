@@ -177,6 +177,8 @@ func Normalize(s *models.Settings) {
 	if s.Zoom < 0.5 || s.Zoom > 2 {
 		s.Zoom = 1
 	}
+	s.TrustedLinkDomains = NormalizeDomains(s.TrustedLinkDomains)
+	s.TrustedImageSenders = NormalizeSenders(s.TrustedImageSenders)
 	if s.SyncIntervalMinutes <= 0 {
 		s.SyncIntervalMinutes = DefaultSyncInterval
 	}

@@ -7,6 +7,7 @@ import type {
   EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, EventDraft, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
 } from './types'
 import { isSafeExternalUrl } from './format'
+import { normalizeDomains, normalizeSenders } from './trust'
 import { LABEL_COLORS as LABEL_FALLBACK, safeColor } from './color'
 import { DEFAULT_PRIMARY, DEFAULT_RADIUS } from './theme'
 
@@ -318,6 +319,8 @@ export function normSettings(s: Settings): Settings {
     calendarShowDeclined: s.calendarShowDeclined ?? readLocal('calendarShowDeclined', false),
     calendarDefaultReminder: s.calendarDefaultReminder ?? readLocal('calendarDefaultReminder', 10),
     calendarNotifications: s.calendarNotifications ?? true,
+    trustedLinkDomains: normalizeDomains(s.trustedLinkDomains),
+    trustedImageSenders: normalizeSenders(s.trustedImageSenders),
   }
 }
 

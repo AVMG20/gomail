@@ -838,6 +838,17 @@ export const useMailStore = defineStore('mail', () => {
     return threadCache.get(id)
   }
 
+  /** Swap in refetched bodies (e.g. with remote images) wherever these messages are cached. */
+  function updateCachedBodies(list: Pick<Message, 'id' | 'bodyHtml' | 'remoteContentBlocked' | 'hasRemoteContent'>[]) {
+    const byMsg = new Map(list.map((m) => [m.id, m]))
+    for (const t of threadCache.values()) {
+      t.forEach((m, i) => {
+        const u = byMsg.get(m.id)
+        if (u) t[i] = { ...m, bodyHtml: u.bodyHtml, remoteContentBlocked: u.remoteContentBlocked, hasRemoteContent: u.hasRemoteContent }
+      })
+    }
+  }
+
   function invalidateThread(id?: string) {
     if (id) threadCache.delete(id)
     else threadCache.clear()
@@ -863,6 +874,6 @@ export const useMailStore = defineStore('mail', () => {
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
-    archive, trash, junk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
+    archive, trash, junk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, suggestAddresses,
   }
 })

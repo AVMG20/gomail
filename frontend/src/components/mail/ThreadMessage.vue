@@ -17,7 +17,7 @@ import AttachmentList from './AttachmentList.vue'
 import MessageBody from './MessageBody.vue'
 
 const props = defineProps<{ message: Message; expanded: boolean; ownEmail: string; allowRemote: boolean }>()
-const emit = defineEmits<{ toggle: []; reply: []; loadImages: [] }>()
+const emit = defineEmits<{ toggle: []; reply: []; loadImages: []; trustSender: [] }>()
 
 const showDetails = ref(false)
 const confirmUnsub = ref(false)
@@ -108,7 +108,7 @@ const recipients = computed(() => {
         </div>
       </div>
       <div class="mt-4 pl-0">
-        <MessageBody :message="message" :allow-remote="allowRemote" @load-images="emit('loadImages')" />
+        <MessageBody :message="message" :allow-remote="allowRemote" @load-images="emit('loadImages')" @trust-sender="emit('trustSender')" />
         <AttachmentList v-if="message.attachments.length" :message-id="message.id" :attachments="message.attachments" />
       </div>
     </div>

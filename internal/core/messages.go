@@ -100,10 +100,11 @@ func (s *Service) messageRaw(id string) (models.Message, error) {
 }
 
 // Message returns a message with its body. Remote images/CSS are removed
-// unless Settings.showRemoteImages is on (RemoteContentBlocked tells).
+// unless Settings.showRemoteImages is on or the sender is in
+// Settings.trustedImageSenders (RemoteContentBlocked tells).
 func (s *Service) Message(id string) (models.Message, error) {
 	m, err := s.messageRaw(id)
-	if err == nil && !s.Settings().ShowRemoteImages {
+	if st := s.Settings(); err == nil && !config.RemoteImagesAllowed(&st, m.From.Email) {
 		m.BodyHTML, m.RemoteContentBlocked = mailmime.BlockRemoteContent(m.BodyHTML)
 	}
 	return m, err

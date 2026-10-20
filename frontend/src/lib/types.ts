@@ -344,6 +344,10 @@ export interface Settings {
   density: Density | string
   syncIntervalMinutes: number
   showRemoteImages: boolean
+  /** Links to these domains (and their subdomains) open without asking. */
+  trustedLinkDomains?: string[]
+  /** Mail from these addresses always loads remote images (lowercase). */
+  trustedImageSenders?: string[]
   googleClientId: string
   googleClientSecret: string
   microsoftClientId: string

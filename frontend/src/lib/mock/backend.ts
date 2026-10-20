@@ -2,6 +2,7 @@
 // (`npm run dev` without Wails). It mirrors the bound App methods closely
 // enough that every screen can be demoed and tested.
 import { parseSearch, type ParsedSearch } from '../searchQuery'
+import { remoteImagesTrusted } from '../trust'
 import { fromWireInput, MockCalendar } from './calendar'
 import type {
   Account, AIModel, AppInfo, BackupResult, RestoreSummary, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
@@ -469,7 +470,17 @@ class MockBackend {
   }
 
   async GetMessageWithRemoteContent(id: string): Promise<Message> {
-    return this.GetMessage(id)
+    await latency(50, 150)
+    const m = this.messages.get(id)
+    if (!m) throw new Error('message not found')
+    return this.withInvite(this.visibleLabels(clone(m)))
+  }
+
+  /** Like the Go backend: strip remote images unless allowed (global switch or trusted sender). */
+  private blockRemote(m: Message): Message {
+    if (this.settings.showRemoteImages || remoteImagesTrusted(this.settings.trustedImageSenders, m.from.email)) return m
+    const html = m.bodyHtml.replace(/\s(src|background)\s*=\s*"\s*(https?:)?\/\/[^"]*"/gi, ' data-gomail-blocked=""').replace(/\ssrcset\s*=\s*"[^"]*"/gi, '')
+    return html === m.bodyHtml ? m : { ...m, bodyHtml: html, remoteContentBlocked: true }
   }
 
   async GetAttachmentData(messageId: string, attachmentId: string): Promise<AttachmentData> {
@@ -551,7 +562,7 @@ class MockBackend {
     await latency(50, 150)
     const m = this.messages.get(id)
     if (!m) throw new Error('message not found')
-    return this.withInvite(this.visibleLabels(clone(m)))
+    return this.blockRemote(this.withInvite(this.visibleLabels(clone(m))))
   }
 
   private withInvite(m: Message): Message {
@@ -662,7 +673,7 @@ class MockBackend {
     if (!m) throw new Error('message not found')
     const thread = [...this.messages.values()].filter((x) => x.threadId === m.threadId && x.accountId === m.accountId)
     thread.sort((a, b) => (a.date < b.date ? -1 : 1))
-    return clone(thread).map((x) => this.withInvite(this.visibleLabels(x)))
+    return clone(thread).map((x) => this.blockRemote(this.withInvite(this.visibleLabels(x))))
   }
 
   /** "c:<threadId>" conversation ids expand to the thread's messages (like the Go backend). */
