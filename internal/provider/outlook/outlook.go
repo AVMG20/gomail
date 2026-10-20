@@ -860,6 +860,48 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 			return err
 		}
 	}
+	remove := func(id string) error {
+		if id == "" {
+			return nil
+		}
+		err := c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID)+"/attachments/"+url.PathEscape(id), nil, nil)
+		if err != nil && httpx.StatusOf(err) != http.StatusNotFound {
+			return err
+		}
+		return nil
+	}
+	// Files we uploaded that are no longer wanted go first, so a new file
+	// of the same name (a replaced version) can't be paired with one.
+	gone := map[string]bool{}
+	c.mu.Lock()
+	var drop []string
+	for key := range ours {
+		if _, keep := want[key]; !keep {
+			drop = append(drop, key)
+		}
+	}
+	c.mu.Unlock()
+	for _, key := range drop {
+		c.mu.Lock()
+		id := ours[key]
+		c.mu.Unlock()
+		if err := remove(id); err != nil {
+			return err
+		}
+		gone[id] = true
+		c.mu.Lock()
+		delete(ours, key)
+		c.mu.Unlock()
+	}
+	kept := existing.Value[:0:0]
+	known := map[string]bool{}
+	for _, e := range existing.Value {
+		known[e.ID] = true
+		if !gone[e.ID] {
+			kept = append(kept, e)
+		}
+	}
+	existing.Value = kept
 	// Pair the wanted files with the draft's files. Graph's size includes
 	// the attachment's properties, so a file already on the draft may
 	// report more bytes than its content: an exact key, our own upload, or
@@ -887,24 +929,6 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 			}
 		}
 	}
-	remove := func(id string) error {
-		err := c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID)+"/attachments/"+url.PathEscape(id), nil, nil)
-		if err != nil && httpx.StatusOf(err) != http.StatusNotFound {
-			return err
-		}
-		return nil
-	}
-	for key, id := range ours {
-		if _, keep := want[key]; !keep {
-			if err := remove(id); err != nil {
-				return err
-			}
-			claimed[id] = true // handled
-			c.mu.Lock()
-			delete(ours, key)
-			c.mu.Unlock()
-		}
-	}
 	if complete {
 		// The user removed these in the reopened draft.
 		for _, e := range existing.Value {
@@ -919,13 +943,16 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 		if present[key] {
 			continue
 		}
-		id, err := c.addAttachment(ctx, draftID, a)
+		id, err := c.addAttachment(ctx, draftID, a, known)
 		if err != nil {
 			return fmt.Errorf("could not attach %s: %w", a.Filename, err)
 		}
-		c.mu.Lock()
-		ours[key] = id
-		c.mu.Unlock()
+		known[id] = true
+		if id != "" {
+			c.mu.Lock()
+			ours[key] = id
+			c.mu.Unlock()
+		}
 	}
 	return nil
 }
@@ -1093,7 +1120,10 @@ func (c *Client) discard(draftID string) {
 	_ = c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID), nil, nil)
 }
 
-func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.OutgoingAttachment) (string, error) {
+// addAttachment uploads a file to a draft and returns its attachment id
+// ("" if it can't be told). known lists the draft's attachment ids before
+// the upload.
+func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.OutgoingAttachment, known map[string]bool) (string, error) {
 	ct := a.MimeType
 	if ct == "" {
 		ct = "application/octet-stream"
@@ -1129,13 +1159,15 @@ func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.Outgo
 		}
 		resp.Body.Close()
 	}
-	// Upload sessions don't return the attachment id; look it up.
+	// Upload sessions don't return the attachment id; look it up: the new
+	// file of that name (Graph's size includes metadata, so it reports at
+	// least the content's size).
 	var list struct {
 		Value []gAttachment `json:"value"`
 	}
 	if err := c.api.JSON(ctx, http.MethodGet, c.msgPath(draftID)+"/attachments?$select=id,name,size", nil, &list); err == nil {
 		for _, x := range list.Value {
-			if attKey(x.Name, int(x.Size)) == attKey(a.Filename, len(a.Data)) {
+			if !known[x.ID] && strings.EqualFold(x.Name, a.Filename) && int(x.Size) >= len(a.Data) {
 				return x.ID, nil
 			}
 		}
