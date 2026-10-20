@@ -48,6 +48,13 @@ type Account struct {
 	// CalendarConsent is true when the sign-in includes calendar access.
 	// Accounts added before calendar support need EnableCalendar.
 	CalendarConsent bool `json:"calendarConsent"`
+	// CalendarEnabled is the per-account "Disable calendar" switch (default
+	// true). Disabled: no calendar sync, no reminders, events not listed;
+	// the calendars stay in ListCalendars (to show them grayed out).
+	CalendarEnabled bool `json:"calendarEnabled"`
+	// CalendarMuted silences event reminders of the account (default false);
+	// events still sync and show.
+	CalendarMuted bool `json:"calendarMuted"`
 }
 
 // Contact is an address seen in mail, ranked by frequency and recency.

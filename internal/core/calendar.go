@@ -114,22 +114,10 @@ func (s *Service) calendarAccount(accountID string) (models.Account, error) {
 	if !acct.CalendarConsent {
 		return acct, fmt.Errorf("calendar access isn't enabled for %s yet. Choose \"Enable calendar\" to grant it", acct.Email)
 	}
+	if !acct.CalendarEnabled {
+		return acct, fmt.Errorf("the calendar of %s is disabled", acct.Email)
+	}
 	return acct, nil
-}
-
-// allHidden reports whether an account has calendars and all are hidden
-// (its calendars are then not synced).
-func (s *Service) allHidden(accountID string) bool {
-	rows, err := s.store.Calendars(accountID)
-	if err != nil || len(rows) == 0 {
-		return false
-	}
-	for _, r := range rows {
-		if r.Visible {
-			return false
-		}
-	}
-	return true
 }
 
 // calendarError makes provider errors readable and withdraws consent when
@@ -158,12 +146,12 @@ func (s *Service) syncCalendarsQuiet(ctx context.Context, accountID string) {
 	}
 }
 
-// syncCalendars syncs every calendar of an account, hidden ones included
-// so showing them again is instant. It is a no-op without consent or when
-// all of the account's calendars are hidden.
+// syncCalendars syncs every calendar of an account (hidden ones too: the
+// checkboxes are only view filters). It is a no-op without consent or with
+// the account's calendar disabled.
 func (s *Service) syncCalendars(ctx context.Context, accountID string) error {
 	acct, err := s.store.Account(accountID)
-	if err != nil || !acct.CalendarConsent || s.allHidden(accountID) {
+	if err != nil || !acct.CalendarConsent || !acct.CalendarEnabled {
 		return nil
 	}
 	l := s.cal.lock(accountID)
@@ -279,22 +267,48 @@ func (s *Service) ListCalendars() ([]models.Calendar, error) {
 	return out, nil
 }
 
-// SetCalendarVisible shows or hides one calendar in the unified view.
-// Showing one of an account whose calendars were all hidden (and so not
-// synced) syncs the account right away.
+// SetCalendarVisible shows or hides one calendar in the unified view. It is
+// a view filter only: hidden calendars keep syncing and reminding.
 func (s *Service) SetCalendarVisible(calendarID string, visible bool) error {
 	row, err := s.store.Calendar(calendarID)
 	if err != nil {
 		return errors.New("calendar not found")
 	}
-	wasHidden := s.allHidden(row.AccountID)
 	if err := s.store.SetCalendarVisible(calendarID, visible); err != nil {
 		return err
 	}
 	s.emitCalendar(row.AccountID)
-	if visible && wasHidden {
-		s.goBG(func() { s.syncCalendarsQuiet(s.ctx, row.AccountID) })
+	return nil
+}
+
+// SetAccountCalendarEnabled disables or re-enables an account's calendar.
+// Disabled: no calendar sync, no reminders and its events aren't listed
+// (its calendars stay in ListCalendars). Re-enabling syncs it right away.
+func (s *Service) SetAccountCalendarEnabled(accountID string, enabled bool) error {
+	if err := s.store.SetCalendarEnabled(accountID, enabled); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errors.New("account not found")
+		}
+		return err
 	}
+	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
+	s.emitCalendar(accountID)
+	if enabled {
+		s.goBG(func() { s.syncCalendarsQuiet(s.ctx, accountID) })
+	}
+	return nil
+}
+
+// SetAccountCalendarMuted silences an account's event reminders; its
+// events keep syncing and showing.
+func (s *Service) SetAccountCalendarMuted(accountID string, muted bool) error {
+	if err := s.store.SetCalendarMuted(accountID, muted); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errors.New("account not found")
+		}
+		return err
+	}
+	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 	return nil
 }
 
@@ -326,6 +340,7 @@ func (s *Service) EnableCalendar(accountID string) (models.Account, error) {
 	if err := s.store.SetCalendarConsent(acct.ID, true); err != nil {
 		return acct, err
 	}
+	_ = s.store.SetCalendarEnabled(acct.ID, true)
 	slog.Info("calendar enabled", "account", acct.ID)
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: acct.ID})
 	s.goBG(func() { s.syncCalendarsQuiet(s.ctx, acct.ID) })
@@ -364,7 +379,7 @@ func (s *Service) fetchOutsideWindow(start, end time.Time) {
 		return
 	}
 	for _, a := range accts {
-		if !a.CalendarConsent {
+		if !a.CalendarConsent || !a.CalendarEnabled {
 			continue
 		}
 		rows, err := s.store.Calendars(a.ID)
@@ -767,7 +782,7 @@ func (s *Service) inviteEvent(m *models.Message) {
 		return
 	}
 	acct, err := s.store.Account(m.AccountID)
-	if err != nil || !acct.CalendarConsent {
+	if err != nil || !acct.CalendarConsent || !acct.CalendarEnabled {
 		return
 	}
 	evs, err := s.store.EventsByICalUID(m.AccountID, m.Invite.UID)

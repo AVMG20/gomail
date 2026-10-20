@@ -377,6 +377,21 @@ export function SendMessage(req: models$0.ComposeRequest): $CancellablePromise<v
 }
 
 /**
+ * SetAccountCalendarEnabled disables or re-enables an account's calendar
+ * (disabled: no sync, no reminders, events hidden).
+ */
+export function SetAccountCalendarEnabled(accountID: string, enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3272576564, accountID, enabled);
+}
+
+/**
+ * SetAccountCalendarMuted silences an account's event reminders.
+ */
+export function SetAccountCalendarMuted(accountID: string, muted: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1556156550, accountID, muted);
+}
+
+/**
  * SetCalendarVisible shows or hides one calendar in the unified view.
  */
 export function SetCalendarVisible(calendarID: string, visible: boolean): $CancellablePromise<void> {

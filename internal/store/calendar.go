@@ -283,15 +283,40 @@ func nonNilInts(a []int) []int {
 }
 
 // Events lists events overlapping [start, end) of visible calendars of
-// accounts with calendar access, ordered by start. Declined invitations
+// enabled accounts with calendar access, ordered by start. Declined invitations
 // are left out unless showDeclined.
 func (s *Store) Events(start, end time.Time, showDeclined bool) ([]models.CalendarEvent, error) {
 	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events e
 		JOIN calendars c ON c.id = e.calendar_id
 		JOIN accounts a ON a.id = c.account_id
-		WHERE c.visible = 1 AND a.calendar_consent = 1 AND e.status != 'cancelled'
+		WHERE c.visible = 1 AND a.calendar_consent = 1 AND a.calendar_enabled = 1 AND e.status != 'cancelled'
 			AND e.start_ms < ? AND e.end_ms > ? AND (? OR e.my_response != 'declined')
 		ORDER BY e.start_ms, e.end_ms DESC, e.id`, toMillis(end), toMillis(start), showDeclined)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.CalendarEvent{}
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e.CalendarEvent)
+	}
+	return out, rows.Err()
+}
+
+// ReminderEvents lists the events overlapping [start, end) that may show
+// reminders: accounts with access, enabled and not muted, any calendar
+// visibility, not cancelled or declined.
+func (s *Store) ReminderEvents(start, end time.Time) ([]models.CalendarEvent, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events e
+		JOIN calendars c ON c.id = e.calendar_id
+		JOIN accounts a ON a.id = c.account_id
+		WHERE a.calendar_consent = 1 AND a.calendar_enabled = 1 AND a.calendar_muted = 0 AND e.status != 'cancelled'
+			AND e.my_response != 'declined' AND e.start_ms < ? AND e.end_ms > ?
+		ORDER BY e.start_ms`, toMillis(end), toMillis(start))
 	if err != nil {
 		return nil, err
 	}

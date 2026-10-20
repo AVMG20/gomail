@@ -10,7 +10,7 @@ import (
 
 func TestCalendarStorePermissionsAndDeletion(t *testing.T) {
 	s := openTest(t)
-	if err := s.InsertAccount(models.Account{ID: "a1", Provider: models.ProviderGmail, Email: "a@x.com", CalendarConsent: true}); err != nil {
+	if err := s.InsertAccount(models.Account{ID: "a1", Provider: models.ProviderGmail, Email: "a@x.com", CalendarConsent: true, CalendarEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	cals := []calendar.Calendar{{RemoteID: "main", Name: "Main", Primary: true, CanEdit: true}, {RemoteID: "shared", Name: "Shared", CanEdit: true}}
@@ -62,6 +62,22 @@ func TestCalendarStorePermissionsAndDeletion(t *testing.T) {
 		t.Fatal("hidden calendar listed")
 	}
 	s.SetCalendarVisible(main.ID, true)
+	if evs, _ := s.ReminderEvents(day, day.AddDate(0, 0, 1)); len(evs) != 1 {
+		t.Fatalf("reminder events %d", len(evs))
+	}
+	s.SetCalendarMuted("a1", true)
+	if evs, _ := s.ReminderEvents(day, day.AddDate(0, 0, 1)); len(evs) != 0 {
+		t.Fatal("muted account reminds")
+	}
+	s.SetCalendarMuted("a1", false)
+	s.SetCalendarEnabled("a1", false)
+	if evs, _ := s.Events(day, day.AddDate(0, 0, 1), true); len(evs) != 0 {
+		t.Fatal("disabled account listed")
+	}
+	if evs, _ := s.ReminderEvents(day, day.AddDate(0, 0, 1)); len(evs) != 0 {
+		t.Fatal("disabled account reminds")
+	}
+	s.SetCalendarEnabled("a1", true)
 	s.SetCalendarConsent("a1", false)
 	if evs, _ := s.Events(day, day.AddDate(0, 0, 1), true); len(evs) != 0 {
 		t.Fatal("account without consent listed")

@@ -377,12 +377,19 @@ so their `<style>` rules cannot affect the app.
 
 ## Calendar
 
-One unified calendar shows the events of every account. Each calendar
-has a visibility switch (`SetCalendarVisible`). `ListEvents` lists the
-visible calendars of accounts with calendar access. Hidden calendars keep
-syncing so showing them again is instant. The exception is an account with
-every calendar hidden: it isn't synced, and showing one of its calendars
-syncs the account right away.
+One unified calendar shows the events of every account. There are three
+switches:
+- **Calendar checkboxes** (`SetCalendarVisible`) are view filters only. They
+  decide what `ListEvents` returns; hidden calendars keep syncing and still
+  show reminders.
+- **Disable calendar** (`SetAccountCalendarEnabled`,
+  `Account.calendarEnabled`, default true). A disabled account isn't
+  synced, shows no reminders, and its events are left out of `ListEvents`.
+  Its calendars stay in `ListCalendars`, so the UI can show them grayed
+  out. Re-enabling syncs the account right away.
+- **Mute** (`SetAccountCalendarMuted`, `Account.calendarMuted`, default
+  false). The account keeps syncing and showing events but shows no
+  reminders.
 
 **Access.** New sign-ins request calendar access as well: Google
 `https://www.googleapis.com/auth/calendar` and Microsoft
@@ -475,7 +482,8 @@ restored if the provider refuses.
 
 **Reminders.**
 - With `calendarNotifications` (default true), a desktop notification
-  appears for each reminder of upcoming events of visible calendars. The event's own reminders are used, else
+  appears for each reminder of upcoming events of accounts that are enabled
+  and not muted, whatever the calendar checkboxes say. The event's own reminders are used, else
   `calendarDefaultReminder` (default 10 minutes).
 - Declined and cancelled events are skipped. All-day events count from
   local midnight.

@@ -36,6 +36,10 @@ export interface Account {
   signature?: string
   /** OAuth grant includes calendar scopes; false = show "Connect calendar" (EnableCalendar). */
   calendarConsent?: boolean
+  /** The mailbox's calendar is synced and shown (default true). Disabled = no events, no sync, no reminders. */
+  calendarEnabled?: boolean
+  /** Event reminders muted for this mailbox (events stay visible). */
+  calendarMuted?: boolean
 }
 
 // ---- calendar ----

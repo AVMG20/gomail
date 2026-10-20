@@ -561,13 +561,30 @@ class MockBackend {
   // ---------------------------------------------------------------- calendar
   async ListCalendars(): Promise<Calendar[]> {
     await latency(30, 90)
-    const consent = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent).map((a) => a.id))
+    const consent = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent && a.calendarEnabled !== false).map((a) => a.id))
     return clone(this.cal.calendars.filter((c) => consent.has(c.accountId)))
   }
 
   async SetCalendarVisible(id: string, visible: boolean): Promise<void> {
     await latency(20, 60)
     this.cal.setVisible(id, visible)
+  }
+
+  async SetAccountCalendarEnabled(accountId: string, enabled: boolean): Promise<void> {
+    await latency(20, 60)
+    const a = this.accounts.find((x) => x.id === accountId)
+    if (!a) throw new Error('account not found')
+    a.calendarEnabled = enabled
+    this.emit('accounts:changed', { accountId })
+    this.emit('calendar:changed', { accountId })
+  }
+
+  async SetAccountCalendarMuted(accountId: string, muted: boolean): Promise<void> {
+    await latency(20, 60)
+    const a = this.accounts.find((x) => x.id === accountId)
+    if (!a) throw new Error('account not found')
+    a.calendarMuted = muted
+    this.emit('accounts:changed', { accountId })
   }
 
   async EnableCalendar(accountId: string): Promise<void> {

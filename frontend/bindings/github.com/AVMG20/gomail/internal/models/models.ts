@@ -85,6 +85,19 @@ export interface Account {
      * Accounts added before calendar support need EnableCalendar.
      */
     "calendarConsent": boolean;
+
+    /**
+     * CalendarEnabled is the per-account "Disable calendar" switch (default
+     * true). Disabled: no calendar sync, no reminders, events not listed;
+     * the calendars stay in ListCalendars (to show them grayed out).
+     */
+    "calendarEnabled": boolean;
+
+    /**
+     * CalendarMuted silences event reminders of the account (default false);
+     * events still sync and show.
+     */
+    "calendarMuted": boolean;
 }
 
 /**

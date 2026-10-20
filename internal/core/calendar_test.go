@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/AVMG20/gomail/internal/httpx"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/secrets"
-	"github.com/AVMG20/gomail/internal/store"
 )
 
 func findEvent(evs []models.CalendarEvent, title string) (models.CalendarEvent, bool) {
@@ -84,52 +84,6 @@ func TestDemoCalendarSyncAndViews(t *testing.T) {
 		}
 	}
 	_ = s.SetCalendarVisible(work.ID, true)
-	// All calendars of an account hidden: nothing listed, no calendar sync;
-	// showing one again syncs right away.
-	var outlookCals []models.Calendar
-	for _, c := range cals {
-		if c.AccountID == demo.OutlookAccountID {
-			outlookCals = append(outlookCals, c)
-			if err := s.SetCalendarVisible(c.ID, false); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	evs3, _ := s.ListEvents(from, to)
-	for _, ev := range evs3 {
-		if ev.AccountID == demo.OutlookAccountID {
-			t.Fatal("hidden account's events listed")
-		}
-	}
-	if !s.allHidden(demo.OutlookAccountID) || s.allHidden(demo.GmailAccountID) {
-		t.Fatal("allHidden")
-	}
-	var team models.Calendar
-	for _, c := range outlookCals {
-		if !c.Primary {
-			team = c
-		}
-	}
-	// Remove the team calendar's events locally; only a sync brings them back.
-	teamRow, _ := s.store.Calendar(team.ID)
-	_, _ = s.store.ApplyEvents(teamRow, store.EventChanges{Replace: true, Start: from.AddDate(-1, 0, 0), End: to.AddDate(1, 0, 0)})
-	_ = s.syncCalendars(context.Background(), demo.OutlookAccountID) // skipped: all hidden
-	if n := countCal(t, s, team.ID, from, to); n != 0 {
-		t.Fatalf("hidden account synced: %d", n)
-	}
-	if err := s.SetCalendarVisible(team.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for countCal(t, s, team.ID, from, to) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("showing a calendar didn't sync the account")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	for _, c := range outlookCals {
-		_ = s.SetCalendarVisible(c.ID, true)
-	}
 	if _, err := s.ListEvents(to, from); err == nil {
 		t.Fatal("inverted range accepted")
 	}
@@ -558,5 +512,166 @@ func TestDemoVideoCalls(t *testing.T) {
 	}
 	if _, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, Title: "bad", Start: start, MeetingURL: "http://zoom.us/j/1"}); err == nil {
 		t.Fatal("http link accepted")
+	}
+}
+
+// countingCal counts calendar syncs.
+type countingCal struct {
+	*demo.CalendarProvider
+	mu    sync.Mutex
+	syncs int
+}
+
+func (c *countingCal) Calendars(ctx context.Context) ([]calendar.Calendar, error) {
+	c.mu.Lock()
+	c.syncs++
+	c.mu.Unlock()
+	return c.CalendarProvider.Calendars(ctx)
+}
+
+func (c *countingCal) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.syncs
+}
+
+func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
+	provs := map[string]*countingCal{}
+	var mu sync.Mutex
+	ui := &fakeUI{}
+	s, err := New(Options{DataDir: t.TempDir(), Demo: true, UI: ui, Secrets: secrets.NewMemory(),
+		Online: func(context.Context) bool { return true },
+		CalendarFactory: func(acct models.Account) (calendar.Provider, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			p := &countingCal{CalendarProvider: demo.NewCalendar(acct)}
+			provs[acct.ID] = p
+			return p, nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.SyncCalendars(""); err != nil {
+		t.Fatal(err)
+	}
+	from, to := time.Now().AddDate(0, 0, -7), time.Now().AddDate(0, 0, 35)
+	evs, _ := s.ListEvents(from, to)
+	var gmailEv, outlookEv models.CalendarEvent
+	for _, ev := range evs {
+		if ev.Title == "Sprint planning" {
+			if ev.AccountID == demo.GmailAccountID {
+				gmailEv = ev
+			} else {
+				outlookEv = ev
+			}
+		}
+	}
+	notified := func(title string) int {
+		ui.mu.Lock()
+		defer ui.mu.Unlock()
+		n := 0
+		for _, x := range ui.notified {
+			if x == title {
+				n++
+			}
+		}
+		return n
+	}
+	old := nowFunc
+	defer func() { nowFunc = old }()
+	remindAt := func(ev models.CalendarEvent) {
+		nowFunc = func() time.Time { return ev.Start.Add(-9 * time.Minute) }
+		s.checkReminders()
+	}
+
+	// Hidden calendar: a view filter only. Events stay synced and remind.
+	work := calByName(t, s, demo.GmailAccountID, "Work")
+	if err := s.SetCalendarVisible(work.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := countCal(t, s, work.ID, from, to); n != 0 {
+		t.Fatalf("hidden calendar listed (%d)", n)
+	}
+	before := provs[demo.GmailAccountID].count()
+	_ = s.SyncCalendars(demo.GmailAccountID)
+	if provs[demo.GmailAccountID].count() == before {
+		t.Fatal("hidden calendars not synced")
+	}
+	remindAt(gmailEv)
+	if notified(gmailEv.Title) != 1 {
+		t.Fatal("no reminder for a hidden calendar")
+	}
+	_ = s.SetCalendarVisible(work.ID, true)
+
+	// Muted: events sync and show, no reminders.
+	if err := s.SetAccountCalendarMuted(demo.OutlookAccountID, true); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := s.store.Account(demo.OutlookAccountID); !a.CalendarMuted || !a.CalendarEnabled {
+		t.Fatalf("muted flags %+v", a)
+	}
+	before = provs[demo.OutlookAccountID].count()
+	_ = s.SyncCalendars(demo.OutlookAccountID)
+	if provs[demo.OutlookAccountID].count() == before {
+		t.Fatal("muted account not synced")
+	}
+	if _, ok := findEvent(func() []models.CalendarEvent { e, _ := s.ListEvents(from, to); return e }(), "Daily standup"); !ok {
+		t.Fatal("events hidden")
+	}
+	n := notified(outlookEv.Title)
+	remindAt(outlookEv)
+	if notified(outlookEv.Title) != n {
+		t.Fatal("reminder for a muted account")
+	}
+	_ = s.SetAccountCalendarMuted(demo.OutlookAccountID, false)
+
+	// Disabled: no sync, no reminders, not listed; calendars still listed.
+	if err := s.SetAccountCalendarEnabled(demo.OutlookAccountID, false); err != nil {
+		t.Fatal(err)
+	}
+	before = provs[demo.OutlookAccountID].count()
+	_ = s.syncCalendars(context.Background(), demo.OutlookAccountID)
+	s.engine.SyncNow(context.Background(), demo.OutlookAccountID)
+	if provs[demo.OutlookAccountID].count() != before {
+		t.Fatal("disabled account synced")
+	}
+	for _, ev := range func() []models.CalendarEvent { e, _ := s.ListEvents(from, to); return e }() {
+		if ev.AccountID == demo.OutlookAccountID {
+			t.Fatal("disabled account's events listed")
+		}
+	}
+	cals, _ := s.ListCalendars()
+	listed := 0
+	for _, c := range cals {
+		if c.AccountID == demo.OutlookAccountID {
+			listed++
+		}
+	}
+	if listed != 2 {
+		t.Fatalf("%d calendars of the disabled account listed", listed)
+	}
+	if err := s.SyncCalendars(demo.OutlookAccountID); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("explicit sync of a disabled account: %v", err)
+	}
+	nowFunc = func() time.Time { return outlookEv.Start.Add(-9 * time.Minute) }
+	s.store.SetSetting(remindedKey, map[string]int64{})
+	s.checkReminders()
+	if notified(outlookEv.Title) != n {
+		t.Fatal("reminder for a disabled account")
+	}
+	if _, err := s.CreateEvent(models.EventInput{AccountID: demo.OutlookAccountID, Title: "x", Start: time.Now()}); err == nil {
+		t.Fatal("created an event in a disabled calendar")
+	}
+	// Re-enabling syncs right away.
+	if err := s.SetAccountCalendarEnabled(demo.OutlookAccountID, true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for provs[demo.OutlookAccountID].count() == before {
+		if time.Now().After(deadline) {
+			t.Fatal("re-enabling didn't sync")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

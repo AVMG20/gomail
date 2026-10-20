@@ -123,7 +123,7 @@ export const USED_METHODS = [
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
-export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
+export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
 export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', ...CALENDAR_METHODS]
 
@@ -384,6 +384,9 @@ export const api = {
   // ---- calendar
   listCalendars: async () => ((await call<Calendar[] | null>('ListCalendars')) ?? []).map((c) => ({ ...c, color: safeColor(c.color, '#64748b') })),
   setCalendarVisible: (id: string, visible: boolean) => call<void>('SetCalendarVisible', id, visible),
+  /** Disable/enable a mailbox's calendar entirely (no sync, no events, no reminders). */
+  setAccountCalendarEnabled: (accountId: string, enabled: boolean) => call<void>('SetAccountCalendarEnabled', accountId, enabled),
+  setAccountCalendarMuted: (accountId: string, muted: boolean) => call<void>('SetAccountCalendarMuted', accountId, muted),
   /** Re-runs OAuth to add calendar scopes to an existing account. */
   enableCalendar: (accountId: string) => call<void>('EnableCalendar', accountId),
   /** Events overlapping [start, end) (RFC 3339), recurring events expanded into occurrences. */

@@ -899,6 +899,25 @@ func (m *MailService) SetCalendarVisible(calendarID string, visible bool) error 
 	return uiError(s.SetCalendarVisible(calendarID, visible))
 }
 
+// SetAccountCalendarEnabled disables or re-enables an account's calendar
+// (disabled: no sync, no reminders, events hidden).
+func (m *MailService) SetAccountCalendarEnabled(accountID string, enabled bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetAccountCalendarEnabled(accountID, enabled))
+}
+
+// SetAccountCalendarMuted silences an account's event reminders.
+func (m *MailService) SetAccountCalendarMuted(accountID string, muted bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetAccountCalendarMuted(accountID, muted))
+}
+
 // EnableCalendar signs in again to grant calendar access (mail is kept).
 func (m *MailService) EnableCalendar(accountID string) (models.Account, error) {
 	s, err := m.ready()

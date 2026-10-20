@@ -12,18 +12,18 @@ import (
 )
 
 const accountCols = `a.id, a.provider, a.email, a.display_name, a.color, a.created_at, a.last_sync_at, a.sync_error, a.needs_reauth, a.signature,
-	a.calendar_consent,
+	a.calendar_consent, a.calendar_enabled, a.calendar_muted,
 	coalesce((SELECT sum(f.unread) FROM folders f WHERE f.account_id = a.id AND f.kind = 'inbox'), 0)`
 
 func scanAccount(sc interface{ Scan(...any) error }) (models.Account, error) {
 	var a models.Account
 	var created int64
 	var last sql.NullInt64
-	var reauth, calConsent int
+	var reauth, calConsent, calEnabled, calMuted int
 	err := sc.Scan(&a.ID, &a.Provider, &a.Email, &a.DisplayName, &a.Color, &created, &last, &a.SyncError, &reauth, &a.Signature,
-		&calConsent, &a.UnreadCount)
+		&calConsent, &calEnabled, &calMuted, &a.UnreadCount)
 	a.NeedsReauth = reauth == 1
-	a.CalendarConsent = calConsent == 1
+	a.CalendarConsent, a.CalendarEnabled, a.CalendarMuted = calConsent == 1, calEnabled == 1, calMuted == 1
 	if err != nil {
 		return a, err
 	}
@@ -40,9 +40,10 @@ func (s *Store) InsertAccount(a models.Account) error {
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = time.Now()
 	}
-	_, err := s.db.Exec(`INSERT INTO accounts(id, provider, email, display_name, color, created_at, calendar_consent)
-		VALUES(?,?,?,?,?,?,?)`,
-		a.ID, a.Provider, strings.ToLower(a.Email), a.DisplayName, a.Color, toMillis(a.CreatedAt), boolInt(a.CalendarConsent))
+	_, err := s.db.Exec(`INSERT INTO accounts(id, provider, email, display_name, color, created_at, calendar_consent, calendar_enabled, calendar_muted)
+		VALUES(?,?,?,?,?,?,?,?,?)`,
+		a.ID, a.Provider, strings.ToLower(a.Email), a.DisplayName, a.Color, toMillis(a.CreatedAt), boolInt(a.CalendarConsent),
+		boolInt(a.CalendarEnabled), boolInt(a.CalendarMuted))
 	return err
 }
 
@@ -121,6 +122,27 @@ func (s *Store) UpdateSignature(id, html string) error {
 func (s *Store) SetCalendarConsent(id string, ok bool) error {
 	_, err := s.db.Exec(`UPDATE accounts SET calendar_consent = ? WHERE id = ?`, boolInt(ok), id)
 	return err
+}
+
+// SetCalendarEnabled turns an account's calendar on or off.
+func (s *Store) SetCalendarEnabled(id string, on bool) error {
+	return s.setAccountFlag(id, "calendar_enabled", on)
+}
+
+// SetCalendarMuted silences (or unsilences) an account's event reminders.
+func (s *Store) SetCalendarMuted(id string, muted bool) error {
+	return s.setAccountFlag(id, "calendar_muted", muted)
+}
+
+func (s *Store) setAccountFlag(id, col string, v bool) error {
+	res, err := s.db.Exec(`UPDATE accounts SET `+col+` = ? WHERE id = ?`, boolInt(v), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetNeedsReauth flags (or clears) an account whose sign-in was revoked.

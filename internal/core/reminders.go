@@ -43,7 +43,7 @@ func (s *Service) checkReminders() {
 		return
 	}
 	now := nowFunc()
-	evs, err := s.store.Events(now.Add(-reminderGrace), now.Add(reminderHorizon), false)
+	evs, err := s.store.ReminderEvents(now.Add(-reminderGrace), now.Add(reminderHorizon))
 	if err != nil {
 		return
 	}

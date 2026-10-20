@@ -47,7 +47,8 @@ export const useCalendarStore = defineStore('calendar', () => {
   const weekStart = computed(() => effectiveWeekStart(settings.settings?.calendarWeekStart))
   const showDeclined = computed(() => !!settings.settings?.calendarShowDeclined)
 
-  const visibleEvents = computed(() => events.value.filter((e) => isEventShown(e, calendarMap.value, showDeclined.value)))
+  const disabledAccounts = computed(() => new Set(accounts.accounts.filter((a) => a.calendarEnabled === false).map((a) => a.id)))
+  const visibleEvents = computed(() => events.value.filter((e) => isEventShown(e, calendarMap.value, showDeclined.value, disabledAccounts.value)))
   const writableCalendars = computed(() => editableCalendars(calendars.value, accounts.accounts))
   const defaultCalendar = computed(() => defaultCalendarId(calendars.value, accounts.accounts, lastCalendarId.value))
 
@@ -106,6 +107,63 @@ export const useCalendarStore = defineStore('calendar', () => {
     } catch (e) {
       calendars.value = before
       toast.error('Couldn’t update the calendar', { description: errorMessage(e) })
+    }
+  }
+
+  /** Mailbox menu: disable (no sync, no events, no reminders) or enable again, with Undo. */
+  async function setAccountEnabled(accountId: string, enabled: boolean, undoable = true) {
+    const a = accounts.accounts.find((x) => x.id === accountId)
+    if (!a) return
+    const was = a.calendarEnabled
+    a.calendarEnabled = enabled
+    try {
+      await api.setAccountCalendarEnabled(accountId, enabled)
+      if (enabled) void refresh()
+      if (undoable) {
+        toast(enabled ? `Calendar enabled for ${a.email}` : `Calendar disabled for ${a.email}`, {
+          description: enabled ? undefined : 'Its events are hidden and it no longer syncs or sends reminders.',
+          action: { label: 'Undo', onClick: () => void setAccountEnabled(accountId, !enabled, false) },
+        })
+      }
+    } catch (e) {
+      a.calendarEnabled = was
+      toast.error('Couldn’t update the mailbox', { description: errorMessage(e) })
+    }
+  }
+
+  async function setAccountMuted(accountId: string, muted: boolean) {
+    const a = accounts.accounts.find((x) => x.id === accountId)
+    if (!a) return
+    const was = a.calendarMuted
+    a.calendarMuted = muted
+    try {
+      await api.setAccountCalendarMuted(accountId, muted)
+      toast(muted ? `Reminders muted for ${a.email}` : `Reminders on for ${a.email}`)
+    } catch (e) {
+      a.calendarMuted = was
+      toast.error('Couldn’t update the mailbox', { description: errorMessage(e) })
+    }
+  }
+
+  /** "Show only this mailbox": check its calendars, uncheck everyone else's. */
+  async function soloAccount(accountId: string) {
+    const changes = calendars.value.filter((c) => c.visible !== (c.accountId === accountId))
+    calendars.value = calendars.value.map((c) => ({ ...c, visible: c.accountId === accountId }))
+    try {
+      await Promise.all(changes.map((c) => api.setCalendarVisible(c.id, c.accountId === accountId)))
+    } catch (e) {
+      toast.error('Couldn’t update the calendars', { description: errorMessage(e) })
+      void loadCalendars()
+    }
+  }
+
+  async function syncAccount(accountId: string) {
+    try {
+      await api.syncCalendars(accountId)
+      await refresh()
+      toast('Calendar synced')
+    } catch (e) {
+      toast.error('Couldn’t sync the calendar', { description: errorMessage(e) })
     }
   }
 
@@ -272,6 +330,6 @@ export const useCalendarStore = defineStore('calendar', () => {
   return {
     calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, openEventId, canEditEvent, available, calendarMap, weekStart, showDeclined,
     visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible,
-    soloCalendar, connect, create, update, move, remove, respond,
+    soloCalendar, setAccountEnabled, setAccountMuted, soloAccount, syncAccount, connect, create, update, move, remove, respond,
   }
 })

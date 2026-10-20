@@ -47,7 +47,7 @@ export class MockCalendar {
 
   /** Pixelforge has no calendar consent yet ("Connect"). */
   decorateAccount(a: Account): Account {
-    return { ...a, calendarConsent: a.calendarConsent ?? a.id !== 'acc_side' }
+    return { ...a, calendarConsent: a.calendarConsent ?? a.id !== 'acc_side', calendarEnabled: a.calendarEnabled ?? true, calendarMuted: a.calendarMuted ?? false }
   }
 
   /** Test flag (?calconsent=none): every mailbox starts without calendar access. */
