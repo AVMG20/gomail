@@ -256,11 +256,11 @@ func TestSyncAnnounceAndIngest(t *testing.T) {
 
 	// Ingest (older pages) never announces.
 	n, err := te.e.Ingest(demo.GmailAccountID, []mail.Message{{RemoteID: "ingested-1", ThreadID: "ti", Subject: "Old",
-		Date: time.Now().Add(-400 * 24 * time.Hour), FolderRemoteIDs: []string{"INBOX"}, Labels: []string{"Travel"}}})
+		Date: time.Now().Add(-400 * 24 * time.Hour), FolderRemoteIDs: []string{"INBOX"}, Labels: []string{"Travel"}}}, time.Now())
 	if err != nil || n != 1 {
 		t.Fatalf("ingest %d %v", n, err)
 	}
-	if n, _ := te.e.Ingest(demo.GmailAccountID, nil); n != 0 {
+	if n, _ := te.e.Ingest(demo.GmailAccountID, nil, time.Now()); n != 0 {
 		t.Fatal("empty ingest")
 	}
 	if te.e.SyncNow(ctx, "nope") == nil {

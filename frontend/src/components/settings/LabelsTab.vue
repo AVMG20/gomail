@@ -20,6 +20,7 @@ import { useAiStore } from '@/stores/ai'
 import { useSettingsStore } from '@/stores/settings'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
+import RulesSection from './RulesSection.vue'
 
 const settings = useSettingsStore()
 const ai = useAiStore()
@@ -181,6 +182,8 @@ function labelAll() {
         <Button variant="ghost" size="sm" @click="labelAll"><SparklesIcon class="text-violet-500" /> Label all mail with AI…</Button>
       </div>
     </SettingSection>
+
+    <RulesSection />
 
     <SettingSection title="Gmail & Outlook">
       <SettingRow title="Import labels from Gmail/Outlook" description="Gmail labels (including Junk) and Outlook categories appear as labels.">

@@ -377,6 +377,7 @@ func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder) (int, er
 		if err != nil {
 			return 0, err
 		}
+		fetched := time.Now()
 		msgs, err := p.ListOlder(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind}, before, olderPageSize)
 		if err != nil {
 			return 0, err
@@ -385,7 +386,7 @@ func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder) (int, er
 			_ = s.store.SetOlderDone(f.AccountID, f.ID, true) // nothing older on the server
 			return 0, nil
 		}
-		n, err := s.engine.Ingest(f.AccountID, msgs)
+		n, err := s.engine.Ingest(f.AccountID, msgs, fetched)
 		if err != nil {
 			return 0, err
 		}
@@ -463,12 +464,13 @@ func (s *Service) remoteSearch(raw, accountID string) {
 			}
 			ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
 			defer cancel()
+			fetched := time.Now()
 			msgs, err := p.Search(ctx, pq, remoteSearchLimit)
 			if err != nil {
 				slog.Debug("server search failed", "account", acct, "err", err)
 				return
 			}
-			n, err := s.engine.Ingest(acct, msgs)
+			n, err := s.engine.Ingest(acct, msgs, fetched)
 			if err == nil && n > 0 {
 				s.emit(models.EventSearchUpdated, models.SearchUpdated{Query: raw, AccountID: acct, Added: n})
 			}

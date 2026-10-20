@@ -132,3 +132,69 @@ func TestCalendarTimeFormat(t *testing.T) {
 		}
 	}
 }
+
+// Rule ids stay stable and unique; generated ids never take an id that a
+// later rule already uses.
+func TestNormalizeRules(t *testing.T) {
+	got := normalizeRules([]models.LabelRule{
+		{ID: "", Contains: " gitlab ", LabelID: "gitlab"},
+		{ID: "rule_1", Field: "subject", Contains: "invoice", Action: "junk", LabelID: "x"},
+		{ID: "rule_1", Contains: "dup", LabelID: "gitlab"},
+		{ID: "keep", Contains: ""}, // not filled in yet: kept, never matches
+	}, map[string]bool{"gitlab": true})
+	if len(got) != 4 {
+		t.Fatalf("rules %+v", got)
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		if r.ID == "" || seen[r.ID] {
+			t.Fatalf("duplicate or empty id in %+v", got)
+		}
+		seen[r.ID] = true
+	}
+	if got[1].ID != "rule_1" || got[3].ID != "keep" {
+		t.Fatalf("ids not stable: %+v", got)
+	}
+	if got[0].Contains != "gitlab" || got[0].Field != "from" || got[0].Action != "label" {
+		t.Fatalf("defaults %+v", got[0])
+	}
+	if got[1].LabelID != "" || got[1].Field != "subject" {
+		t.Fatalf("junk rule %+v", got[1])
+	}
+}
+
+func TestNormalizeQuietLabels(t *testing.T) {
+	got := normalizeQuietLabels(map[string][]string{"": {"junk"}, "a": {"junk", " junk", "", "gitlab"}, "b": nil}, map[string]bool{"junk": true, "gitlab": true})
+	if len(got) != 2 || fmtSlice(got["a"]) != "[junk gitlab]" || got["b"] == nil || len(got["b"]) != 0 {
+		t.Fatalf("%v", got)
+	}
+	s := models.Settings{QuietLabels: got}
+	if fmtSlice(QuietLabels(s, "b")) != "[]" || fmtSlice(QuietLabels(s, "c")) != "[junk]" {
+		t.Fatalf("lookup %v %v", QuietLabels(s, "b"), QuietLabels(s, "c"))
+	}
+}
+
+// Rules and quiet lists that point at a deleted label let go of it: the
+// rule stays (so the user can pick another label) but never matches, and a
+// new label that later gets the same id isn't applied by surprise.
+func TestNormalizeDropsDeletedLabels(t *testing.T) {
+	s := DefaultSettings()
+	s.Labels = append(s.Labels, models.Label{ID: "gitlab", Name: "GitLab"})
+	s.LabelRules = []models.LabelRule{
+		{ID: "a", Contains: "gitlab", LabelID: "gitlab"},
+		{ID: "b", Contains: "ci", LabelID: "deleted"},
+		{ID: "c", Contains: "casino", LabelID: JunkLabelID}, // "add Junk" = move to Junk
+	}
+	s.QuietLabels = map[string][]string{"acct": {"deleted", "gitlab", JunkLabelID}}
+	s.MutedMailboxes = []string{" acct ", "", "acct", "other"}
+	Normalize(&s)
+	if r := s.LabelRules; r[0].LabelID != "gitlab" || r[1].LabelID != "" || r[1].Action != "label" || r[2].Action != "junk" || r[2].LabelID != "" {
+		t.Fatalf("rules %+v", r)
+	}
+	if got := fmtSlice(s.QuietLabels["acct"]); got != "[gitlab junk]" {
+		t.Fatalf("quiet %s", got)
+	}
+	if got := fmtSlice(s.MutedMailboxes); got != "[acct other]" {
+		t.Fatalf("muted %s", got)
+	}
+}

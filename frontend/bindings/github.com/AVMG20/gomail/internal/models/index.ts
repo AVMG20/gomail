@@ -32,6 +32,7 @@ export type {
     Invite,
     Label,
     LabelCount,
+    LabelRule,
     ListQuery,
     Message,
     MessageLabel,

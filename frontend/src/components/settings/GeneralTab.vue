@@ -8,6 +8,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useMailStore } from '@/stores/mail'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
+import QuietLabels from './QuietLabels.vue'
 
 const settings = useSettingsStore()
 const localeClock = localeUses12h() ? '12-hour' : '24-hour'
@@ -92,6 +93,7 @@ async function setConversation(v: boolean) {
       <SettingRow title="Desktop notifications for new mail" description="Show a system notification when new mail arrives.">
         <Switch :model-value="settings.settings.notifications" @update:model-value="(v: boolean) => settings.update({ notifications: v })" />
       </SettingRow>
+      <QuietLabels v-if="settings.settings.notifications" />
       <SettingRow title="Show in system tray" description="Keep gomail in the tray / menu bar with an unread badge.">
         <Switch :model-value="settings.settings.showInTray ?? true" @update:model-value="(v: boolean) => settings.update({ showInTray: v })" />
       </SettingRow>

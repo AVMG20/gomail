@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/AVMG20/gomail/internal/demo"
+	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/secrets"
@@ -73,6 +74,14 @@ func (f *fakeUI) last(event string) any {
 type failingProvider struct {
 	provider.Provider
 	failRead bool
+	failMove bool
+}
+
+func (f *failingProvider) Move(ctx context.Context, ids []string, target mail.Folder) error {
+	if f.failMove {
+		return errors.New("server said no")
+	}
+	return f.Provider.Move(ctx, ids, target)
 }
 
 func (f *failingProvider) SetRead(ctx context.Context, ids []string, read bool) error {

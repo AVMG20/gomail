@@ -157,8 +157,10 @@ func New(opts Options) (*Service, error) {
 		Interval: func() time.Duration {
 			return time.Duration(s.Settings().SyncIntervalMinutes) * time.Minute
 		},
-		OnNewMessages: s.onNewMessages,
-		Online:        online,
+		OnNewMessages:  s.onNewMessages,
+		BeforeAnnounce: s.applyRules,
+		Quiet:          s.quietMessage,
+		Online:         online,
 		Backfill: func() (int, bool) {
 			st := s.Settings()
 			return st.SyncDepthDays, st.BackfillPaused

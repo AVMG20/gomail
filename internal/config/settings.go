@@ -26,6 +26,18 @@ const (
 // JunkLabelID is the built-in label given to mail in Spam/Junk folders.
 const JunkLabelID = "junk"
 
+// DefaultQuietLabels are the labels that don't notify for a mailbox that
+// has no list of its own.
+var DefaultQuietLabels = []string{JunkLabelID}
+
+// QuietLabels returns the labels whose new mail doesn't notify for an account.
+func QuietLabels(s models.Settings, accountID string) []string {
+	if l, ok := s.QuietLabels[accountID]; ok {
+		return l
+	}
+	return DefaultQuietLabels
+}
+
 // Label sources.
 const (
 	LabelSourceUser     = "user"
@@ -201,6 +213,14 @@ func Normalize(s *models.Settings) {
 		s.Radius = DefaultRadius
 	}
 	s.Labels = NormalizeLabels(s.Labels)
+	// After the labels: rules and quiet lists drop labels that are gone.
+	labels := map[string]bool{}
+	for _, l := range s.Labels {
+		labels[l.ID] = true
+	}
+	s.LabelRules = normalizeRules(s.LabelRules, labels)
+	s.QuietLabels = normalizeQuietLabels(s.QuietLabels, labels)
+	s.MutedMailboxes = uniqueTrimmed(s.MutedMailboxes)
 }
 
 // NormalizeLabels validates label definitions: unique slug ids, unique
@@ -278,4 +298,86 @@ func Slug(s string) string {
 		}
 	}
 	return strings.TrimSuffix(b.String(), "-")
+}
+
+// maxRules caps the number of label rules.
+const maxRules = 500
+
+// normalizeRules fills defaults and makes ids unique; ids are otherwise
+// kept stable (the UI edits rules by id). Rules that aren't filled in yet
+// are kept (the UI shows them) but never match. A rule whose label was
+// deleted loses it (so a new label that happens to get the same id isn't
+// applied by surprise); "add the Junk label" means "move to Junk".
+func normalizeRules(in []models.LabelRule, labels map[string]bool) []models.LabelRule {
+	out := []models.LabelRule{}
+	taken := map[string]bool{}
+	for _, r := range in {
+		taken[r.ID] = true
+	}
+	seen := map[string]bool{}
+	next := 1
+	for _, r := range in {
+		if len(out) >= maxRules {
+			break
+		}
+		r.ID = strings.TrimSpace(r.ID)
+		r.Contains = strings.TrimSpace(r.Contains)
+		if r.Field != "subject" {
+			r.Field = "from"
+		}
+		r.LabelID = strings.TrimSpace(r.LabelID)
+		if r.Action != "junk" {
+			r.Action = "label"
+		}
+		if r.Action == "label" && r.LabelID == JunkLabelID {
+			r.Action = "junk"
+		}
+		if r.Action == "junk" || !labels[r.LabelID] {
+			r.LabelID = ""
+		}
+		r.AccountID = strings.TrimSpace(r.AccountID)
+		if r.ID == "" || seen[r.ID] {
+			for taken["rule_"+strconv.Itoa(next)] {
+				next++
+			}
+			r.ID = "rule_" + strconv.Itoa(next)
+			taken[r.ID] = true
+		}
+		seen[r.ID] = true
+		out = append(out, r)
+	}
+	return out
+}
+
+// normalizeQuietLabels drops empty account ids and blank, duplicate or
+// deleted label ids. An empty list means "only Junk is quiet" for that
+// mailbox (Junk never notifies).
+func normalizeQuietLabels(in map[string][]string, labels map[string]bool) map[string][]string {
+	out := map[string][]string{}
+	for acct, ids := range in {
+		if acct = strings.TrimSpace(acct); acct == "" {
+			continue
+		}
+		list := []string{}
+		for _, id := range uniqueTrimmed(ids) {
+			if labels[id] {
+				list = append(list, id)
+			}
+		}
+		out[acct] = list
+	}
+	return out
+}
+
+// uniqueTrimmed trims the strings and drops blanks and duplicates.
+func uniqueTrimmed(in []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, v := range in {
+		if v = strings.TrimSpace(v); v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }

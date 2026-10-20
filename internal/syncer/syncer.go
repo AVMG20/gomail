@@ -43,6 +43,11 @@ type Config struct {
 	Interval func() time.Duration
 	// OnNewMessages is called after a sync stored new messages.
 	OnNewMessages func(accountID string, ids []string, initial bool)
+	// BeforeAnnounce runs on newly stored messages before they are announced
+	// (label rules), so its labels and moves count for notifications.
+	BeforeAnnounce func(accountID string, ids []string)
+	// Quiet reports new mail that shouldn't be announced (quiet labels).
+	Quiet func(accountID string, m models.MessageSummary) bool
 	// Online probes connectivity; nil means "assume online".
 	Online func(ctx context.Context) bool
 	// Backfill returns the backfill depth in days (0 = all) and whether it
@@ -67,6 +72,30 @@ type acctState struct {
 	lastAttempt time.Time
 	failures    int             // consecutive failed syncs
 	labels      map[string]bool // provider label names (lower) seen in the last sync
+	// apply serializes writes of fetched mail (sync, search, older pages)
+	// with optimistic local changes, so "changed locally since the fetch"
+	// is checked and acted on atomically.
+	apply sync.Mutex
+}
+
+// lockApply takes the apply locks of the accounts (in a fixed order).
+func (e *Engine) lockApply(accounts ...string) func() {
+	accounts = append([]string(nil), accounts...)
+	sort.Strings(accounts)
+	var held []*acctState
+	for i, a := range accounts {
+		if i > 0 && a == accounts[i-1] {
+			continue
+		}
+		st := e.state(a)
+		st.apply.Lock()
+		held = append(held, st)
+	}
+	return func() {
+		for i := len(held) - 1; i >= 0; i-- {
+			held[i].apply.Unlock()
+		}
+	}
 }
 
 // Engine is the sync engine.
@@ -431,6 +460,10 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 			_ = e.cfg.Store.SetNeedsReauth(accountID, true)
 		}
 	}
+	// Rules first, so the list never shows mail a rule is about to junk.
+	if err == nil && len(newIDs) > 0 && e.cfg.BeforeAnnounce != nil {
+		e.cfg.BeforeAnnounce(accountID, newIDs)
+	}
 	e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 	e.cfg.Emit.Emit(models.EventSyncFinished, models.SyncEvent{AccountID: accountID, NewMessages: len(newIDs), Error: msg})
@@ -494,12 +527,14 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 	if err != nil {
 		return nil, false, err
 	}
-	e.keepLocalChanges(acct.ID, folders, res.Upserts, started)
 	if report != nil {
 		report("saving", 0, len(res.Upserts))
 	}
 	labelIDs := e.labelIDs(acct.ID, labels, res.Upserts, true)
+	unlock := e.lockApply(acct.ID)
+	e.keepLocalChanges(acct.ID, folders, res.Upserts, started)
 	applied, err := e.cfg.Store.ApplySync(acct.ID, res, labelIDs)
+	unlock()
 	if err != nil {
 		return nil, false, fmt.Errorf("saving synced mail: %w", err)
 	}
@@ -537,18 +572,23 @@ func (e *Engine) labelIDs(accountID string, labels []mail.Label, msgs []mail.Mes
 }
 
 // Ingest stores messages fetched outside a sync round (older pages, server
-// search results) without announcing them as new mail. It returns how many
-// were not cached before.
-func (e *Engine) Ingest(accountID string, msgs []mail.Message) (int, error) {
-	return e.ingest(accountID, msgs, false)
+// search results) without announcing them as new mail. fetched is when the
+// fetch started: messages changed locally since then keep their local read,
+// star and folder state (like a sync), so a slow search can't undo a move.
+// It returns how many were not cached before.
+func (e *Engine) Ingest(accountID string, msgs []mail.Message, fetched time.Time) (int, error) {
+	return e.ingest(accountID, msgs, fetched, false)
 }
 
-func (e *Engine) ingest(accountID string, msgs []mail.Message, quiet bool) (int, error) {
+func (e *Engine) ingest(accountID string, msgs []mail.Message, fetched time.Time, quiet bool) (int, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
 	labelIDs := e.labelIDs(accountID, nil, msgs, false)
+	unlock := e.lockApply(accountID)
+	e.keepLocalChanges(accountID, nil, msgs, fetched)
 	applied, err := e.cfg.Store.ApplySync(accountID, mail.SyncResult{Upserts: msgs}, labelIDs)
+	unlock()
 	if err != nil {
 		return 0, err
 	}
@@ -574,6 +614,9 @@ func (e *Engine) announce(accountID string, ids []string) {
 	var fresh []models.MessageSummary
 	for _, m := range sums {
 		if spam.ID != "" && contains(m.FolderIDs, spam.ID) {
+			continue
+		}
+		if e.cfg.Quiet != nil && e.cfg.Quiet(accountID, m) {
 			continue
 		}
 		if m.Unread && contains(m.FolderIDs, inbox.ID) && time.Since(m.Date) < 7*24*time.Hour {

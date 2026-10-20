@@ -311,6 +311,18 @@ export interface ComposeRequest {
 
 export type LabelSource = 'user' | 'provider' | 'system'
 
+/** Acts on new mail whose sender or subject contains some text (no AI). */
+export interface LabelRule {
+  id: string
+  /** "" = every mailbox */
+  accountId: string
+  field: 'from' | 'subject'
+  contains: string
+  /** "junk" moves the mail to Junk/Spam */
+  action: 'label' | 'junk'
+  labelId: string
+}
+
 export interface Label {
   id: string
   name: string
@@ -347,6 +359,12 @@ export interface Settings {
   classifyInstructions: string
   autoClassify: boolean
   labels: Label[]
+  /** Simple rules applied to new mail (Settings → Labels → Rules). */
+  labelRules?: LabelRule[]
+  /** Account id → labels whose new mail doesn't notify; missing = Junk only. Junk never notifies. */
+  quietLabels?: Record<string, string[]>
+  /** Account ids whose new mail never notifies (calendar reminders are separate). */
+  mutedMailboxes?: string[]
   /** Import Gmail labels / Outlook categories as labels. */
   importProviderLabels: boolean
   /** Native desktop notifications for new mail (backend shows them). */

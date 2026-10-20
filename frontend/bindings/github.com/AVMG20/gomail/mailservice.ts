@@ -32,6 +32,13 @@ export function AddLabel(ids: string[] | null, labelID: string): $CancellablePro
     return $Call.ByID(1419267913, ids, labelID);
 }
 
+/**
+ * ApplyLabelRules runs the label rules over mail already downloaded.
+ */
+export function ApplyLabelRules(): $CancellablePromise<number> {
+    return $Call.ByID(2628460991);
+}
+
 export function Archive(ids: string[] | null): $CancellablePromise<void> {
     return $Call.ByID(1112366144, ids);
 }

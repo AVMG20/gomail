@@ -885,6 +885,15 @@ func (m *MailService) ParseEventText(text, timeZone string) (models.EventDraft, 
 	return uiResult(s.ParseEventText(text, timeZone))
 }
 
+// ApplyLabelRules runs the label rules over mail already downloaded.
+func (m *MailService) ApplyLabelRules() (int, error) {
+	s, err := m.ready()
+	if err != nil {
+		return 0, err
+	}
+	return uiResult(s.ApplyLabelRules())
+}
+
 // SummarizeMessage returns short TL;DR bullets for a message.
 func (m *MailService) SummarizeMessage(id string) (string, error) {
 	s, err := m.ready()

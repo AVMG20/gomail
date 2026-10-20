@@ -8,6 +8,7 @@ import (
 
 	"github.com/AVMG20/gomail/internal/demo"
 	"github.com/AVMG20/gomail/internal/mail"
+	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
 )
 
@@ -100,5 +101,78 @@ func TestBackfillBacksOffFailingFolder(t *testing.T) {
 	}
 	if calls == 0 || calls > folders {
 		t.Fatalf("%d failing older-mail requests for %d folders", calls, folders)
+	}
+}
+
+// A server search (or older page) fetched before the user moved a message
+// must not move it back when its results are stored after the move; the
+// next fetch applies server state again.
+func TestIngestKeepsLocalMoves(t *testing.T) {
+	te := newTestEnv(t)
+	ctx := context.Background()
+	acct := demo.GmailAccountID
+	if err := te.e.SyncNow(ctx, acct); err != nil {
+		t.Fatal(err)
+	}
+	m := te.inbox(t, acct, false)[0]
+	trash, err := te.st.FolderByKind(acct, models.FolderTrash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	search := func() []mail.Message {
+		res, err := te.provs[acct].Search(ctx, mail.SearchQuery{Subject: []string{m.Subject}}, 50)
+		if err != nil || len(res) == 0 {
+			t.Fatalf("search %v %v", len(res), err)
+		}
+		return res
+	}
+	fetched := time.Now()
+	stale := search() // still in the inbox on the server
+	if err := te.e.MoveToKind([]string{m.ID}, models.FolderTrash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := te.e.Ingest(acct, stale, fetched); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := te.st.Summaries([]string{m.ID}); len(s) != 1 || len(s[0].FolderIDs) != 1 || s[0].FolderIDs[0] != trash.ID {
+		t.Fatalf("stale search result undid the move: %+v", s)
+	}
+	// A fetch that started after the move stores what the server says (here:
+	// someone moved it back to the inbox in another mail app).
+	fetched = time.Now().Add(time.Millisecond)
+	fresh := search()
+	for i := range fresh {
+		fresh[i].FolderRemoteIDs = []string{"INBOX"}
+	}
+	if _, err := te.e.Ingest(acct, fresh, fetched); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := te.st.Summaries([]string{m.ID}); len(s) != 1 || len(s[0].FolderIDs) == 0 || s[0].FolderIDs[0] == trash.ID {
+		t.Fatalf("later fetch ignored: %+v", s)
+	}
+}
+
+// Label rules (BeforeAnnounce) run before the UI hears the sync finished,
+// so the list never shows new mail that a rule is about to move to Junk.
+func TestBeforeAnnounceRunsBeforeSyncFinished(t *testing.T) {
+	te := newTestEnv(t)
+	ctx := context.Background()
+	acct := demo.GmailAccountID
+	if err := te.e.SyncNow(ctx, acct); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	finishedBefore := -1
+	te.e.cfg.BeforeAnnounce = func(accountID string, ids []string) {
+		got = ids
+		finishedBefore = te.rec.count(models.EventSyncFinished)
+	}
+	finished := te.rec.count(models.EventSyncFinished)
+	te.provs[acct].Deliver("Build passed", "ci@example.com")
+	if err := te.e.SyncNow(ctx, acct); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || finishedBefore != finished {
+		t.Fatalf("rules saw %v; sync:finished events before them %d, want %d", got, finishedBefore, finished)
 	}
 }

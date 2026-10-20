@@ -646,6 +646,38 @@ export interface LabelCount {
 }
 
 /**
+ * LabelRule acts on new mail whose sender or subject contains some text.
+ */
+export interface LabelRule {
+    "id": string;
+
+    /**
+     * "" = every mailbox
+     */
+    "accountId": string;
+
+    /**
+     * "from" (name or address) | "subject"
+     */
+    "field": string;
+
+    /**
+     * case-insensitive
+     */
+    "contains": string;
+
+    /**
+     * "label" | "junk" (move to Junk/Spam)
+     */
+    "action": string;
+
+    /**
+     * the label for "label"
+     */
+    "labelId": string;
+}
+
+/**
  * ListQuery selects messages for the message list. An empty AccountID means
  * "all accounts" (unified view); FolderKind selects the same system folder
  * across accounts, FolderID selects one specific folder.
@@ -1165,6 +1197,23 @@ export interface Settings {
      * "" = built-in default (see GetDefaultPrompts)
      */
     "grammarSystemPrompt": string;
+
+    /**
+     * LabelRules label (or junk) new mail by simple conditions, without AI.
+     */
+    "labelRules": LabelRule[] | null;
+
+    /**
+     * QuietLabels maps an account id to the labels whose new mail doesn't
+     * notify. Accounts without an entry use DefaultQuietLabels (Junk).
+     */
+    "quietLabels": { [_ in string]?: string[] | null } | null;
+
+    /**
+     * MutedMailboxes lists account ids whose new mail never notifies
+     * (calendar reminders are separate: Account.CalendarMuted).
+     */
+    "mutedMailboxes": string[] | null;
 }
 
 /**

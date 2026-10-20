@@ -21,7 +21,7 @@ export const SEED_LABELS: Label[] = [
 ]
 
 export const PROVIDER_LABELS: Label[] = [
-  { id: 'gmail-junk', name: 'Junk', description: 'Built-in Gmail spam label', color: '#a1a1aa', source: 'system', provider: 'gmail' },
+  { id: 'junk', name: 'Junk', description: 'Mail in Spam/Junk (built-in, same id as the real backend)', color: '#a1a1aa', source: 'system', provider: 'gmail' },
   { id: 'gmail-receipts', name: 'Receipts', description: 'Gmail label', color: '#10b981', source: 'provider', provider: 'gmail' },
   { id: 'outlook-blue', name: 'Blue category', description: 'Outlook category', color: '#0ea5e9', source: 'provider', provider: 'outlook' },
 ]
@@ -453,7 +453,7 @@ function stripHtml(html: string): string {
 
 function providerLabelsFor(t: Tpl, folder: string): string[] {
   const out: string[] = []
-  if (folder === 'spam' && t.acc === 'acc_personal') out.push('gmail-junk')
+  if (folder === 'spam' && t.acc === 'acc_personal') out.push('junk')
   if (folder === 'label:receipts') out.push('gmail-receipts')
   if (t.acc === 'acc_work' && (t.from.email.includes('daniel@') || t.from.email.includes('ines@'))) out.push('outlook-blue')
   return out

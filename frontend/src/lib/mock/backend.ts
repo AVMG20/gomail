@@ -774,7 +774,7 @@ class MockBackend {
             if (!this.settings.autoClassify) { msg.labels = []; msg.labelDetails = [] }
             this.messages.set(msg.id, msg)
             newMessages = 1
-            this.emit('mail:new', { accountId: msg.accountId, count: 1, latest: this.summary(msg) })
+            if (!this.quiet(msg)) this.emit('mail:new', { accountId: msg.accountId, count: 1, latest: this.summary(msg) })
           }
         }
         a.syncing = false
@@ -871,7 +871,7 @@ class MockBackend {
       newsletters: ['newsletter', 'digest', 'weekly', 'unsubscribe', "what's new", 'issue'],
       social: ['saturday', 'dinner', 'love', 'photos', 'pizza', 'book', 'climbing'],
       updates: ['github', 'notification', 'alert', 'deployment', 'commented', 'reminder', 'assigned', 'linear'],
-      'gmail-junk': ['won', 'prize', 'claim', 'urgent', 'verify', 'password expires', 'lucky'],
+      junk: ['won', 'prize', 'claim', 'urgent', 'verify', 'password expires', 'lucky'],
       'gmail-receipts': ['receipt', 'invoice', 'statement', 'paid', 'total'],
     }
     const s = this.settings
@@ -1028,6 +1028,39 @@ class MockBackend {
   async CancelClassify(jobId: string): Promise<void> {
     const job = this.jobs.get(jobId)
     if (job) job.cancelled = true
+  }
+
+  /** Like the backend's Quiet hook: muted mailbox, Junk, or a quiet label of that mailbox. */
+  private quiet(m: Message): boolean {
+    if (this.settings.mutedMailboxes?.includes(m.accountId)) return true
+    const quiet = this.settings.quietLabels?.[m.accountId] ?? ['junk']
+    return m.labels.some((l) => l === 'junk' || quiet.includes(l))
+  }
+
+  /** Like the backend: labels only (Junk rules act on new mail), counts messages that got a label. */
+  async ApplyLabelRules(): Promise<number> {
+    await latency(100, 300)
+    const rules = (this.settings.labelRules ?? []).filter((r) => r.action === 'label' && r.labelId && r.contains.trim())
+    const valid = new Set(this.allLabels().map((l) => l.id))
+    const changed = new Set<string>()
+    for (const m of this.messages.values()) {
+      for (const r of rules) {
+        if (r.accountId && r.accountId !== m.accountId) continue
+        if (!valid.has(r.labelId)) continue
+        const hay = r.field === 'subject' ? m.subject : `${m.from.name} ${m.from.email}`
+        if (!hay.toLowerCase().includes(r.contains.trim().toLowerCase())) continue
+        if (!m.labels.includes(r.labelId)) {
+          m.labels.push(r.labelId)
+          m.labelDetails = [...(m.labelDetails ?? []), { labelId: r.labelId, source: 'manual', confidence: 1 }]
+          changed.add(m.id)
+        }
+      }
+    }
+    if (changed.size) {
+      this.emit('messages:changed', { accountId: '' })
+      this.emit('labels:changed', { accountId: '' })
+    }
+    return changed.size
   }
 
   async ParseEventText(text: string): Promise<EventDraft> {

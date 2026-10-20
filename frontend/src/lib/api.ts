@@ -125,7 +125,7 @@ export const USED_METHODS = [
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
 export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', ...CALENDAR_METHODS]
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', ...CALENDAR_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -294,6 +294,9 @@ export function normSettings(s: Settings): Settings {
     classifyInstructions: s.classifyInstructions ?? '',
     microsoftTenant: s.microsoftTenant || 'common',
     notifications: s.notifications ?? true,
+    labelRules: s.labelRules ?? [],
+    quietLabels: s.quietLabels ?? {},
+    mutedMailboxes: s.mutedMailboxes ?? [],
     // Not (yet) in the Go Settings struct: fall back to the locally stored value.
     showInTray: s.showInTray ?? readLocal('showInTray', true),
     closeToTray: s.closeToTray ?? readLocal('closeToTray', false),
@@ -494,6 +497,8 @@ export const api = {
   },
   cancelClassify: (jobId: string) => call<void>('CancelClassify', jobId),
   summarizeMessage: (id: string) => call<string>('SummarizeMessage', id),
+  /** Run the label rules over mail already downloaded; returns how many changed. */
+  applyLabelRules: () => call<number>('ApplyLabelRules'),
   /** Natural language → event fields with the chat model; timeZone anchors "tomorrow 9am". */
   parseEventText: (text: string, timeZone: string) => call<EventDraft>('ParseEventText', text, timeZone),
   improveGrammar: (text: string) => call<string>('ImproveGrammar', text),

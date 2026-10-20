@@ -235,6 +235,16 @@ type ComposeRequest struct {
 	AttachmentsComplete bool `json:"attachmentsComplete"`
 }
 
+// LabelRule acts on new mail whose sender or subject contains some text.
+type LabelRule struct {
+	ID        string `json:"id"`
+	AccountID string `json:"accountId"` // "" = every mailbox
+	Field     string `json:"field"`     // "from" (name or address) | "subject"
+	Contains  string `json:"contains"`  // case-insensitive
+	Action    string `json:"action"`    // "label" | "junk" (move to Junk/Spam)
+	LabelID   string `json:"labelId"`   // the label for "label"
+}
+
 // Label is a user-defined label. Labels are applied manually or by the AI
 // classifier (OpenRouter Jev), which uses Description as guidance.
 type Label struct {
@@ -300,6 +310,15 @@ type Settings struct {
 	AICorrectsProviderLabels bool    `json:"aiCorrectsProviderLabels"` // allow those removals (default true)
 	ClassifyInstructions     string  `json:"classifyInstructions"`     // per-label question template; "" = default. "{label}" is replaced by the label name
 	GrammarSystemPrompt      string  `json:"grammarSystemPrompt"`      // "" = built-in default (see GetDefaultPrompts)
+
+	// LabelRules label (or junk) new mail by simple conditions, without AI.
+	LabelRules []LabelRule `json:"labelRules"`
+	// QuietLabels maps an account id to the labels whose new mail doesn't
+	// notify. Accounts without an entry use DefaultQuietLabels (Junk).
+	QuietLabels map[string][]string `json:"quietLabels"`
+	// MutedMailboxes lists account ids whose new mail never notifies
+	// (calendar reminders are separate: Account.CalendarMuted).
+	MutedMailboxes []string `json:"mutedMailboxes"`
 }
 
 // AIUsage summarizes OpenRouter spending recorded by gomail (local time).

@@ -1225,3 +1225,98 @@ func (s *Store) AIUsage(now time.Time) (models.AIUsage, error) {
 		Scan(&u.TodayUSD, &u.RequestsToday, &u.MonthUSD, &u.RequestsMonth)
 	return u, err
 }
+
+// ApplyRuleLabel gives messages a label from a rule (stored like a manual
+// label, so classification leaves it alone). Messages that already have it,
+// or where the user removed it by hand, are skipped; an AI assignment of
+// the label becomes a rule (manual) one, so a later re-classification
+// can't take away what the rule gave. Returns the ids that got the label.
+func (s *Store) ApplyRuleLabel(ids []string, labelID string) ([]string, error) {
+	var added []string
+	err := s.tx(context.Background(), func(tx *sql.Tx) error {
+		now := time.Now().UnixMilli()
+		for _, chunk := range chunks(ids, 500) {
+			if _, err := tx.Exec(`UPDATE message_labels SET source = 'manual', confidence = 1
+				WHERE label_id = ? AND source = 'ai' AND message_id IN (`+placeholders(len(chunk))+`)`,
+				append([]any{labelID}, anySlice(chunk)...)...); err != nil {
+				return err
+			}
+			rows, err := tx.Query(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at)
+				SELECT m.id, ?, 'manual', 1, ? FROM messages m
+				WHERE m.id IN (`+placeholders(len(chunk))+`)
+				AND NOT EXISTS (SELECT 1 FROM label_rejections r WHERE r.message_id = m.id AND r.label_id = ?)
+				ON CONFLICT(message_id, label_id) DO NOTHING
+				RETURNING message_id`, append(append([]any{labelID, now}, anySlice(chunk)...), labelID)...)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				added = append(added, id)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return added, nil
+}
+
+// RuleCandidate is what label rules look at.
+type RuleCandidate struct {
+	ID, AccountID, FromName, FromEmail, Subject string
+	InSpam                                      bool
+}
+
+// ruleCandidatesQuery selects received mail (not sent, drafts or trash).
+const ruleCandidatesQuery = `SELECT id, account_id, from_name, from_email, subject, (folder_kinds & ?) != 0 FROM messages
+	WHERE (folder_kinds & ?) = 0`
+
+func ruleCandidatesArgs(ids []string) []any {
+	return append([]any{kindBits["spam"], kindMask([]string{"sent", "drafts", "trash"})}, anySlice(ids)...)
+}
+
+// RuleCandidates lists the given messages for label rules, skipping sent
+// mail, drafts and trash. It looks them up by id, so rules on a big first
+// sync don't scan the whole mailbox.
+func (s *Store) RuleCandidates(ids []string) ([]RuleCandidate, error) {
+	var out []RuleCandidate
+	for _, chunk := range chunks(ids, 500) {
+		var err error
+		if out, err = s.scanRuleCandidates(out, ruleCandidatesQuery+` AND id IN (`+placeholders(len(chunk))+`)`, ruleCandidatesArgs(chunk)); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// AllRuleCandidates lists every cached received message ("Apply to
+// existing mail").
+func (s *Store) AllRuleCandidates() ([]RuleCandidate, error) {
+	return s.scanRuleCandidates(nil, ruleCandidatesQuery, ruleCandidatesArgs(nil))
+}
+
+func (s *Store) scanRuleCandidates(out []RuleCandidate, query string, args []any) ([]RuleCandidate, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c RuleCandidate
+		if err := rows.Scan(&c.ID, &c.AccountID, &c.FromName, &c.FromEmail, &c.Subject, &c.InSpam); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

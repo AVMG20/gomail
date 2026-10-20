@@ -135,9 +135,16 @@ func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups [
 	for _, f := range local {
 		remoteOf[f.ID] = f.RemoteID
 	}
+	// folders lists the folders the provider still has (nil: trust the
+	// local list, e.g. for search results fetched outside a sync).
 	known := map[string]bool{}
 	for _, f := range folders {
 		known[f.RemoteID] = true
+	}
+	if folders == nil {
+		for _, f := range local {
+			known[f.RemoteID] = true
+		}
 	}
 	for _, sm := range sums {
 		m := &ups[idx[sm.ID]]
@@ -172,7 +179,9 @@ func (e *Engine) perAccount(groups map[string][]models.MessageSummary, what stri
 			defer cancel()
 			if err := safe.Call(what, func() error { return push(ctx, acct, ms) }); err != nil {
 				slog.Warn("action failed", "action", what, "account", acct, "err", err)
+				unlock := e.lockApply(acct)
 				revert(acct, failedOnly(ms, err))
+				unlock()
 				a, _ := e.cfg.Store.Account(acct)
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("Couldn't %s on %s: %s", what, a.Email, HumanError(a, err)))
@@ -247,7 +256,11 @@ func (e *Engine) MarkRead(ids []string, read bool) error {
 	if err != nil {
 		return err
 	}
+	unlock := e.lockApply(keys(groups)...)
+	done := e.local.begin(ids)
+	defer done()
 	changed, err := e.cfg.Store.SetUnread(ids, !read)
+	unlock()
 	if err != nil {
 		return err
 	}
@@ -277,7 +290,11 @@ func (e *Engine) SetStarred(ids []string, starred bool) error {
 	if err != nil {
 		return err
 	}
+	unlock := e.lockApply(keys(groups)...)
+	done := e.local.begin(ids)
+	defer done()
 	changed, err := e.cfg.Store.SetStarred(ids, starred)
+	unlock()
 	if err != nil {
 		return err
 	}
@@ -373,7 +390,14 @@ func (e *Engine) move(ids []string, targetFor func(acct string) (models.Folder, 
 			newSets[m.ID] = next
 		}
 	}
-	if err := e.cfg.Store.SetMessageFolders(newSets); err != nil {
+	// Mark the change before writing it, so fetched mail being stored right
+	// now can't overwrite it with older server state.
+	unlock := e.lockApply(keys(groups)...)
+	done := e.local.begin(ids)
+	defer done()
+	err = e.cfg.Store.SetMessageFolders(newSets)
+	unlock()
+	if err != nil {
 		return err
 	}
 	e.changed(keys(groups)...)

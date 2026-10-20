@@ -161,6 +161,7 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 	}
 	pctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	fetched := time.Now()
 	msgs, err := p.ListOlder(pctx, mail.Folder{RemoteID: c.folder.RemoteID, Name: c.folder.Name, Kind: c.folder.Kind}, c.oldest, backfillPage)
 	if err != nil {
 		if IsNetworkError(err) {
@@ -177,7 +178,7 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 		_ = e.cfg.Store.SetOlderDone(c.acct.ID, c.folder.ID, true)
 		return true
 	}
-	if _, err := e.ingest(c.acct.ID, msgs, true); err != nil {
+	if _, err := e.ingest(c.acct.ID, msgs, fetched, true); err != nil {
 		slog.Warn("backfill store failed", "account", c.acct.ID, "err", err)
 		return false
 	}
