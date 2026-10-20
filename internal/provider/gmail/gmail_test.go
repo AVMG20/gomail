@@ -354,7 +354,7 @@ func TestDraftsOlderAndSearchString(t *testing.T) {
 	}
 	before := time.Unix(1790000000, 0)
 	msgs, err := c.ListOlder(ctx, mail.Folder{RemoteID: "INBOX", Kind: models.FolderInbox}, before, 50)
-	if err != nil || len(msgs) != 1 || f.olderQ != "before:1790000000|INBOX" {
+	if err != nil || len(msgs) != 1 || f.olderQ != "before:1790000001|INBOX" {
 		t.Fatalf("%v %v %q", msgs, err, f.olderQ)
 	}
 	yes := true

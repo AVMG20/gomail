@@ -81,6 +81,13 @@ type Service struct {
 
 	settingsMu sync.Mutex
 	settings   models.Settings
+	// labelsRev counts label changes made outside SaveSettings (sync
+	// imports, mailboxes added or removed); labelAdded and labelDropped
+	// hold the revision at which the backend added or dropped a label. See
+	// SaveSettings.
+	labelsRev    int64
+	labelAdded   map[string]int64
+	labelDropped map[string]int64
 
 	provMu    sync.Mutex
 	providers map[string]provider.Provider

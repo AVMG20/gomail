@@ -709,7 +709,7 @@ func (p *Provider) ListOlder(ctx context.Context, folder mail.Folder, before tim
 	defer p.mu.Unlock()
 	var out []mail.Message
 	for id, m := range p.msgs {
-		if contains(m.meta.FolderRemoteIDs, folder.RemoteID) && (before.IsZero() || m.meta.Date.Before(before)) {
+		if contains(m.meta.FolderRemoteIDs, folder.RemoteID) && (before.IsZero() || m.meta.Date.Before(provider.OlderBound(before))) {
 			out = append(out, p.snapshot(id))
 		}
 	}

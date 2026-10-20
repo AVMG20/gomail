@@ -75,7 +75,9 @@ type acctState struct {
 	// apply serializes writes of fetched mail (sync, search, older pages)
 	// with optimistic local changes, so "changed locally since the fetch"
 	// is checked and acted on atomically.
-	apply sync.Mutex
+	apply   sync.Mutex
+	pushQ   []func() // queued label pushes (see queuePush; e.mu)
+	pushing bool     // a goroutine is working through pushQ
 }
 
 // lockApply takes the apply locks of the accounts (in a fixed order).
@@ -531,10 +533,7 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 		report("saving", 0, len(res.Upserts))
 	}
 	labelIDs := e.labelIDs(acct.ID, labels, res.Upserts, true)
-	unlock := e.lockApply(acct.ID)
-	e.keepLocalChanges(acct.ID, folders, res.Upserts, started)
-	applied, err := e.cfg.Store.ApplySync(acct.ID, res, labelIDs)
-	unlock()
+	applied, err := e.applyFetched(acct.ID, folders, res, labelIDs, started)
 	if err != nil {
 		return nil, false, fmt.Errorf("saving synced mail: %w", err)
 	}
@@ -542,6 +541,15 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 		report("saving", len(res.Upserts), len(res.Upserts))
 	}
 	return applied.New, res.Initial, nil
+}
+
+// applyFetched stores a sync round whose fetch started at started. Local
+// changes made since then win over the round's (older) server state.
+func (e *Engine) applyFetched(accountID string, folders []mail.Folder, res mail.SyncResult, labelIDs map[string]string, started time.Time) (store.ApplyResult, error) {
+	unlock := e.lockApply(accountID)
+	defer unlock()
+	moved := e.keepLocalChanges(accountID, folders, res.Upserts, started)
+	return e.cfg.Store.ApplySyncKeeping(accountID, res, labelIDs, moved)
 }
 
 // labelIDs resolves provider labels (including names only seen on
@@ -586,8 +594,8 @@ func (e *Engine) ingest(accountID string, msgs []mail.Message, fetched time.Time
 	}
 	labelIDs := e.labelIDs(accountID, nil, msgs, false)
 	unlock := e.lockApply(accountID)
-	e.keepLocalChanges(accountID, nil, msgs, fetched)
-	applied, err := e.cfg.Store.ApplySync(accountID, mail.SyncResult{Upserts: msgs}, labelIDs)
+	moved := e.keepLocalChanges(accountID, nil, msgs, fetched)
+	applied, err := e.cfg.Store.ApplySyncKeeping(accountID, mail.SyncResult{Upserts: msgs}, labelIDs, moved)
 	unlock()
 	if err != nil {
 		return 0, err

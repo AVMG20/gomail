@@ -421,7 +421,13 @@ func (s *Store) AdvanceOlderCursor(accountID, folderID string, page []time.Time)
 		return err
 	}
 	if !cur.IsZero() && !oldest.Before(cur) {
-		return nil
+		if !oldest.Truncate(time.Second).Equal(cur.Truncate(time.Second)) {
+			return nil // never moves up
+		}
+		// No progress: the page only held mail of the cursor's second
+		// (ListOlder includes it). Step past that second, or paging would
+		// fetch the same page forever.
+		oldest = cur.Truncate(time.Second).Add(-time.Millisecond)
 	}
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
 		return saveSyncState(tx, accountID, map[string]string{olderCursorKey(folderID): strconv.FormatInt(toMillis(oldest), 10)})

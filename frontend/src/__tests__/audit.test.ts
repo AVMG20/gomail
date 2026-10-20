@@ -148,6 +148,21 @@ describe('drafts', () => {
     expect(save.mock.calls.map((c) => c[1])).toEqual(['', 'draft:a:1'])
   })
 
+  it('an autosave waits for the first server save instead of creating a second draft', async () => {
+    vi.useFakeTimers()
+    const compose = useComposeStore()
+    const gate = deferred<string>()
+    const save = vi.spyOn(api, 'saveDraft').mockReturnValueOnce(gate.promise).mockResolvedValue('draft:a:1')
+    const d = compose.compose([{ name: '', email: 'to@x.io' }])
+    d.subject = 'Hi'
+    await vi.advanceTimersByTimeAsync(3800) // first save in flight (slow: large attachments)
+    d.subject = 'Hi there'
+    await vi.advanceTimersByTimeAsync(3800) // the next autosave comes due meanwhile
+    gate.resolve('draft:a:1')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(save.mock.calls.map((c) => c[1])).toEqual(['', 'draft:a:1'])
+  })
+
   it('never drops a draft that is being sent to make room in the dock', () => {
     const compose = useComposeStore()
     const first = compose.compose()

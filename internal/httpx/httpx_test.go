@@ -214,3 +214,19 @@ func TestBudgetPacesSpending(t *testing.T) {
 		t.Fatalf("slept %v, want ~500ms", slept)
 	}
 }
+
+// Google's ordinary 500 body names the reason "backendError"; that must
+// not make a send (a non-idempotent POST) go out again.
+func TestPostIsNotRepeatedAfterGoogleBackendError(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(500)
+		w.Write([]byte(`{"error":{"code":500,"message":"Backend Error","errors":[{"reason":"backendError","message":"Backend Error"}]}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, Service: "Gmail", MaxRetries: 2, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := c.Do(context.Background(), Request{Method: "POST", Path: "messages/send"}); err == nil || calls != 1 {
+		t.Fatalf("%d calls, want 1 (%v)", calls, err)
+	}
+}

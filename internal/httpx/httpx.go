@@ -242,7 +242,10 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, error) {
 			c.Tokens.Invalidate()
 			continue
 		}
-		safeToRetry := r.idempotent() || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || apiErr.Retryable()
+		// A quota error (403 with a rate-limit reason) wasn't acted on; a
+		// 500 is ambiguous even when Google names it "backendError".
+		safeToRetry := r.idempotent() || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable ||
+			(apiErr.Retryable() && resp.StatusCode < 500)
 		if (retryable(resp.StatusCode) || apiErr.Retryable()) && safeToRetry && attempt < maxRetries {
 			d := backoff(attempt, apiErr.RetryAfter)
 			if apiErr.rateQuota() && apiErr.RetryAfter == 0 {

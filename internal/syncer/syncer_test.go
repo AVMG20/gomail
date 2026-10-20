@@ -63,6 +63,12 @@ type flaky struct {
 	fail   map[string]error
 	calls  map[string]int
 	labels []string
+	// markFolderReadHook, if set, runs before MarkFolderRead (tests block it).
+	markFolderReadHook func()
+	// moveHook, if set, runs before Move; an error fails the move.
+	moveHook func(target mail.Folder) error
+	// labelHook, if set, runs before SetLabel.
+	labelHook func()
 }
 
 func (f *flaky) err(op string) error {
@@ -103,6 +109,11 @@ func (f *flaky) Move(ctx context.Context, ids []string, target mail.Folder) erro
 	if err := f.err("move"); err != nil {
 		return err
 	}
+	if f.moveHook != nil {
+		if err := f.moveHook(target); err != nil {
+			return err
+		}
+	}
 	return f.Provider.Move(ctx, ids, target)
 }
 
@@ -110,6 +121,9 @@ func (f *flaky) SetLabel(ctx context.Context, ids []string, name string, add boo
 	f.mu.Lock()
 	f.labels = append(f.labels, fmt.Sprintf("%s:%v:%d", name, add, len(ids)))
 	f.mu.Unlock()
+	if f.labelHook != nil {
+		f.labelHook()
+	}
 	return f.Provider.SetLabel(ctx, ids, name, add)
 }
 
@@ -123,6 +137,9 @@ func (f *flaky) ListOlder(ctx context.Context, folder mail.Folder, before time.T
 func (f *flaky) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
 	if err := f.err("folderread"); err != nil {
 		return err
+	}
+	if f.markFolderReadHook != nil {
+		f.markFolderReadHook()
 	}
 	return f.Provider.MarkFolderRead(ctx, folder)
 }

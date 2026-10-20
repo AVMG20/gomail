@@ -185,7 +185,12 @@ export const useComposeStore = defineStore('compose', () => {
       scheduledRemote.delete(d.id)
       const cur = drafts.value.find((x) => x.id === d.id)
       if (!cur || cur.queued || cur.sending || filesIncomplete(cur)) return
+      // A save still running (large files take a while) must finish first: until it
+      // returns the draft has no server id, and this save would create a second draft.
+      const prev = remoteInflight.get(d.id)
       const run = (async () => {
+        if (prev) await prev
+        if (cur.queued || cur.sending || filesIncomplete(cur)) return
         try {
           dropForeignRemote(cur)
           const accountId = cur.accountId

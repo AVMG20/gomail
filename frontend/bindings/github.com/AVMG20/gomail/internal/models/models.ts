@@ -1261,6 +1261,14 @@ export interface Settings {
     "openRouterKeySet": boolean;
 
     /**
+     * LabelsRev is the revision of the label list this copy was read at
+     * (read-only, not stored). The UI sends it back unchanged with
+     * SaveSettings, so labels the backend added after the UI read them
+     * (provider labels found by a sync) aren't taken as deleted.
+     */
+    "labelsRev": number;
+
+    /**
      * chat model (grammar, summaries, drafts)
      */
     "openRouterModel": string;

@@ -313,9 +313,14 @@ type Settings struct {
 	MicrosoftClientID  string `json:"microsoftClientId"`
 	MicrosoftTenant    string `json:"microsoftTenant"` // default "common"
 
-	OpenRouterKeySet bool   `json:"openRouterKeySet"` // read-only; the key itself never leaves the backend
-	OpenRouterModel  string `json:"openRouterModel"`  // chat model (grammar, summaries, drafts)
-	ClassifierModel  string `json:"classifierModel"`  // OpenRouter Decisions model, default "typesafe/jev-1.13"
+	OpenRouterKeySet bool `json:"openRouterKeySet"` // read-only; the key itself never leaves the backend
+	// LabelsRev is the revision of the label list this copy was read at
+	// (read-only, not stored). The UI sends it back unchanged with
+	// SaveSettings, so labels the backend added after the UI read them
+	// (provider labels found by a sync) aren't taken as deleted.
+	LabelsRev       int64  `json:"labelsRev"`
+	OpenRouterModel string `json:"openRouterModel"` // chat model (grammar, summaries, drafts)
+	ClassifierModel string `json:"classifierModel"` // OpenRouter Decisions model, default "typesafe/jev-1.13"
 
 	// Labels and AI labeling.
 	Labels               []Label `json:"labels"`

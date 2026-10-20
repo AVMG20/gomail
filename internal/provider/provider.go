@@ -83,7 +83,10 @@ type Provider interface {
 	Send(ctx context.Context, out mail.Outgoing) error
 
 	// ListOlder returns up to limit messages of a folder received before
-	// the given time, newest first (scrolling past the cached range).
+	// the end of the second of the given time (OlderBound), newest first
+	// (scrolling past the cached range). The cursor's own second is
+	// included: servers filter by whole seconds, and messages sharing it
+	// with the oldest one cached may not be cached yet.
 	ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error)
 	// Search runs a server-side search.
 	Search(ctx context.Context, q mail.SearchQuery, limit int) ([]mail.Message, error)
@@ -104,6 +107,10 @@ type Provider interface {
 	// emptied by Gmail itself after 30 days).
 	EmptyFolder(ctx context.Context, folder mail.Folder) error
 }
+
+// OlderBound is the exclusive upper date bound ListOlder uses for before:
+// the end of before's second.
+func OlderBound(before time.Time) time.Time { return before.Truncate(time.Second).Add(time.Second) }
 
 // MaxFolderOp caps how many messages a folder-wide operation touches.
 const MaxFolderOp = 20000
