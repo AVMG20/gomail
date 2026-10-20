@@ -149,12 +149,16 @@ func scrubStyleBlocks(s string) string {
 	})
 }
 
+// A remote reference is protocol-relative ("//host") or has an http(s)
+// scheme in any spelling browsers accept: "https://host", "https:\\host"
+// and even "https:host" all load from host (the page's base URL isn't
+// http(s), so the scheme can't make them relative).
 var (
-	remoteRe      = regexp.MustCompile(`(?i)\b(src|background)\s*=\s*["']?\s*(https?:)?//|\bsrcset\s*=\s*["']?[^"'>]*?\bhttps?:|url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//|image-set\(`)
+	remoteRe      = regexp.MustCompile(`(?i)\b(src|background)\s*=\s*["']?\s*(https?:|//)|\bsrcset\s*=\s*["']?[^"'>]*?\bhttps?:|url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:|//)|image-set\(`)
 	imageSetRe    = regexp.MustCompile(`(?i)(-webkit-)?image-set\([^)]*\)`)
-	remoteAttrRe  = regexp.MustCompile(`(?i)\s(src|background)\s*=\s*"\s*(https?:)?//[^"]*"`)
+	remoteAttrRe  = regexp.MustCompile(`(?i)\s(src|background)\s*=\s*"\s*(https?:|//)[^"]*"`)
 	remoteSetRe   = regexp.MustCompile(`(?i)\ssrcset\s*=\s*"[^"]*"`)
-	remoteURLFnRe = regexp.MustCompile(`(?i)url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//[^)]*\)`)
+	remoteURLFnRe = regexp.MustCompile(`(?i)url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:|//)[^)]*\)`)
 )
 
 // HasRemoteContent reports whether HTML loads remote resources (images,

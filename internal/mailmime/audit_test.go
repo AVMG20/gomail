@@ -23,6 +23,28 @@ func TestProtocolRelativeRemoteContent(t *testing.T) {
 	}
 }
 
+// Browsers load "https:\\host/x" and "https:host/x" from host just like
+// "https://host/x", so they are remote content too.
+func TestSlashlessRemoteContentIsBlocked(t *testing.T) {
+	for _, in := range []string{
+		`<img src="https:\\tracker.example/p.gif">`,
+		`<img src="https:tracker.example/p.gif">`,
+		`<img src="HTTP:/tracker.example/p.gif">`,
+		`<table background="https:\\tracker.example/bg.gif"><tr><td>x</td></tr></table>`,
+		`<div style="background-image:url(https:tracker.example/p.gif)">x</div>`,
+		`<style>p{background:url('http:tracker.example/a.gif')}</style><p>x</p>`,
+	} {
+		html := SanitizeHTML(in)
+		out, blocked := BlockRemoteContent(html)
+		if !HasRemoteContent(html) || !blocked || strings.Contains(out, "tracker.example") {
+			t.Errorf("%s: not blocked: %q", in, out)
+		}
+	}
+	if HasRemoteContent(`<img src="https-logo.png"><div style="background:url(img/http.png)">x</div>`) {
+		t.Fatal("relative paths counted as remote")
+	}
+}
+
 func TestMessageIDs(t *testing.T) {
 	if got := MessageIDs(`<a@x> (comment) <b@y>`); got != "<a@x> <b@y>" {
 		t.Fatal(got)
