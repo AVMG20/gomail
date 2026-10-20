@@ -285,6 +285,13 @@ export function MoveToFolder(ids: string[] | null, folderID: string): $Cancellab
 }
 
 /**
+ * MoveToJunk moves messages to their own account's Junk/Spam folder.
+ */
+export function MoveToJunk(ids: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(1528285552, ids);
+}
+
+/**
  * OpenExternalURL opens an http(s)/mailto link in the system browser.
  */
 export function OpenExternalURL(url: string): $CancellablePromise<void> {

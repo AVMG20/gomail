@@ -248,6 +248,14 @@ func (s *Service) Trash(ids []string) error {
 	return s.engine.MoveToKind(ids, models.FolderTrash)
 }
 
+func (s *Service) MoveToJunk(ids []string) error {
+	ids, err := s.expand(ids, store.ExpandFolder)
+	if err != nil {
+		return err
+	}
+	return s.engine.MoveToKind(ids, models.FolderSpam)
+}
+
 func (s *Service) MoveToFolder(ids []string, folderID string) error {
 	ids, err := s.expand(ids, store.ExpandFolder)
 	if err != nil {

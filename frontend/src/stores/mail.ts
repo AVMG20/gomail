@@ -660,6 +660,31 @@ export const useMailStore = defineStore('mail', () => {
     accounts.refreshCounts()
   }
 
+  /** Move to each message's own account's Junk folder, with Undo (works across accounts, like Trash). */
+  async function junk(ids: string[]) {
+    if (!ids.length) return
+    if (mailbox.value.kind === 'spam') {
+      toast('Already in Junk')
+      return
+    }
+    const backendIds = actionIds(ids) // before the rows leave the list
+    const items = snapshot(ids)
+    const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
+    removeLocal(ids)
+    try {
+      await inChunks(backendIds, api.moveToJunk)
+      announce(`${plural(ids.length, 'conversation')} moved to Junk`)
+      toast(`${ids.length === 1 ? 'Moved' : plural(ids.length, 'message') + ' moved'} to Junk`, {
+        action: { label: 'Undo', onClick: undo },
+      })
+    } catch (e) {
+      restoreLocal(items)
+      toast.error('Move to Junk failed', { description: errorMessage(e) })
+      void softRefresh() // earlier chunks may have gone through
+    }
+    accounts.refreshCounts()
+  }
+
   /** Move to a folder of the messages' account, with Undo. */
   async function moveToFolder(ids: string[], folderId: string) {
     if (!ids.length) return
@@ -787,6 +812,6 @@ export const useMailStore = defineStore('mail', () => {
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
-    archive, trash, setRead, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
+    archive, trash, junk, setRead, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
   }
 })

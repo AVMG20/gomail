@@ -260,10 +260,13 @@ func TestOptimisticActionsAndRevert(t *testing.T) {
 		t.Fatalf("trash folders %v", m.FolderIDs)
 	}
 	spam, _ := s.store.FolderByKind(demo.GmailAccountID, models.FolderSpam)
-	if err := s.MoveToFolder(ids[:1], spam.ID); err != nil {
+	if err := s.MoveToJunk(ids[:1]); err != nil {
 		t.Fatal(err)
 	}
 	m, _, _ = s.store.Message(ids[0])
+	if len(m.FolderIDs) != 1 || m.FolderIDs[0] != spam.ID {
+		t.Fatalf("junk folders %v", m.FolderIDs)
+	}
 	if !containsStr(m.Labels, "junk") {
 		t.Fatalf("junk label missing %v", m.Labels)
 	}

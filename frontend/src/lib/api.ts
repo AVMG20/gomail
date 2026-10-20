@@ -116,7 +116,7 @@ export function hasMethod(name: string): boolean {
 /** Every backend method the UI uses; logged when missing so gaps are obvious in dev. */
 export const USED_METHODS = [
   'GetAccounts', 'AddAccount', 'CancelAddAccount', 'RemoveAccount', 'UpdateAccount', 'GetFolders', 'ListMessages', 'GetMessage',
-  'GetThread', 'MarkRead', 'SetStarred', 'Archive', 'Trash', 'MoveToFolder', 'SendMessage', 'SaveAttachment', 'SyncNow',
+  'GetThread', 'MarkRead', 'SetStarred', 'Archive', 'Trash', 'MoveToJunk', 'MoveToFolder', 'SendMessage', 'SaveAttachment', 'SyncNow',
   'OpenExternalURL', 'SearchMessages', 'ResolveQueryIDs', 'GetSettings', 'SaveSettings', 'SetOpenRouterKey', 'GetAppInfo',
   'GetDefaultPrompts', 'TestOpenRouter', 'ListAIModels', 'ClassifyMessages', 'AddLabel', 'RemoveLabel', 'GetLabelCounts',
   'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
@@ -371,6 +371,7 @@ export const api = {
   setStarred: (ids: string[], starred: boolean) => call<void>('SetStarred', ids, starred),
   archive: (ids: string[]) => call<void>('Archive', ids),
   trash: (ids: string[]) => call<void>('Trash', ids),
+  moveToJunk: (ids: string[]) => call<void>('MoveToJunk', ids),
   moveToFolder: (ids: string[], folderId: string) => call<void>('MoveToFolder', ids, folderId),
   sendMessage: (req: ComposeRequest) => call<void>('SendMessage', req),
   saveAttachment: (messageId: string, attachmentId: string) => call<void>('SaveAttachment', messageId, attachmentId),

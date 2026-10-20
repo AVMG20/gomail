@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArchiveIcon, MailIcon, MailOpenIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, TagsIcon } from '@lucide/vue'
+import { ArchiveIcon, MailIcon, MailOpenIcon, OctagonAlertIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, TagsIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import Tip from '@/components/common/Tip.vue'
@@ -40,6 +40,7 @@ async function labelWithAi() {
     <span class="mr-2 pl-1 text-sm font-medium whitespace-nowrap tabular-nums">{{ mail.selectionCount.toLocaleString() }} selected</span>
     <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="run(mail.archive)"><ArchiveIcon /></Button></Tip>
     <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="run(mail.trash)"><Trash2Icon /></Button></Tip>
+    <Tip v-if="mail.mailbox.kind !== 'spam'" label="Move to Junk"><Button variant="ghost" size="icon-sm" aria-label="Move to Junk" @click="run(mail.junk)"><OctagonAlertIcon /></Button></Tip>
     <Tip :label="anyUnread ? 'Mark as read' : 'Mark as unread'">
       <Button variant="ghost" size="icon-sm" :aria-label="anyUnread ? 'Mark as read' : 'Mark as unread'" @click="((read) => run((ids) => mail.setRead(ids, read)))(anyUnread)">
         <MailOpenIcon v-if="anyUnread" /><MailIcon v-else />

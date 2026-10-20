@@ -704,6 +704,11 @@ class MockBackend {
     this.mutate(this.withThreads(ids), (m) => (m.folderIds = [`${m.accountId}:trash`]))
   }
 
+  async MoveToJunk(ids: string[]): Promise<void> {
+    await latency(50, 140)
+    this.mutate(this.withThreads(ids), (m) => (m.folderIds = [`${m.accountId}:spam`]))
+  }
+
   async MoveToFolder(ids: string[], folderId: string): Promise<void> {
     await latency(50, 140)
     this.mutate(this.withThreads(ids), (m) => {

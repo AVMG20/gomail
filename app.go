@@ -539,6 +539,15 @@ func (m *MailService) Trash(ids []string) error {
 	return uiError(s.Trash(ids))
 }
 
+// MoveToJunk moves messages to their own account's Junk/Spam folder.
+func (m *MailService) MoveToJunk(ids []string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.MoveToJunk(ids))
+}
+
 func (m *MailService) MoveToFolder(ids []string, folderID string) error {
 	s, err := m.ready()
 	if err != nil {
