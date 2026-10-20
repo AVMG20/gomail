@@ -10,6 +10,9 @@ import { useAccountsStore } from './accounts'
 import { useSettingsStore } from './settings'
 
 /** Unified calendar across all mailboxes (independent of the active mailbox). */
+/** Undo toasts stay long enough to reach the button. */
+const UNDO_MS = 8000
+
 export const useCalendarStore = defineStore('calendar', () => {
   const accounts = useAccountsStore()
   const settings = useSettingsStore()
@@ -122,6 +125,7 @@ export const useCalendarStore = defineStore('calendar', () => {
       if (undoable) {
         toast(enabled ? `Calendar enabled for ${a.email}` : `Calendar disabled for ${a.email}`, {
           description: enabled ? undefined : 'Its events are hidden and it no longer syncs or sends reminders.',
+          duration: UNDO_MS,
           action: { label: 'Undo', onClick: () => void setAccountEnabled(accountId, !enabled, false) },
         })
       }
@@ -234,6 +238,7 @@ export const useCalendarStore = defineStore('calendar', () => {
       } else {
         toast.success('Event created', {
           description: created.title,
+          duration: UNDO_MS,
           action: { label: 'Undo', onClick: () => void remove(created, 'series', true) },
         })
       }
@@ -288,6 +293,7 @@ export const useCalendarStore = defineStore('calendar', () => {
     if (!ok) return false
     toast('Event moved', {
       description: ev.title,
+      duration: UNDO_MS,
       action: {
         label: 'Undo',
         onClick: () => void (series ? update(ev, series.before, 'series', true, true) : update({ ...ev, ...times }, eventToInput(ev), scope, true)),
@@ -306,6 +312,7 @@ export const useCalendarStore = defineStore('calendar', () => {
       const undoable = !ev.isRecurring
       toast('Event deleted', {
         description: ev.title,
+        duration: UNDO_MS,
         action: undoable ? { label: 'Undo', onClick: () => void create(eventToInput(ev)) } : undefined,
       })
     } catch (e) {

@@ -77,8 +77,12 @@
 .gm-fc .fc .fc-daygrid-block-event .fc-event-main { color: var(--ev-fg); padding: 2px 6px; display: flex; flex-direction: column; justify-content: flex-start; overflow: hidden; }
 .gm-fc .fc .fc-timegrid-event .fc-event-main > * { flex: none; }
 .gm-fc .fc .fc-daygrid-block-event .fc-event-main { flex-direction: row; padding: 1px 6px; }
+/* Selection/drag mirror: an inset ring, nothing painted outside the box and no
+   opacity. WebKitGTK leaves whatever a mirror painted outside its box (shadow,
+   outer ring) on screen after FullCalendar removes it (a blank box after
+   drag-create). */
 .gm-fc .fc .fc-timegrid-event.fc-event-mirror,
-.gm-fc .fc .fc-event-dragging { box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.35); opacity: 0.95; }
+.gm-fc .fc .fc-event-dragging { box-shadow: inset 0 0 0 1px var(--ev, var(--primary)); }
 .gm-fc .fc .fc-daygrid-dot-event { color: var(--foreground); border-radius: 6px; padding: 1px 4px; }
 .gm-fc .fc .fc-daygrid-dot-event:hover { background: var(--muted); }
 .gm-fc .fc .fc-daygrid-event-dot { border-color: var(--ev, var(--primary)); }
