@@ -17,6 +17,8 @@ export const useAccountsStore = defineStore('accounts', () => {
   const folders = shallowRef<Record<string, Folder[]>>({})
   /** Label counts for the active scope (account id, or "" for all accounts). */
   const labelCounts = shallowRef<Map<string, LabelCount>>(new Map())
+  /** Mailbox-wide totals (the scope's account, every folder): which imported labels to list at all. */
+  const labelTotals = shallowRef<Map<string, LabelCount>>(new Map())
   /** The box the sidebar's label counts are for (the list on screen): clicking a label filters it. */
   const labelScope = shallowRef<LabelScope>({ accountId: '', folderId: '', folderKind: '' })
   const loaded = ref(false)
@@ -71,10 +73,11 @@ export const useAccountsStore = defineStore('accounts', () => {
     labelScope.value = scope
     const seq = ++countsSeq
     try {
-      const counts = await api.getViewLabelCounts(scope)
+      const [counts, totals] = await Promise.all([api.getViewLabelCounts(scope), api.getLabelCounts(scope.accountId)])
       // Compare by value: a stale reply (another box) must not overwrite the counts.
       if (JSON.stringify(scope) !== JSON.stringify(labelScope.value) || seq !== countsSeq) return
       labelCounts.value = new Map(counts.map((c) => [c.labelId, c]))
+      labelTotals.value = new Map(totals.map((c) => [c.labelId, c]))
     } catch {
       /* optional binding */
     }
@@ -162,7 +165,7 @@ export const useAccountsStore = defineStore('accounts', () => {
 
   return {
     setAccountColor,
-    accounts, folders, labelCounts, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
+    accounts, folders, labelCounts, labelTotals, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
     load, saveSignature, loadFolders, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })
