@@ -362,6 +362,8 @@ export interface Settings {
   undoSendSeconds?: number
   /** Calendar: first day of the week ("auto" follows the locale). */
   calendarWeekStart?: 'auto' | 'sunday' | 'monday' | 'saturday' | string
+  /** "auto" follows the language and region. */
+  calendarTimeFormat?: 'auto' | '12h' | '24h' | string
   calendarDefaultView?: 'week' | 'day' | 'month' | 'agenda'
   /** Minutes. */
   calendarDefaultDuration?: number

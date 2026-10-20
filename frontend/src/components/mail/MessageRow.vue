@@ -124,6 +124,10 @@ const date = computed(() => listDate(props.message.date))
         <LabelPill :label="pills[0].label" :detail="pills[0].detail" />
         <span v-if="pills.length > 1" class="text-muted-foreground text-[10.5px] font-medium">+{{ pills.length - 1 }}</span>
       </span>
+      <!-- Narrow compact rows: the labels as color dots rather than not at all. -->
+      <span v-if="pills.length" class="flex shrink-0 items-center gap-0.5 @[560px]:hidden" :title="pills.map((p) => p.label.name).join(', ')" :aria-label="`Labels: ${pills.map((p) => p.label.name).join(', ')}`">
+        <span v-for="p in pills.slice(0, 3)" :key="p.label.id" class="size-2 rounded-full" :style="{ background: p.label.color }" />
+      </span>
       <PaperclipIcon v-if="message.hasAttachments" class="text-muted-foreground size-3.5 shrink-0" />
       <span :class="['w-16 shrink-0 text-right text-xs tabular-nums group-hover/row:invisible', message.unread ? 'font-medium' : 'text-muted-foreground']">{{ date }}</span>
     </div>

@@ -27,7 +27,7 @@ watch(() => job.value?.finished, (done) => {
         <span class="flex-1 text-[13px] font-medium">
           {{ job.finished ? (job.cancelled ? 'Labeling cancelled' : job.error ? 'Labeling failed' : 'Labeling complete') : 'Labeling with AI…' }}
         </span>
-        <button type="button" class="text-muted-foreground hover:text-foreground rounded p-0.5" aria-label="Dismiss" @click="job.finished ? ai.dismissJob() : ai.cancelJob()">
+        <button type="button" class="text-muted-foreground hover:text-foreground rounded p-0.5" :aria-label="job.finished ? 'Dismiss' : 'Cancel labeling'" :title="job.finished ? 'Dismiss' : 'Cancel labeling'" @click="job.finished ? ai.dismissJob() : ai.cancelJob()">
           <XIcon class="size-3.5" />
         </button>
       </div>

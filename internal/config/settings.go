@@ -75,6 +75,7 @@ func DefaultSettings() models.Settings {
 		ReadingPane:              "right",
 		EmailBackground:          "auto",
 		CalendarWeekStart:        "auto",
+		CalendarTimeFormat:       "auto",
 		CalendarDefaultView:      "week",
 		CalendarDefaultDuration:  30,
 		CalendarDefaultReminder:  10,
@@ -119,6 +120,11 @@ func Normalize(s *models.Settings) {
 	}
 	if s.EmailBackground != "light" {
 		s.EmailBackground = "auto"
+	}
+	switch s.CalendarTimeFormat {
+	case "auto", "12h", "24h":
+	default:
+		s.CalendarTimeFormat = "auto"
 	}
 	switch s.CalendarWeekStart {
 	case "auto", "sunday", "monday", "saturday":

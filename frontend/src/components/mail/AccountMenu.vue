@@ -5,14 +5,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import type { Account } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
-import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import AccountMenuTrigger from './AccountMenuTrigger.vue'
 
 const props = defineProps<{ account: Account }>()
 const emit = defineEmits<{ labelAll: [] }>()
 const accounts = useAccountsStore()
-const settings = useSettingsStore()
 const ui = useUiStore()
 
 /** Settings → Accounts, at this account's name, color or remove confirmation. */
@@ -32,7 +30,7 @@ function open(field: 'name' | 'color' | 'remove') {
       <DropdownMenuItem @click="accounts.sync(account.id)"><RefreshCwIcon /> Sync now</DropdownMenuItem>
       <DropdownMenuItem @click="open('name')"><PencilIcon /> Rename…</DropdownMenuItem>
       <DropdownMenuItem @click="open('color')"><PaletteIcon /> Change color…</DropdownMenuItem>
-      <DropdownMenuItem v-if="settings.aiReady" @click="emit('labelAll')"><SparklesIcon /> Label all mail with AI…</DropdownMenuItem>
+      <DropdownMenuItem @click="emit('labelAll')"><SparklesIcon /> Label all mail with AI…</DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" @click="open('remove')"><Trash2Icon /> Remove account…</DropdownMenuItem>
     </DropdownMenuContent>

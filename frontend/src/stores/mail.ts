@@ -97,6 +97,8 @@ export const useMailStore = defineStore('mail', () => {
   const selectAllQuery = ref(false)
 
   const threadCache = new Map<string, Message[]>()
+  /** Bumped when a cached thread's messages are patched in place (the reading pane re-reads them). */
+  const threadRev = ref(0)
   /** Conversations (thread ids) where the user chose "Load images" this session. */
   const remoteAllowed = shallowRef<Set<string>>(new Set())
   const addressBook = shallowRef<Map<string, Address>>(new Map())
@@ -162,6 +164,28 @@ export const useMailStore = defineStore('mail', () => {
     if (changed) addressBook.value = book
   }
 
+  /** Unread count of a filtered/searched view (the folder counters don't apply then); null = use the folder's. */
+  const viewUnread = ref<number | null>(null)
+  let unreadSeq = 0
+  async function refreshViewUnread() {
+    const seq = ++unreadSeq
+    const q = query.value
+    if (!q.search && !q.labels?.length && !q.unlabeled) {
+      viewUnread.value = null
+      return
+    }
+    if (q.unreadOnly) {
+      viewUnread.value = total.value
+      return
+    }
+    try {
+      const page = await api.listMessages({ ...q, unreadOnly: true, limit: 1, cursor: '' })
+      if (seq === unreadSeq) viewUnread.value = page.total
+    } catch {
+      if (seq === unreadSeq) viewUnread.value = null
+    }
+  }
+
   async function reload(opts: { keepList?: boolean } = {}) {
     const t = ++token
     error.value = ''
@@ -179,6 +203,7 @@ export const useMailStore = defineStore('mail', () => {
       total.value = page.total
       status.value = 'ready'
       learnAddresses(page.messages)
+      void refreshViewUnread()
     } catch (e) {
       if (t !== token) return
       error.value = errorMessage(e)
@@ -223,6 +248,7 @@ export const useMailStore = defineStore('mail', () => {
       total.value = page.total
       status.value = 'ready'
       learnAddresses(page.messages)
+      void refreshViewUnread()
       if (selection.value.size) {
         const ids = new Set(page.messages.map((m) => m.id))
         const next = new Set([...selection.value].filter((id) => ids.has(id)))
@@ -377,13 +403,13 @@ export const useMailStore = defineStore('mail', () => {
   function markOpenedRead(id: string) {
     const m = byId.value.get(id)
     if (!m?.unread) return
+    accounts.adjustUnread([m], -1)
     patchLocal([id], { unread: false })
     api.markRead(actionIds([id]), true).catch(() => patchLocal([id], { unread: true }))
     accounts.refreshCounts()
   }
 
-  /** Open a message; marks it read per Settings → General (immediately / after 2 s / manually). */
-  /** Open a message. `auto`: opened for the user after archiving/deleting the previous one;
+  /** Open a message (marked read per Settings → General: immediately / after 2 s / manually). `auto`: opened for the user after archiving/deleting the previous one;
    *  it only counts as read once they stay on it for a moment (triaging with e/# must not mark
    *  everything it passes as read). */
   function open(id: string | null, opts: { auto?: boolean } = {}) {
@@ -476,6 +502,7 @@ export const useMailStore = defineStore('mail', () => {
         const i = thread.findIndex((x) => x.id === id)
         const cur = thread[i]
         thread[i] = { ...cur, ...(typeof patch === 'function' ? patch(cur) : patch) } as Message
+        threadRev.value++
       }
     }
   }
@@ -609,7 +636,9 @@ export const useMailStore = defineStore('mail', () => {
 
   async function setRead(ids: string[], read: boolean) {
     if (!ids.length) return
-    const before = snapshot(ids).map((m) => [m.id, m.unread] as const)
+    const rows = snapshot(ids)
+    const before = rows.map((m) => [m.id, m.unread] as const)
+    accounts.adjustUnread(rows.filter((m) => m.unread === read), read ? -1 : 1)
     patchLocal(ids, { unread: !read })
     try {
       await inChunks(actionIds(ids), (c) => api.markRead(c, read))
@@ -708,7 +737,7 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   return {
-    mailbox, search, unreadOnly, filters, messages, nextCursor, hasMoreRemote, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
+    mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
     labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,

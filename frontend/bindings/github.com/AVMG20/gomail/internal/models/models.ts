@@ -998,6 +998,11 @@ export interface Settings {
     "calendarWeekStart": string;
 
     /**
+     * "auto" | "12h" | "24h" (default "auto": follows the locale)
+     */
+    "calendarTimeFormat": string;
+
+    /**
      * "week" | "day" | "month" | "agenda" (default "week")
      */
     "calendarDefaultView": string;

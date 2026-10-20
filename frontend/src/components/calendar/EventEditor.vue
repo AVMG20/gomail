@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Full event editor: title, all-day, start/end, time zone (collapsed), repeat,
 // location, meeting link, guests, reminders, description and calendar.
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { BellIcon, ChevronDownIcon, ClockIcon, GlobeIcon, LinkIcon, MapPinIcon, RepeatIcon, TextIcon, UsersIcon, VideoIcon, XIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -174,6 +174,23 @@ function close() {
   setTimeout(closeEditor, 150)
 }
 
+// ---- don't lose typed changes on Esc / an outside click / Cancel
+const snapshot = () => JSON.stringify([title.value, allDay.value, timeZone.value, startDay.value, startTime.value, endDay.value, endTime.value, freq.value,
+  until.value, location.value, meetingUrl.value, guests.value, reminders.value, description.value, calendarId.value, addVideo.value])
+let initial = ''
+onMounted(() => (initial = snapshot()))
+let confirming = false
+async function requestClose() {
+  if (!readOnly.value && initial && snapshot() !== initial) {
+    if (confirming) return
+    confirming = true
+    const ok = await askConfirm('Discard your changes?', isNew ? 'This event hasn’t been created yet.' : 'Your changes to this event aren’t saved yet.', 'Discard')
+    confirming = false
+    if (!ok) return
+  }
+  close()
+}
+
 function addReminder(v: unknown) {
   const n = Number(v)
   if (!Number.isNaN(n) && !reminders.value.includes(n)) reminders.value = [...reminders.value, n]
@@ -181,7 +198,7 @@ function addReminder(v: unknown) {
 </script>
 
 <template>
-  <Dialog :open="open" @update:open="(v: boolean) => !v && close()">
+  <Dialog :open="open" @update:open="(v: boolean) => !v && requestClose()">
     <DialogContent class="flex max-h-[min(780px,calc(100vh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-[620px]">
       <div class="border-border flex items-center gap-2 border-b px-5 py-3">
         <DialogTitle class="text-sm font-semibold">{{ isNew ? 'New event' : readOnly ? 'Event' : 'Edit event' }}</DialogTitle>
@@ -318,7 +335,7 @@ function addReminder(v: unknown) {
       </form>
 
       <div class="border-border flex items-center justify-end gap-2 border-t px-5 py-3">
-        <Button variant="ghost" size="sm" @click="close">Cancel</Button>
+        <Button variant="ghost" size="sm" @click="requestClose">Cancel</Button>
         <Button v-if="!readOnly" size="sm" :disabled="saving" @click="save">{{ isNew ? 'Create event' : 'Save' }}</Button>
       </div>
       <ScopePrompt />

@@ -119,8 +119,8 @@ export function useShortcuts() {
       return
     }
 
-    // The calendar handles its own single keys (t, d, w, m, a, n, arrows); only g…, c and ? stay global.
-    if (ui.mainView === 'calendar' && key !== 'g' && key !== '?' && key !== 'c') return
+    // The calendar handles its own single keys (t, d, w, m, a, n/c = new event, arrows); only g… and ? stay global.
+    if (ui.mainView === 'calendar' && key !== 'g' && key !== '?') return
 
     switch (key) {
       case 'g':

@@ -38,6 +38,18 @@ export const useAccountsStore = defineStore('accounts', () => {
 
   let foldersSeq = 0
   let countsSeq = 0
+
+  /** Move folder unread counters right away (read/unread); refreshCounts() then corrects them. */
+  function adjustUnread(rows: { folderIds: string[] }[], delta: 1 | -1) {
+    const per = new Map<string, number>()
+    for (const r of rows) for (const f of r.folderIds ?? []) per.set(f, (per.get(f) ?? 0) + delta)
+    if (!per.size) return
+    const next: typeof folders.value = {}
+    for (const [acct, list] of Object.entries(folders.value)) {
+      next[acct] = list.map((f) => (per.has(f.id) ? { ...f, unread: Math.max(0, f.unread + per.get(f.id)!) } : f))
+    }
+    folders.value = next
+  }
   async function loadFolders(ids = accounts.value.map((a) => a.id)) {
     const seq = ++foldersSeq
     const results = await Promise.all(ids.map(async (id) => [id, sortFolders(await api.getFolders(id))] as const))
@@ -128,6 +140,6 @@ export const useAccountsStore = defineStore('accounts', () => {
 
   return {
     accounts, folders, labelCounts, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
-    load, saveSignature, loadFolders, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
+    load, saveSignature, loadFolders, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })

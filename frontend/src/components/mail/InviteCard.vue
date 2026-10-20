@@ -44,6 +44,8 @@ async function respond(r: AttendeeResponse) {
 function viewInCalendar() {
   const cal = useCalendarStore()
   cal.focusDate = eventDate(props.invite.start, props.invite.allDay)
+  // Open the event itself when it's in a synced calendar.
+  if (props.invite.eventId) cal.openEventId = props.invite.eventId
   ui.mainView = 'calendar'
 }
 </script>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { CheckIcon, PlusIcon, SparklesIcon, TagIcon } from '@lucide/vue'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,12 @@ const ui = useUiStore()
 const q = ref('')
 
 const items = computed(() => fuzzyFilter(q.value, settings.labels, (l) => l.name, 100))
+// The message's labels as changed here: the row may leave the list (a label filter) and the
+// thread copy isn't refreshed, so the props alone would go stale.
+const local = ref<string[] | null>(null)
+watch(() => props.message.id, () => (local.value = null))
+watch(() => props.message.labels, () => (local.value = null))
+const labels = computed(() => local.value ?? props.message.labels)
 const details = computed(() => new Map((props.message.labelDetails ?? []).map((d) => [d.labelId, d])))
 const scores = computed(() => ai.scores[props.message.id] ?? {})
 
@@ -34,7 +40,9 @@ function scoreOf(id: string): number | null {
 }
 
 function toggle(id: string) {
-  if (props.message.labels.includes(id)) void mail.removeLabel([props.message.id], id, true)
+  const has = labels.value.includes(id)
+  local.value = has ? labels.value.filter((l) => l !== id) : [...labels.value, id]
+  if (has) void mail.removeLabel([props.message.id], id, true)
   else void mail.addLabel([props.message.id], id, true)
 }
 
@@ -46,6 +54,7 @@ async function create() {
   const color = LABEL_COLORS[settings.labels.length % LABEL_COLORS.length]
   await settings.update({ labels: [...settings.labels, { id, name, description: '', color, source: 'user' }] }, 0)
   q.value = ''
+  local.value = [...labels.value, id]
   void mail.addLabel([props.message.id], id, true)
 }
 </script>
@@ -62,13 +71,13 @@ async function create() {
         <CmdInput v-model="q" placeholder="Add or find a label…" auto-focus @keydown.enter="canCreate && !items.length && create()" />
         <CmdList class="max-h-80">
           <CmdItem v-for="l in items" :key="l.id" :value="l.id" class="py-2" @select="toggle(l.id)">
-            <span class="flex size-4 items-center justify-center rounded border" :class="message.labels.includes(l.id) ? 'border-transparent' : 'border-border'" :style="message.labels.includes(l.id) ? { background: l.color } : {}">
-              <CheckIcon v-if="message.labels.includes(l.id)" class="size-3 text-white" />
+            <span class="flex size-4 items-center justify-center rounded border" :class="labels.includes(l.id) ? 'border-transparent' : 'border-border'" :style="labels.includes(l.id) ? { background: l.color } : {}">
+              <CheckIcon v-if="labels.includes(l.id)" class="size-3 text-white" />
             </span>
             <span class="min-w-0 flex-1">
               <span class="flex items-center gap-1.5">
                 <span class="truncate">{{ l.name }}</span>
-                <SparklesIcon v-if="details.get(l.id)?.source === 'ai'" class="size-3 text-violet-500" />
+                <span v-if="details.get(l.id)?.source === 'ai'" title="Added by AI" class="inline-flex"><SparklesIcon class="size-3 text-violet-500" aria-label="Added by AI" /></span>
                 <span v-if="l.source && l.source !== 'user'" class="text-muted-foreground text-[10px]">{{ l.source === 'system' ? 'built-in' : l.provider === 'outlook' ? 'Outlook' : l.provider === 'gmail' ? 'Gmail' : 'imported' }}</span>
               </span>
               <span v-if="scoreOf(l.id) !== null" class="mt-1 flex items-center gap-1.5" :title="`AI score ${Math.round(scoreOf(l.id)! * 100)}%`">
@@ -87,7 +96,7 @@ async function create() {
         </CmdList>
         <div class="border-border flex items-center justify-between border-t px-2 py-1.5">
           <Button variant="ghost" size="xs" class="text-muted-foreground" @click="ui.labelPopoverOpen = false; ui.openSettings('labels')">Manage labels</Button>
-          <Button v-if="settings.aiReady" variant="ghost" size="xs" :disabled="ai.labeling.has(message.id)" @click="ai.labelMessages([message.id])">
+          <Button variant="ghost" size="xs" :disabled="ai.labeling.has(message.id)" @click="ai.labelMessages([message.id])">
             <SparklesIcon class="text-violet-500" /> Label with AI
           </Button>
         </div>

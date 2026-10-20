@@ -127,7 +127,7 @@ const busyDays = computed(() => {
                   <span v-if="!c.canEdit" class="text-muted-foreground text-[10.5px]">read-only</span>
                 </label>
               </li>
-              <li v-if="!cal.calendarsOf(a.id).length" class="text-muted-foreground px-1.5 py-1 text-xs">No calendars</li>
+              <li v-if="!cal.calendarsOf(a.id).length" class="text-muted-foreground px-1.5 py-1 text-xs">{{ cal.loaded || cal.error ? 'No calendars' : 'Loading…' }}</li>
             </ul>
           </li>
         </ul>

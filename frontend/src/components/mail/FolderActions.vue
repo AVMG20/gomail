@@ -14,11 +14,9 @@ import { api, errorMessage, hasMethod } from '@/lib/api'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
-import { useSettingsStore } from '@/stores/settings'
 
 const mail = useMailStore()
 const accounts = useAccountsStore()
-const settings = useSettingsStore()
 const ai = useAiStore()
 const confirmEmpty = ref(false)
 const busy = ref(false)
@@ -79,7 +77,7 @@ useEventListener(window, 'gomail:folder-action', (e: Event) => {
   const what = (e as CustomEvent<string>).detail
   if (what === 'markAllRead') void markAllRead()
   else if (what === 'empty' && emptiable.value && mail.total > 0) confirmEmpty.value = true
-  else if (what === 'labelAi' && settings.aiReady) labelFolder()
+  else if (what === 'labelAi') labelFolder()
 })
 
 function labelFolder() {
@@ -89,6 +87,8 @@ function labelFolder() {
 
 <template>
   <div class="flex items-center">
+    <!-- Gmail's Trash can't be emptied from here: say why instead of showing nothing. -->
+    <span v-if="kind === 'trash' && skippedFolders && !emptiable && mail.total > 0" class="text-muted-foreground mr-1 hidden text-[11px] @[480px]:inline">Gmail empties Trash after 30 days</span>
     <Button v-if="emptiable && mail.total > 0" variant="ghost" size="sm" class="text-destructive hover:text-destructive h-8 gap-1.5 px-2 text-xs" :disabled="busy" @click="confirmEmpty = true">
       <Trash2Icon class="size-3.5" /> Empty {{ folderName }}
     </Button>
@@ -98,7 +98,7 @@ function labelFolder() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" class="w-56">
         <DropdownMenuItem :disabled="!unread && !mail.messages.some((m) => m.unread)" @click="markAllRead"><MailCheckIcon /> Mark all as read</DropdownMenuItem>
-        <DropdownMenuItem v-if="settings.aiReady" @click="labelFolder"><SparklesIcon class="text-violet-500" /> Label this view with AI…</DropdownMenuItem>
+        <DropdownMenuItem @click="labelFolder"><SparklesIcon class="text-violet-500" /> Label this view with AI…</DropdownMenuItem>
         <template v-if="emptiable">
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" :disabled="!mail.total" @click="confirmEmpty = true"><Trash2Icon /> Empty {{ folderName }}…</DropdownMenuItem>

@@ -46,6 +46,8 @@ const title = ref('')
 const anchorDate = ref(new Date())
 const visibleRange = shallowRef<{ start: Date; end: Date } | null>(null)
 const sidebarOpen = ref(!ui.narrow)
+// When the window gets narrow the sidebar would cover the grid: tuck it away.
+watch(() => ui.narrow, (n) => n && (sidebarOpen.value = false))
 const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US'
 
 const FC_VIEW: Record<CalendarViewKind, string> = { day: 'timeGridDay', week: 'timeGridWeek', month: 'dayGridMonth', agenda: 'listAgenda' }
@@ -85,7 +87,9 @@ function pointRect(e?: MouseEvent | null): AnchorRect {
   return { left: (r?.left ?? 300) + (r?.width ?? 600) / 2 - 160, top: (r?.top ?? 100) + 80, width: 1, height: 1 }
 }
 
+let reselecting = false
 function onSelect(arg: DateSelectArg) {
+  if (reselecting) return
   details.value = null
   if (!cal.writableCalendars.length) {
     toast('No editable calendar', { description: 'Turn on a mailbox with an editable calendar in the sidebar.' })
@@ -102,6 +106,12 @@ function onSelect(arg: DateSelectArg) {
     end = addMinutes(start, settings.settings?.calendarDefaultDuration || 30)
   } else if (!allDay && end.getTime() - start.getTime() <= 30 * 60_000) {
     end = addMinutes(start, settings.settings?.calendarDefaultDuration || 30)
+    // Show the block with the duration the event will get (a click selects one 15-minute slot).
+    if (end.getTime() !== arg.end.getTime()) {
+      reselecting = true
+      api$()?.select(start, end)
+      reselecting = false
+    }
   }
   quick.value = { anchor: pointRect(arg.jsEvent as MouseEvent | null), start, end, allDay }
 }
@@ -146,14 +156,14 @@ async function onMoved(arg: EventDropArg | EventResizeDoneArg, kind: 'drop' | 'r
     }
     try {
       const master = await api.getEvent(ev.seriesId || ev.id)
-      if (!(await cal.move(ev, times, 'series', { next: seriesMoveInput(master, startDelta, endDelta), before: eventToInput(master) }))) arg.revert()
+      if (!(await cal.move(ev, times, 'series', { next: seriesMoveInput(master, startDelta, endDelta), before: eventToInput(master) }, kind))) arg.revert()
     } catch (e) {
       arg.revert()
       toast.error('Couldn’t move the series', { description: errorMessage(e) })
     }
     return
   }
-  if (!(await cal.move(ev, times, 'this'))) arg.revert()
+  if (!(await cal.move(ev, times, 'this', undefined, kind))) arg.revert()
 }
 
 // ------------------------------------------------------------ rendering hooks
@@ -209,7 +219,15 @@ function onDatesSet(arg: DatesSetArg) {
   void cal.loadRange(arg.start, arg.end)
 }
 
-const hour12 = localeUses12h(locale)
+const hour12 = computed(() => {
+  const f = settings.settings?.calendarTimeFormat
+  return f === '12h' ? true : f === '24h' ? false : localeUses12h(locale)
+})
+watch(hour12, (h) => {
+  const fmt = { hour: 'numeric', minute: '2-digit', omitZeroMinute: h, hour12: h } as const
+  api$()?.setOption('slotLabelFormat', fmt)
+  api$()?.setOption('eventTimeFormat', fmt)
+})
 // Working hours by default; follow the clock during the day (computed once, so
 // option updates don't scroll the grid back).
 const nowHour = new Date().getHours()
@@ -233,6 +251,8 @@ const options = computed<CalendarOptions>(() => ({
   editable: true,
   eventResizableFromStart: false,
   dayMaxEvents: true,
+  // More than three overlapping events: "+N more" instead of unreadable slivers.
+  eventMaxStack: 3,
   // Overlapping events side by side instead of stacked on top of each other.
   slotEventOverlap: false,
   eventMinHeight: 18,
@@ -240,8 +260,8 @@ const options = computed<CalendarOptions>(() => ({
   snapDuration: '00:15:00',
   scrollTime,
   scrollTimeReset: false,
-  slotLabelFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12, hour12 },
-  eventTimeFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12, hour12 },
+  slotLabelFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12.value, hour12: hour12.value },
+  eventTimeFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12.value, hour12: hour12.value },
   dayHeaderContent,
   eventContent,
   eventDidMount: onMount,
@@ -340,7 +360,7 @@ function onKey(e: KeyboardEvent) {
   else if (k === 'ArrowRight') go(1)
   else if (k === 'ArrowDown' || k === 'j') focusEvent(1)
   else if (k === 'ArrowUp' || k === 'k') focusEvent(-1)
-  else if (k === 'n') openNew()
+  else if (k === 'n' || k === 'c') openNew()
   else return
   e.preventDefault()
 }
@@ -384,7 +404,7 @@ watch(() => cal.weekStart, (fd) => api$()?.setOption('firstDay', fd))
 watch(compact, async () => {
   await nextTick()
   api$()?.updateSize()
-})
+}, { immediate: true }) // also when set before the calendar opened (invite "View in calendar")
 watch(sidebarOpen, async () => {
   await nextTick()
   setTimeout(() => api$()?.updateSize(), 220)

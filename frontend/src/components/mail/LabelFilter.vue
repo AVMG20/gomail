@@ -42,10 +42,11 @@ const activeCount = computed(() => mail.labelFilter.labels.length + (mail.labelF
       <CmdRoot>
         <CmdInput v-model="q" placeholder="Filter labels…" auto-focus />
         <CmdList class="max-h-72">
+          <div v-if="items.length" class="text-muted-foreground flex justify-between px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-wide uppercase"><span>Labels</span><span>Messages</span></div>
           <CmdItem v-for="l in items" :key="l.id" :value="l.id" @select="mail.toggleLabelFilter(l.id)">
             <span class="size-2.5 rounded-full" :style="{ background: l.color }" />
             <span class="flex-1 truncate">{{ l.name }}</span>
-            <span class="text-muted-foreground text-xs tabular-nums">{{ accounts.labelCounts.get(l.id)?.total ?? '' }}</span>
+            <span class="text-muted-foreground text-xs tabular-nums" :aria-label="`${accounts.labelCounts.get(l.id)?.total ?? 0} messages`">{{ accounts.labelCounts.get(l.id)?.total ?? '' }}</span>
             <CheckIcon class="size-4" :class="mail.labelFilter.labels.includes(l.id) ? 'opacity-100' : 'opacity-0'" />
           </CmdItem>
           <CmdItem v-if="!q || 'no label'.includes(q.toLowerCase())" value="__unlabeled" @select="mail.toggleUnlabeledFilter()">

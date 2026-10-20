@@ -265,6 +265,7 @@ type Settings struct {
 	EmailBackground string `json:"emailBackground"` // default "auto"
 	// Calendar preferences.
 	CalendarWeekStart       string  `json:"calendarWeekStart"`       // "auto" | "sunday" | "monday" | "saturday" (default "auto")
+	CalendarTimeFormat      string  `json:"calendarTimeFormat"`      // "auto" | "12h" | "24h" (default "auto": follows the locale)
 	CalendarDefaultView     string  `json:"calendarDefaultView"`     // "week" | "day" | "month" | "agenda" (default "week")
 	CalendarDefaultDuration int     `json:"calendarDefaultDuration"` // minutes for new events (default 30)
 	CalendarShowDeclined    bool    `json:"calendarShowDeclined"`    // ListEvents includes declined events (default false)

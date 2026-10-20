@@ -122,7 +122,10 @@ watch(liveRow, async (now, old) => {
   }
 })
 
-const current = computed(() => mail.openSummary ?? thread.value.find((m) => m.id === mail.openId) ?? null)
+const current = computed(() => {
+  void mail.threadRev // the thread copy is patched in place (labels, read state)
+  return mail.openSummary ?? thread.value.find((m) => m.id === mail.openId) ?? null
+})
 const newest = computed(() => thread.value[thread.value.length - 1] ?? null)
 /** Meeting invitation carried by the conversation (latest one wins). */
 const invite = computed(() => [...thread.value].reverse().find((m) => m.invite)?.invite ?? null)

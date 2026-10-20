@@ -226,14 +226,16 @@ export const useComposeStore = defineStore('compose', () => {
   }
 
   /** Prefilled new message (mailto: links, compose:open from the backend). */
-  function composeWith(p: { to?: Address[]; cc?: Address[]; bcc?: Address[]; subject?: string; body?: string }) {
+  function composeWith(p: { to?: Address[]; cc?: Address[]; bcc?: Address[]; subject?: string; body?: string; accountId?: string }) {
     const accounts = useAccountsStore()
     const mail = useMailStore()
-    const sig = accounts.accountMap.get(mail.mailbox.accountId || accounts.accounts[0]?.id || '')?.signature ?? ''
+    // From: the given mailbox (e.g. the calendar event's), else the one being viewed.
+    const accountId = (p.accountId && accounts.accountMap.has(p.accountId) ? p.accountId : '') || mail.mailbox.accountId || accounts.accounts[0]?.id || ''
+    const sig = accounts.accountMap.get(accountId)?.signature ?? ''
     const body = p.body ? textToHtml(p.body) : '<p></p>'
     const cc = p.cc ?? []
     const bcc = p.bcc ?? []
-    return create({ to: p.to ?? [], cc, bcc, showCc: cc.length + bcc.length > 0, subject: p.subject ?? '', html: `${body}${sig ? signatureBlock(sig) : ''}` })
+    return create({ accountId, to: p.to ?? [], cc, bcc, showCc: cc.length + bcc.length > 0, subject: p.subject ?? '', html: `${body}${sig ? signatureBlock(sig) : ''}` })
   }
 
   async function respond(mode: Exclude<ComposeMode, 'new'>, m: Message) {

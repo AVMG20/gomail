@@ -98,6 +98,6 @@ function toggleCtxLabel(labelId: string) {
         </ContextMenuItem>
       </ContextMenuSubContent>
     </ContextMenuSub>
-    <ContextMenuItem :disabled="!settings.aiReady" @click="ai.labelMessages(ctxIds)"><SparklesIcon class="text-violet-500" /> Label with AI</ContextMenuItem>
+    <ContextMenuItem @click="ai.labelMessages(ctxIds)"><SparklesIcon class="text-violet-500" /> Label with AI</ContextMenuItem>
     </ContextMenuContent>
 </template>

@@ -82,7 +82,7 @@ function onKey(e: KeyboardEvent) {
 
 function emailGuests() {
   const to = guests.value.filter((g) => g.email && g.email.toLowerCase() !== myEmail.value).map((g) => ({ name: g.name, email: g.email }))
-  compose.composeWith({ to, subject: ev.value.title, body: `${formatEventWhen(ev.value)}${ev.value.location ? `\n${ev.value.location}` : ''}\n\n` })
+  compose.composeWith({ accountId: ev.value.accountId, to, subject: ev.value.title, body: `${formatEventWhen(ev.value)}${ev.value.location ? `\n${ev.value.location}` : ''}\n\n` })
   emit('close')
 }
 </script>

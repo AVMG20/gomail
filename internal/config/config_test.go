@@ -118,3 +118,17 @@ func TestCalendarSettings(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 }
+
+func TestCalendarTimeFormat(t *testing.T) {
+	s := DefaultSettings()
+	if s.CalendarTimeFormat != "auto" {
+		t.Fatalf("default %q", s.CalendarTimeFormat)
+	}
+	for in, want := range map[string]string{"12h": "12h", "24h": "24h", "": "auto", "13h": "auto"} {
+		s.CalendarTimeFormat = in
+		Normalize(&s)
+		if s.CalendarTimeFormat != want {
+			t.Errorf("%q -> %q, want %q", in, s.CalendarTimeFormat, want)
+		}
+	}
+}

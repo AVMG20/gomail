@@ -139,7 +139,7 @@ func TestEndToEndFakeProviders(t *testing.T) {
 		Received: now.Add(-72 * time.Hour)})
 
 	// ---- sign-in (loopback + PKCE against the fake token endpoints) ----
-	if _, err := m.AddAccount(models.ProviderGmail); err == nil || !strings.Contains(err.Error(), "Google OAuth client") {
+	if _, err := m.AddAccount(models.ProviderGmail); err == nil || !strings.Contains(err.Error(), "one-time setup") || strings.Contains(err.Error(), "GOMAIL_") {
 		t.Fatalf("expected missing client error, got %v", err)
 	}
 	st, _ := m.GetSettings()

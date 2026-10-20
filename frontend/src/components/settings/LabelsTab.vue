@@ -184,7 +184,7 @@ function labelAll() {
         <Button variant="ghost" size="sm" @click="exportLabels"><DownloadIcon /> Export</Button>
         <Button variant="ghost" size="sm" @click="fileInput?.click()"><UploadIcon /> Import</Button>
         <input ref="fileInput" type="file" accept="application/json,.json" class="hidden" @change="onImportFile" />
-        <Button v-if="settings.aiReady" variant="ghost" size="sm" @click="labelAll"><SparklesIcon class="text-violet-500" /> Label all mail with AI…</Button>
+        <Button variant="ghost" size="sm" @click="labelAll"><SparklesIcon class="text-violet-500" /> Label all mail with AI…</Button>
       </div>
     </SettingSection>
 

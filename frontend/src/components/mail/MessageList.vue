@@ -245,10 +245,11 @@ const activeLabels = computed(() => mail.labelFilter.labels.map((id) => settings
 const subtitle = computed(() => {
   if (mail.status === 'loading') return ''
   const n = mail.total
-  const unread = mail.mailbox.accountId
+  // A label filter or search narrows the view: count its unread, not the whole folder's.
+  const unread = mail.viewUnread ?? (mail.mailbox.accountId
     // folderId can be empty when the mailbox was chosen before the account's folders synced.
     ? (mail.mailbox.folderId ? accounts.folderMap.get(mail.mailbox.folderId) : accounts.folderOf(mail.mailbox.accountId, mail.mailbox.kind))?.unread ?? 0
-    : accounts.unifiedUnread(mail.mailbox.kind)
+    : accounts.unifiedUnread(mail.mailbox.kind))
   const parts = [`${n.toLocaleString()} ${n === 1 ? 'message' : 'messages'}`]
   if (unread && !mail.unreadOnly) parts.push(`${unread.toLocaleString()} unread`)
   return parts.join(' · ')

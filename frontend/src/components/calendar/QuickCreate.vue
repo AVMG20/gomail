@@ -10,6 +10,7 @@ import { useCalendarStore } from '@/stores/calendar'
 import { useSettingsStore } from '@/stores/settings'
 import CalendarPicker from './CalendarPicker.vue'
 import { openEditor } from './editorState'
+import { askConfirm } from './scopePrompt'
 
 const props = defineProps<{ anchor: AnchorRect; start: Date; end: Date; allDay: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -43,6 +44,19 @@ async function save() {
   await cal.create(input)
 }
 
+// A typed title isn't dropped by a stray click outside or Esc without asking.
+let confirming = false
+async function requestClose() {
+  if (title.value.trim() && !saving.value) {
+    if (confirming) return
+    confirming = true
+    const ok = await askConfirm('Discard this event?', `“${title.value.trim()}” hasn’t been saved.`, 'Discard')
+    confirming = false
+    if (!ok) return
+  }
+  emit('close')
+}
+
 function more() {
   openEditor({ draft: draft() })
   emit('close')
@@ -50,7 +64,7 @@ function more() {
 </script>
 
 <template>
-  <FloatingCard :anchor="anchor" :width="320" label="New event" @close="emit('close')">
+  <FloatingCard :anchor="anchor" :width="320" label="New event" @close="requestClose">
     <form class="space-y-3 p-4" @submit.prevent="save">
       <input
         v-model="title"

@@ -21,6 +21,7 @@ import { shortcutLabel, uid } from '@/lib/platform'
 import { useAccountsStore } from '@/stores/accounts'
 import { draftHasContent, useComposeStore, type Draft } from '@/stores/compose'
 import { useSettingsStore } from '@/stores/settings'
+import { useUiStore } from '@/stores/ui'
 import RecipientField from './RecipientField.vue'
 import RichEditor from './RichEditor.vue'
 
@@ -28,6 +29,7 @@ const props = defineProps<{ draft: Draft }>()
 const compose = useComposeStore()
 const accounts = useAccountsStore()
 const settings = useSettingsStore()
+const ui = useUiStore()
 
 const d = computed(() => props.draft)
 const title = computed(() => d.value.subject.trim() || (d.value.mode === 'forward' ? 'Forward' : d.value.mode === 'new' ? 'New message' : 'Reply'))
@@ -253,6 +255,10 @@ watch(() => d.value.accountId, (id, prev) => {
             <ContextMenuItem :disabled="!!subjPending || !d.subject.trim()" @click="improveSubject">
               <SparklesIcon class="text-violet-500" /> {{ subjHasSel ? 'Improve grammar of selection' : 'Improve grammar' }}
             </ContextMenuItem>
+          </template>
+          <template v-else>
+            <ContextMenuSeparator />
+            <ContextMenuItem @click="ui.openSettings('ai')"><SparklesIcon class="text-muted-foreground" /> Set up AI to improve grammar…</ContextMenuItem>
           </template>
         </ContextMenuContent>
       </ContextMenu>

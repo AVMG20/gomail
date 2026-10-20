@@ -43,6 +43,16 @@ export function localeUses12h(locale = typeof navigator !== 'undefined' ? naviga
   }
 }
 
+// Settings → Calendar → Time format ("auto" = null: follow the locale).
+let clockPreference: boolean | null = null
+export function setClockPreference(format: string | undefined) {
+  clockPreference = format === '12h' ? true : format === '24h' ? false : null
+}
+/** 12-hour clock for displayed times: the user's choice, else the locale's. */
+export function uses12h(locale?: string): boolean {
+  return clockPreference ?? localeUses12h(locale)
+}
+
 // ------------------------------------------------------------------ dates (local time)
 
 export function pad(n: number): string {
@@ -383,7 +393,7 @@ export function isEventShown(ev: CalendarEvent, calendars: Map<string, Calendar>
 const LOCALE = () => (typeof navigator !== 'undefined' ? navigator.language : 'en-US')
 
 export function formatClock(d: Date, locale = LOCALE()): string {
-  return d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: localeUses12h(locale) })
+  return d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: uses12h(locale) })
 }
 
 /** "Tue 20 Oct · 14:00 – 15:00", "Tue 20 Oct (all day)", "Wed 28 – Fri 30 Oct". */
@@ -414,7 +424,7 @@ export function formatEventWhenInZone(ev: Pick<CalendarEvent, 'start' | 'end' | 
   if (Number.isNaN(s.getTime())) return ''
   try {
     if (zoneOffsetMinutes(tz, s) === zoneOffsetMinutes(here || 'UTC', s)) return ''
-    const h12 = localeUses12h(locale)
+    const h12 = uses12h(locale)
     const clock = (d: Date) => d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: h12, timeZone: tz })
     const day = (d: Date) => d.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz })
     const city = (tz.split('/').pop() ?? tz).replace(/_/g, ' ')

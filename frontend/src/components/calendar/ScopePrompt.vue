@@ -15,7 +15,7 @@ const verb = computed(() => ({ edit: 'Save changes to', move: 'Move', delete: 'D
         <span class="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-full"><RepeatIcon class="size-4" /></span>
         <div class="min-w-0">
           <DialogTitle class="text-base">{{ verb }} a recurring event</DialogTitle>
-          <DialogDescription class="mt-1 truncate">“{{ scopeRequest?.title || 'Untitled' }}” repeats.</DialogDescription>
+          <DialogDescription class="mt-1"><span class="block truncate">“{{ scopeRequest?.title || 'Untitled' }}” repeats.</span><template v-if="scopeRequest?.action === 'delete'"> Deleting can’t be undone.</template></DialogDescription>
         </div>
       </div>
       <div class="grid gap-2">

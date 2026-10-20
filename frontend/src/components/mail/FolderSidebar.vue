@@ -208,8 +208,8 @@ function formatCount(n: number) {
                   <span class="size-2.5 rounded-full" :style="{ background: label.color, boxShadow: mail.labelFilter.labels.includes(label.id) ? `0 0 0 3px color-mix(in oklab, ${label.color} 25%, transparent)` : undefined }" />
                 </span>
                 <span class="flex-1 truncate text-left">{{ label.name }}</span>
-                <span v-if="count?.unread" class="text-foreground/80 text-xs font-medium tabular-nums">{{ formatCount(count.unread) }}</span>
-                <span v-else-if="count?.total" class="text-muted-foreground text-xs tabular-nums">{{ formatCount(count.total) }}</span>
+                <!-- Unread, like the folders above (the label filter popover shows totals). -->
+                <span v-if="count?.unread" class="text-foreground/80 text-xs font-medium tabular-nums" :aria-label="`${count.unread} unread`">{{ formatCount(count.unread) }}</span>
               </button>
             </li>
             <li v-if="!labelRows.length">

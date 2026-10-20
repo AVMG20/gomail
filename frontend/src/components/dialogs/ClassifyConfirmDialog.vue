@@ -70,7 +70,7 @@ function start() {
         </div>
         <div>
           <div class="text-muted-foreground text-xs">Estimated cost</div>
-          <div class="mt-0.5 text-xl font-semibold tabular-nums"><template v-if="estimate && !estimate.priceKnown">—</template><template v-else>~{{ formatUSD(estimate?.estimatedCostUsd) }}</template></div>
+          <div class="mt-0.5 text-xl font-semibold tabular-nums"><template v-if="estimate && !estimate.priceKnown && !estimate.estimatedCostUsd"><span class="text-muted-foreground text-base font-normal">Unknown</span></template><template v-else>~{{ formatUSD(estimate?.estimatedCostUsd) }}</template></div>
         </div>
         <div v-if="estimate?.requests" class="text-muted-foreground col-span-2 -mt-1 text-xs">{{ estimate.requests.toLocaleString() }} classifier requests<template v-if="estimate.estimatedTokens"> · ~{{ Math.round(estimate.estimatedTokens / 1000).toLocaleString() }}K tokens</template><template v-if="!estimate.priceKnown"> · price unknown for this model</template></div>
         <div v-if="estimate?.unchanged" class="text-muted-foreground col-span-2 text-xs">{{ estimate.unchanged.toLocaleString() }} already up to date (skipped, no cost)</div>
@@ -89,6 +89,9 @@ function start() {
         </Label>
       </div>
 
+      <p v-if="estimate && !estimate.count && onlyUnlabeled && !estimating" class="text-muted-foreground -mt-1 text-xs leading-relaxed" role="status">
+        Everything here already has a label. Untick “Only unlabeled mail” to label it again.
+      </p>
       <DialogFooter>
         <Button variant="ghost" @click="open = false">Cancel</Button>
         <Button :disabled="!estimate?.count" @click="start"><SparklesIcon /> Start labeling</Button>

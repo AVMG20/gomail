@@ -33,10 +33,7 @@ export const useAiStore = defineStore('ai', () => {
   /** "Label with AI" on one or a few messages. */
   async function labelMessages(ids: string[]) {
     if (!ids.length) return
-    if (!settings.aiReady) {
-      toast('Connect OpenRouter to label with AI', { action: { label: 'Open settings', onClick: () => useUiStore().openSettings('ai') } })
-      return
-    }
+    if (!settings.aiReady) return needsSetup()
     labeling.value = new Set([...labeling.value, ...ids])
     try {
       const results = await api.classifyMessages(ids)
@@ -94,11 +91,13 @@ export const useAiStore = defineStore('ai', () => {
     }
   }
 
+  /** Every "Label with AI" entry stays visible; without a key it explains what's needed. */
+  function needsSetup() {
+    toast('AI labeling needs an OpenRouter key', { description: 'Add one in Settings → AI (it takes a minute).', action: { label: 'Set up AI', onClick: () => useUiStore().openSettings('ai') } })
+  }
+
   function requestBulk(req: BulkRequest) {
-    if (!settings.aiReady) {
-      toast('Connect OpenRouter to label with AI', { action: { label: 'Open settings', onClick: () => useUiStore().openSettings('ai') } })
-      return
-    }
+    if (!settings.aiReady) return needsSetup()
     bulkRequest.value = req
   }
 

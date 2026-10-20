@@ -52,17 +52,23 @@ describe('mail list races', () => {
     expect(mail.messages[0].starred).toBe(true)
   })
 
-  it('marks the auto-advanced message read after archiving the open one', async () => {
+  it('marks the auto-advanced message read only after the reader stays on it', async () => {
+    vi.useFakeTimers()
     const mail = useMailStore()
-    mail.messages = [row('a', { unread: false }), row('b', { unread: true })]
+    mail.messages = [row('a', { unread: false }), row('b', { unread: true }), row('c', { unread: true })]
     const markRead = vi.spyOn(api, 'markRead').mockResolvedValue(undefined)
     vi.spyOn(api, 'archive').mockResolvedValue(undefined)
     mail.openId = 'a'
     await mail.archive(['a'])
     await Promise.resolve()
     expect(mail.openId).toBe('b')
-    expect(mail.messages.find((m) => m.id === 'b')?.unread).toBe(false)
-    expect(markRead).toHaveBeenCalledWith(['b'], true)
+    expect(mail.messages.find((m) => m.id === 'b')?.unread).toBe(true) // triaging with e doesn't mark it
+    await mail.archive(['b']) // moved on quickly: b was never read
+    await Promise.resolve()
+    expect(mail.openId).toBe('c')
+    await vi.advanceTimersByTimeAsync(3000) // stayed on c
+    expect(mail.messages.find((m) => m.id === 'c')?.unread).toBe(false)
+    expect(markRead.mock.calls.map((c) => c[0])).toEqual([['c']])
   })
 
   it('rolls back a failed star per message', async () => {

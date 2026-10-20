@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import {
-  defaultCalendarId, editableCalendars, effectiveWeekStart, eventDate, eventToInput, isEventShown, scopeTargetId, shiftTimes, type CalendarViewKind,
+  defaultCalendarId, editableCalendars, effectiveWeekStart, eventDate, eventToInput, isEventShown, scopeTargetId, setClockPreference, shiftTimes, type CalendarViewKind,
 } from '@/lib/calendar'
 import type { AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope } from '@/lib/types'
 import { useAccountsStore } from './accounts'
@@ -48,6 +48,7 @@ export const useCalendarStore = defineStore('calendar', () => {
   const available = computed(() => hasMethod('ListCalendars'))
   const calendarMap = computed(() => new Map(calendars.value.map((c) => [c.id, c])))
   const weekStart = computed(() => effectiveWeekStart(settings.settings?.calendarWeekStart))
+  watch(() => settings.settings?.calendarTimeFormat, (f) => setClockPreference(f), { immediate: true })
   const showDeclined = computed(() => !!settings.settings?.calendarShowDeclined)
 
   const disabledAccounts = computed(() => new Set(accounts.accounts.filter((a) => a.calendarEnabled === false).map((a) => a.id)))
@@ -287,11 +288,11 @@ export const useCalendarStore = defineStore('calendar', () => {
    * Drag-move / resize with an Undo toast. For a whole series, pass the master's
    * new input and its input before the move (Undo writes that back).
    */
-  async function move(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, scope: RecurrenceScope, series?: { next: EventInput; before: EventInput }): Promise<boolean> {
+  async function move(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, scope: RecurrenceScope, series?: { next: EventInput; before: EventInput }, kind: 'drop' | 'resize' = 'drop'): Promise<boolean> {
     const input = series ? series.next : { ...eventToInput(ev), ...times }
     const ok = await update(ev, input, scope, true, !!series)
     if (!ok) return false
-    toast('Event moved', {
+    toast(kind === 'resize' ? 'Event time changed' : 'Event moved', {
       description: ev.title,
       duration: UNDO_MS,
       action: {
