@@ -355,6 +355,7 @@ func (s *Service) ClassifyMessages(ids []string) ([]models.ClassificationResult,
 	if err := s.checkAIReady(); err != nil {
 		return nil, err
 	}
+	rows := ids
 	ids, err := s.expand(ids, store.ExpandAnchor)
 	if err != nil {
 		return nil, err
@@ -364,6 +365,22 @@ func (s *Service) ClassifyMessages(ids []string) ([]models.ClassificationResult,
 	}
 	if len(ids) > maxSelection {
 		return nil, fmt.Errorf("select at most %d messages, or label everything matching the current view instead", maxSelection)
+	}
+	// Jev reads the latest message of a conversation row; a label action
+	// moves the row's other messages in that box along with it.
+	along := map[string][]string{}
+	for _, row := range rows {
+		if !store.IsConversationID(row) {
+			continue
+		}
+		anchor := strings.TrimPrefix(row, store.ConversationPrefix)
+		if box, err := s.expand([]string{row}, store.ExpandFolder); err == nil {
+			for _, id := range box {
+				if id != anchor {
+					along[anchor] = append(along[anchor], id)
+				}
+			}
+		}
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Minute)
 	defer cancel()
@@ -380,12 +397,12 @@ func (s *Service) ClassifyMessages(ids []string) ([]models.ClassificationResult,
 			return nil, errors.New(r.Error)
 		}
 		results := []models.ClassificationResult{r}
-		s.moveAILabeled(ctx, results)
+		s.moveAILabeled(ctx, results, along)
 		s.messagesChanged(ids)
 		return results, nil
 	}
 	results, final := s.runClassification(ctx, selectionJobID, ids, false)
-	s.moveAILabeled(ctx, results)
+	s.moveAILabeled(ctx, results, along)
 	s.emit(models.EventClassifyFinished, final)
 	if final.Error != "" && final.Failed == len(ids) {
 		return results, errors.New(final.Error)
@@ -427,7 +444,7 @@ func (s *Service) ClassifyQuery(q models.ListQuery, onlyUnlabeled, includeAllFol
 	s.goBG(func() {
 		defer cancel()
 		results, final := s.runClassification(ctx, j.id, ids, false)
-		s.moveAILabeled(ctx, results) // still the current job: Cancel stops the moves too
+		s.moveAILabeled(ctx, results, nil) // still the current job: Cancel stops the moves too
 		s.jobs.mu.Lock()
 		if s.jobs.current == j {
 			s.jobs.current = nil
@@ -562,7 +579,9 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 			s.jobs.mu.Unlock()
 		}()
 		results, final := s.runClassification(ctx, autoJobID, todo, true)
-		s.moveAILabeled(ctx, results)
+		// Not ctx: a newer batch cancels this one but skips what it labeled
+		// already, so those moves must still happen.
+		s.moveAILabeled(s.ctx, results, nil)
 		s.emit(models.EventClassifyFinished, final)
 	})
 }
@@ -572,8 +591,9 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 // "When added: Junk") moves it to Junk, read; other label actions archive
 // it (see labelactions.go). It only acts on labels Jev added in this run:
 // mail the user took out of Junk isn't moved back by a later run.
-// It sets each result's Moved.
-func (s *Service) moveAILabeled(ctx context.Context, results []models.ClassificationResult) {
+// It sets each result's Moved. along lists, per message, the others of its
+// conversation row that move with it.
+func (s *Service) moveAILabeled(ctx context.Context, results []models.ClassificationResult, along map[string][]string) {
 	labels := map[string]models.Label{}
 	for _, l := range s.Settings().Labels {
 		labels[l.ID] = l
@@ -584,7 +604,7 @@ func (s *Service) moveAILabeled(ctx context.Context, results []models.Classifica
 		if r.Skipped || r.Error != "" || !slices.Contains(r.Added, config.JunkLabelID) {
 			continue
 		}
-		ids = append(ids, r.MessageID)
+		ids = append(append(ids, r.MessageID), along[r.MessageID]...)
 	}
 	stays := s.junkStaysFor(ids)
 	for _, r := range results {
@@ -593,11 +613,13 @@ func (s *Service) moveAILabeled(ctx context.Context, results []models.Classifica
 		}
 		for _, id := range r.Added {
 			if l, ok := labels[id]; ok {
-				moves.add(r.MessageID, l, thenKind(l, true), labelWhy(l, true), stays)
+				for _, m := range append([]string{r.MessageID}, along[r.MessageID]...) {
+					moves.add(m, l, s.thenOf(l, true), labelWhy(l, true), stays)
+				}
 			}
 		}
 	}
-	moved := s.applyLabelMoves(ctx, moves, "AI label action")
+	moved, _ := s.applyLabelMoves(ctx, moves, "AI label action")
 	if len(moved) == 0 {
 		return
 	}

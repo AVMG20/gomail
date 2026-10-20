@@ -249,7 +249,32 @@ func (s *Service) Archive(ids []string) error {
 	if err != nil {
 		return err
 	}
+	s.leavingJunk(ids, models.FolderArchive)
 	return s.engine.MoveToKind(ids, models.FolderArchive)
+}
+
+// leavingJunk records that mail the user moves out of Junk (to a folder
+// other than Trash) isn't junk, like "Not junk": Jev won't label it Junk,
+// and move it back, again. Before the move: Outlook gives moved mail new ids.
+func (s *Service) leavingJunk(ids []string, toKind string) {
+	if toKind == models.FolderSpam || toKind == models.FolderTrash {
+		return
+	}
+	cands, err := s.store.RuleCandidates(ids)
+	if err != nil {
+		return
+	}
+	var out []string
+	for _, c := range cands {
+		if c.InSpam {
+			out = append(out, c.ID)
+		}
+	}
+	if len(out) > 0 {
+		if err := s.store.RejectLabel(out, config.JunkLabelID); err != nil {
+			slog.Warn("moving out of Junk: recording not junk failed", "err", err)
+		}
+	}
 }
 
 func (s *Service) Trash(ids []string) error {
@@ -272,6 +297,9 @@ func (s *Service) MoveToFolder(ids []string, folderID string) error {
 	ids, err := s.expand(ids, store.ExpandFolder)
 	if err != nil {
 		return err
+	}
+	if f, err := s.store.Folder(folderID); err == nil {
+		s.leavingJunk(ids, f.Kind)
 	}
 	return s.engine.MoveToFolder(ids, folderID)
 }
@@ -360,12 +388,13 @@ func (s *Service) changeLabel(ids []string, labelID string, add, act bool) (int,
 		if act {
 			for _, id := range gids {
 				if inBox[id] {
-					moves.add(id, ml, thenKind(ml, false), "You labeled it “"+ml.Name+"”", stays)
+					moves.add(id, ml, s.thenOf(ml, false), "You labeled it “"+ml.Name+"”", stays)
 				}
 			}
 		}
 	}
-	moved := movedIDs(s.applyLabelMoves(s.ctx, moves, "label action"))
+	done, _ := s.applyLabelMoves(s.ctx, moves, "label action")
+	moved := movedIDs(done)
 	s.messagesChanged(changed)
 	return len(moved), nil
 }

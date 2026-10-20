@@ -45,10 +45,13 @@ const chosen = computed(() => options.value.filter((l) => selected.value.has(l.i
           v-for="l in options"
           :key="l.id"
           :model-value="selected.has(l.id)"
+          :disabled="l.then === 'trash'"
           @select.prevent
           @update:model-value="(v: boolean) => mb.setGoesToJunk(account.id, l, v)"
         >
           <span class="size-2 rounded-full" :style="{ background: l.color }" aria-hidden="true" /> {{ l.name }}
+          <!-- Set to Trash on the label itself (Jev sends those to Junk): changed there, not here. -->
+          <span v-if="l.then === 'trash'" class="text-muted-foreground ml-auto text-[11px]">Goes to Trash</span>
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>

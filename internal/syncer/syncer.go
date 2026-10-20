@@ -45,7 +45,8 @@ type Config struct {
 	OnNewMessages func(accountID string, ids []string, initial bool)
 	// BeforeAnnounce runs on newly stored messages before they are announced
 	// (label rules), so its labels and moves count for notifications.
-	BeforeAnnounce func(accountID string, ids []string)
+	// initial is the account's first sync (mail already on the server).
+	BeforeAnnounce func(accountID string, ids []string, initial bool)
 	// Quiet reports new mail that shouldn't be announced (quiet labels).
 	Quiet func(accountID string, m models.MessageSummary) bool
 	// Online probes connectivity; nil means "assume online".
@@ -464,7 +465,7 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 	}
 	// Rules first, so the list never shows mail a rule is about to junk.
 	if err == nil && len(newIDs) > 0 && e.cfg.BeforeAnnounce != nil {
-		e.cfg.BeforeAnnounce(accountID, newIDs)
+		e.cfg.BeforeAnnounce(accountID, newIDs, initial)
 	}
 	// A round that changed no mail (the usual periodic sync) doesn't make
 	// every window re-fetch its list; accounts:changed still refreshes counts.

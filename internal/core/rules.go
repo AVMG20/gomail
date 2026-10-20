@@ -33,6 +33,7 @@ type ruleActions struct {
 	labels  map[string][]string
 	junk    []string
 	junkWhy map[string]string // message id -> the Junk rule, for the review
+	moves   labelMoves        // more label actions to do in the same pass (imported labels)
 }
 
 // ruleWhy describes a Junk rule for the review.
@@ -98,6 +99,9 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 	}
 	changed := map[string]bool{}
 	moves := labelMoves{}
+	for id, m := range act.moves {
+		moves[id] = m
+	}
 	for labelID, ids := range act.labels {
 		l, ok := labels[labelID]
 		if !ok {
@@ -115,7 +119,7 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 		for _, id := range added {
 			changed[id] = true
 			if !slices.Contains(act.junk, id) { // a Junk rule already moves it
-				moves.add(id, l, thenKind(l, false), labelWhy(l, false), stays)
+				moves.add(id, l, s.thenOf(l, false), labelWhy(l, false), stays)
 			}
 		}
 		if l.Source == config.LabelSourceProvider {
@@ -130,7 +134,11 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 	}
 	moved, moveErr := s.junkRead(unread, act.junk, "junk rule")
 	s.logAutoMoves(moved, func(id string) (string, string) { return models.FolderSpam, act.junkWhy[id] })
-	moved = append(moved, movedIDs(s.applyLabelMoves(s.ctx, moves, "label action"))...)
+	for _, id := range act.junk {
+		delete(moves, id) // a Junk rule already moved it
+	}
+	labelMoved, _ := s.applyLabelMoves(s.ctx, moves, "label action")
+	moved = append(moved, movedIDs(labelMoved)...)
 	for _, id := range moved {
 		changed[id] = true
 	}
@@ -205,51 +213,57 @@ func (s *Service) junkRead(unread, move []string, what string) ([]string, error)
 // announced (so quiet labels and Junk moves already count), then moves it
 // by the labels Gmail or Outlook gave it (a label set to "→ Junk"). It
 // only looks at the new messages, so a sync doesn't scan the whole mailbox.
-func (s *Service) applyRules(accountID string, ids []string) {
+func (s *Service) applyRules(accountID string, ids []string, initial bool) {
 	st := s.Settings()
 	if len(ids) == 0 {
 		return
 	}
+	act := ruleActions{labels: map[string][]string{}, junkWhy: map[string]string{}}
 	if rules := st.LabelRules; len(rules) > 0 {
 		cands, err := s.store.RuleCandidates(ids)
 		if err != nil {
 			slog.Warn("label rules: reading new mail failed", "account", accountID, "err", err)
 		} else {
-			_, _ = s.applyRuleActions(planRules(rules, st.Labels, cands, true))
+			act = planRules(rules, st.Labels, cands, true)
 		}
 	}
-	s.moveByProviderLabels(st, ids)
+	// A first sync brings mail that was already there: its imported labels
+	// don't move it (the user may have kept it in the inbox on purpose).
+	if !initial {
+		act.moves = s.providerLabelMoves(st, ids)
+	}
+	if len(act.labels) > 0 || len(act.junk) > 0 || len(act.moves) > 0 {
+		_, _ = s.applyRuleActions(act)
+	}
 }
 
-// moveByProviderLabels does the "When added" of the imported labels new
+// providerLabelMoves are the "When added" moves of the imported labels new
 // mail arrived with (an Outlook category an Outlook rule set, say), while
 // imported labels are shown.
-func (s *Service) moveByProviderLabels(st models.Settings, ids []string) {
+func (s *Service) providerLabelMoves(st models.Settings, ids []string) labelMoves {
 	acting := map[string]models.Label{}
 	for _, l := range st.Labels {
-		if l.Source == config.LabelSourceProvider && thenKind(l, false) != "" {
+		if l.Source == config.LabelSourceProvider && s.thenOf(l, false) != "" {
 			acting[l.ID] = l
 		}
 	}
-	if len(acting) == 0 || !st.ImportProviderLabels {
-		return
+	if len(acting) == 0 {
+		return nil
 	}
 	got, err := s.store.ProviderLabels(ids)
 	if err != nil {
 		slog.Warn("label actions: reading new mail failed", "err", err)
-		return
+		return nil
 	}
 	moves := labelMoves{}
 	for id, labels := range got {
 		for _, lid := range labels {
 			if l, ok := acting[lid]; ok {
-				moves.add(id, l, thenKind(l, false), "It came with the label “"+l.Name+"”", nil)
+				moves.add(id, l, s.thenOf(l, false), "It came with the label “"+l.Name+"”", nil)
 			}
 		}
 	}
-	if moved := movedIDs(s.applyLabelMoves(s.ctx, moves, "label action")); len(moved) > 0 {
-		s.messagesChanged(moved)
-	}
+	return moves
 }
 
 // ApplyLabelRules runs the label rules over the mail already on this

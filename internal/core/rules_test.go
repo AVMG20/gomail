@@ -506,3 +506,59 @@ func TestJunkSenderGivesTheJunkLabel(t *testing.T) {
 		}
 	}
 }
+
+// Mail the user moves out of Junk by hand counts as "Not junk": Jev won't
+// label it Junk (and move it back) again.
+func TestMovingOutOfJunkMeansNotJunk(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	acct := demo.OutlookAccountID
+	e.demos[acct].DeliverTo(models.FolderSpam, "Actually fine", "friend@example.com")
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := labelsOf(t, e, acct, "Actually fine")
+	inbox, _ := s.store.FolderByKind(acct, models.FolderInbox)
+	if err := s.MoveToFolder([]string{m.ID}, inbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.store.DB().QueryRow(`SELECT count(*) FROM label_rejections WHERE label_id = 'junk'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("junk rejections %d (%v), want 1", n, err)
+	}
+}
+
+// Imported labels do nothing while they're hidden: no "When added" move.
+func TestHiddenImportedLabelsDontMoveMail(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	acct := demo.OutlookAccountID
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	family := mailboxLabel(t, s, acct, "Family")
+	st := s.Settings()
+	st.ImportProviderLabels = false
+	for i := range st.Labels {
+		if st.Labels[i].ID == family {
+			st.Labels[i].Then = "junk"
+		}
+	}
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	remote := e.demos[acct].Deliver("Chain letter", "aunt@example.com")
+	if err := e.demos[acct].SetLabel(context.Background(), []string{remote}, "Family", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	spam, _ := s.store.FolderByKind(acct, models.FolderSpam)
+	if m, _ := labelsOf(t, e, acct, "Chain letter"); has(m.FolderIDs, spam.ID) {
+		t.Fatal("a hidden category moved mail to Junk")
+	}
+	if _, err := s.ApplyLabelAction(family); err == nil {
+		t.Fatal("applied a hidden label's action")
+	}
+}

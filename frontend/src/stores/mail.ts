@@ -903,6 +903,8 @@ export const useMailStore = defineStore('mail', () => {
       if (label) toast(`This mailbox has no label “${label.name}”`)
       return
     }
+    // Where the rows were, for Undo when the label's "When added" moves them.
+    const was = new Map(ids.map((id) => { const m = byId.value.get(id); return [id, { folderIds: m?.folderIds ?? [], unread: !!m?.unread }] }))
     patchLocal(ids, (m) => {
       const id = labelFor(m, labelId) ?? labelId
       return {
@@ -915,7 +917,14 @@ export const useMailStore = defineStore('mail', () => {
       await inChunks(actionIds(ids), async (c) => { moved += await api.addLabel(c, labelId) })
       const name = label?.name ?? labelId
       // "Move mail when you add a label yourself" is on and the label moved mail (the list refreshes).
-      if (moved) toast(`Label “${name}” added`, { description: `${rows(moved)} moved, as the label says.` })
+      if (moved) {
+        const dest = label?.id === 'junk' || label?.then === 'junk' ? 'spam' : (label?.then ?? '')
+        const place = ({ spam: 'Junk', archive: 'the archive', trash: 'Trash' } as Record<string, string>)[dest] ?? 'another folder'
+        toast(`Moved ${moved.toLocaleString()} message${moved === 1 ? '' : 's'} to ${place}`, {
+          description: `Label “${name}” added.`,
+          action: { label: 'Undo', onClick: () => void undoLabelMove(ids, labelId, dest, was) },
+        })
+      }
       // Part of the selection is in a mailbox without this label: say so, never skip it silently.
       if (skipped) toast(`Label “${name}” added to ${rows(ids.length)}`, { description: `${rows(skipped)} in other mailboxes didn’t get it: “${name}” isn’t one of their labels.` })
       else if (!quiet && !moved && ids.length > 1) toast(`Label “${name}” added to ${rows(ids.length)}`)
@@ -923,6 +932,28 @@ export const useMailStore = defineStore('mail', () => {
       toast.error('Could not add label', { description: errorMessage(e) })
       void softRefresh()
     }
+    accounts.refreshCounts()
+  }
+
+  /** Undo of a label that moved mail: the label comes off and the mail goes back (unread again if it was). */
+  async function undoLabelMove(ids: string[], labelId: string, dest: string, was: Map<string, { folderIds: string[]; unread: boolean }>) {
+    try {
+      await inChunks(actionIds(ids), (c) => api.removeLabel(c, labelId))
+      const back = new Map<string, string[]>()
+      const unread: string[] = []
+      for (const id of ids) {
+        const w = was.get(id)
+        const from = (w?.folderIds ?? []).map((f) => accounts.folderMap.get(f)).filter((f) => !!f && f.kind !== dest)
+        const to = from.find((f) => f!.kind === 'inbox') ?? from[0]
+        if (to) back.set(to.id, [...(back.get(to.id) ?? []), id])
+        if (w?.unread) unread.push(id)
+      }
+      for (const [folderId, list] of back) await inChunks(actionIds(list), (c) => api.moveToFolder(c, folderId))
+      if (unread.length) await inChunks(actionIds(unread), (c) => api.markRead(c, false))
+    } catch (e) {
+      toast.error('Couldn’t undo', { description: errorMessage(e) })
+    }
+    void softRefresh()
     accounts.refreshCounts()
   }
 

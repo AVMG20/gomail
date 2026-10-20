@@ -27,7 +27,6 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUiStore, type MailboxTab } from '@/stores/ui'
 import { useMailboxSettings } from './mailboxSettings'
 import MailboxLabels from './MailboxLabels.vue'
-import JunkLabelChips from './JunkLabelChips.vue'
 import QuietLabelChips from './QuietLabelChips.vue'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
@@ -235,7 +234,7 @@ function labelAll() {
           </SettingRow>
         </SettingSection>
 
-        <SettingSection v-if="otherFolders.length" title="Other folders" :description="`Folders besides the usual ones, listed under More in the sidebar. Hide the ones you don’t use; their mail still turns up in search.${canDeleteFolders ? ` Or delete them, here and in ${providerName(a)}.` : ''}`">
+        <SettingSection v-if="otherFolders.length" title="Other folders" :description="`Listed under More in the sidebar. Hidden folders still show in search.${canDeleteFolders ? ` Deleting one deletes it in ${providerName(a)} too.` : ''}`">
           <SettingRow v-for="f in otherFolders" :key="f.id" :title="f.name" :description="f.total ? `${f.total.toLocaleString()} messages${f.unread ? ` · ${f.unread.toLocaleString()} unread` : ''}` : 'Empty'">
             <div class="flex items-center gap-2">
               <Button v-if="canDeleteFolders" variant="ghost" size="icon-sm" class="text-muted-foreground hover:text-destructive" :aria-label="`Delete the folder ${f.name}`" @click="askDelete(f)"><Trash2Icon /></Button>
@@ -261,11 +260,8 @@ function labelAll() {
           <SettingRow title="Auto-label new mail with Jev" :description="noKey ? 'Needs an OpenRouter key (AI settings).' : 'Sorts new mail into this mailbox’s labels after each sync.'">
             <Switch :model-value="!noKey && mb.autoLabels(a.id)" :disabled="noKey" @update:model-value="(v: boolean) => mb.setAutoLabel(a!.id, v)" />
           </SettingRow>
-          <SettingRow title="Let AI correct Gmail/Outlook labels" :description="s.aiCorrectsProviderLabels ? 'Removes imported labels it’s sure don’t apply.' : 'Off for all mailboxes in AI settings.'">
+          <SettingRow :title="`Let Jev remove wrong ${a.provider === 'gmail' ? 'Gmail labels' : 'Outlook categories'}`" :description="s.aiCorrectsProviderLabels ? 'Only when it’s sure.' : 'Off for all mailboxes in AI settings.'">
             <Switch :model-value="s.aiCorrectsProviderLabels && mb.corrects(a.id)" :disabled="!s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => mb.setCorrects(a!.id, v)" />
-          </SettingRow>
-          <SettingRow title="Labels that go to Junk" description="Mail Jev or a rule gives one of these labels is marked read and moved to Junk. Move it back to teach Jev otherwise." stacked>
-            <JunkLabelChips :account="a" />
           </SettingRow>
           <SettingRow title="Label existing mail" description="Run Jev once on mail already downloaded here.">
             <div class="flex items-center gap-2">

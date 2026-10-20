@@ -163,7 +163,7 @@ func TestBeforeAnnounceRunsBeforeSyncFinished(t *testing.T) {
 	}
 	var got []string
 	finishedBefore := -1
-	te.e.cfg.BeforeAnnounce = func(accountID string, ids []string) {
+	te.e.cfg.BeforeAnnounce = func(accountID string, ids []string, _ bool) {
 		got = ids
 		finishedBefore = te.rec.count(models.EventSyncFinished)
 	}

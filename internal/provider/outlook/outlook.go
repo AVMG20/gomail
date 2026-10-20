@@ -1262,9 +1262,10 @@ func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
 	if info.ChildFolderCount > 0 {
 		return provider.ErrFolderHasSubfolders
 	}
+	var ids []string // moved to Deleted Items (immutable ids: they keep them)
 	if info.TotalItemCount > 0 {
-		ids, err := c.folderIDs(ctx, folder.RemoteID, "")
-		if err != nil {
+		var err error
+		if ids, err = c.folderIDs(ctx, folder.RemoteID, ""); err != nil {
 			return err
 		}
 		if err := c.Move(ctx, ids, mail.Folder{RemoteID: "deleteditems", Name: "Deleted Items", Kind: models.FolderTrash}); err != nil {
@@ -1280,7 +1281,13 @@ func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
 	err := c.api.JSON(ctx, http.MethodPost, path+"/permanentDelete", map[string]any{}, nil)
 	switch httpx.StatusOf(err) {
 	case http.StatusBadRequest, http.StatusForbidden:
-		// Outlook's own folders (RSS Feeds, Scheduled, ...) can't be deleted.
+		// Outlook's own folders (RSS Feeds, Scheduled, ...) can't be
+		// deleted: their mail goes back.
+		if len(ids) > 0 {
+			if berr := c.Move(ctx, ids, folder); berr != nil {
+				return fmt.Errorf("Outlook doesn’t let this folder be deleted, and its mail couldn’t all go back (it’s in Deleted Items): %w", berr)
+			}
+		}
 		return fmt.Errorf("Outlook doesn’t let this folder be deleted; hide it instead (%w)", err)
 	}
 	return err

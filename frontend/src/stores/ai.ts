@@ -73,8 +73,12 @@ export const useAiStore = defineStore('ai', () => {
           if (added.length) parts.push(`Added ${added.length} label${added.length === 1 ? '' : 's'}`)
           if (removed.length) parts.push(`removed ${removed.length}`)
         }
-        const moved = results.filter((r) => r.moved)
-        if (moved.length) parts.push(`${moved.length} moved, as ${moved.length === 1 ? 'its label says' : 'their labels say'}`)
+        // Where the label actions took it ("moved to Junk", "2 moved to Junk, 1 to the archive").
+        const PLACE: Record<string, string> = { spam: 'Junk', archive: 'the archive', trash: 'Trash' }
+        const byPlace = new Map<string, number>()
+        for (const r of results) if (r.moved) byPlace.set(r.moved, (byPlace.get(r.moved) ?? 0) + 1)
+        const places = [...byPlace].map(([k, n], i) => `${ids.length > 1 ? `${n} ` : ''}${i ? 'to' : 'moved to'} ${PLACE[k] ?? k}`)
+        if (places.length) parts.push(places.join(', '))
         toast(parts.join(' · '), {
           action: {
             label: 'Undo',
@@ -88,8 +92,10 @@ export const useAiStore = defineStore('ai', () => {
                 if (!r.moved || !was) continue
                 const from = was.folderIds.map((id) => accounts.folderMap.get(id)).filter((f) => !!f && f.kind !== r.moved)
                 const back = from.find((f) => f!.kind === 'inbox') ?? from[0] ?? (was.accountId ? accounts.folderOf(was.accountId, 'inbox') : undefined)
-                if (back) await api.moveToFolder([r.messageId], back.id)
-                if (was.unread) await api.markRead([r.messageId], false)
+                // A conversation moved as a whole: "c:<id>" brings back its messages in that box.
+                const row = settings.settings?.conversationView === false ? r.messageId : `c:${r.messageId}`
+                if (back) await api.moveToFolder([row], back.id)
+                if (was.unread) await api.markRead([row], false)
               }
               accounts.refreshCounts()
               void mail.softRefresh()

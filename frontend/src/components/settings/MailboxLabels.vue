@@ -3,7 +3,7 @@
 // labels: nothing here changes another mailbox. Its Gmail labels / Outlook categories are listed
 // apart: their names follow Gmail/Outlook, the rest (color, description, action) is ours.
 import { computed, nextTick, ref } from 'vue'
-import { ArrowDownIcon, ArrowUpIcon, CopyIcon, DownloadIcon, EyeOffIcon, PlayIcon, PlusIcon, SparklesIcon, Trash2Icon, UploadIcon } from '@lucide/vue'
+import { ArrowDownIcon, ArrowUpIcon, CopyIcon, DownloadIcon, EyeOffIcon, PlayIcon, PlusIcon, Trash2Icon, UploadIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { api, hasMethod } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -23,16 +23,15 @@ import { buildLabelExport, MAX_IMPORT_BYTES, mergeLabelImport } from '@/lib/labe
 import { copyLabelsTo, nameTaken, newLabelId } from '@/lib/labelScope'
 import type { Label, Settings } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
-import { useAiStore } from '@/stores/ai'
 import { useSettingsStore } from '@/stores/settings'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
+import JunkLabelChips from './JunkLabelChips.vue'
 import RulesSection from './RulesSection.vue'
 import { useMailboxSettings } from './mailboxSettings'
 
 const props = defineProps<{ accountId: string }>()
 const settings = useSettingsStore()
-const ai = useAiStore()
 const accounts = useAccountsStore()
 
 const account = computed(() => accounts.accountMap.get(props.accountId))
@@ -44,12 +43,15 @@ const importedLabels = computed(() => settings.labels.filter((l) => mine(l) && l
 
 // ---- what happens to mail that gets the label
 const THEN: { value: string; label: string; chip: string }[] = [
-  { value: 'keep', label: 'Keep in inbox', chip: '' },
+  { value: 'keep', label: 'Don’t move', chip: '' },
   { value: 'archive', label: 'Archive', chip: '→ Archive' },
   { value: 'junk', label: 'Move to Junk', chip: '→ Junk' },
   // Jev never trashes: a wrong guess would delete real mail, so its picks go to Junk instead.
-  { value: 'trash', label: 'Move to Trash (Jev: Junk)', chip: '→ Trash' },
+  { value: 'trash', label: 'Move to Trash (Junk when Jev adds it)', chip: '→ Trash' },
 ]
+/** Who makes a label's choice happen: hand labels too with "Move mail when you add a label yourself". */
+const whenHeader = computed(() => (s.value.manualLabelActions ? 'When the label is added' : 'When Jev or a rule adds it (not you)'))
+const whenHeaderImported = computed(() => (s.value.manualLabelActions ? 'When mail arrives with it or gets it' : 'When mail arrives with it, or Jev or a rule adds it'))
 const thenOf = (l: Label) => THEN.find((t) => t.value === l.then) ?? THEN[0]
 
 const mb = useMailboxSettings()
@@ -184,14 +186,14 @@ async function onImportFile(e: Event) {
   if (fileInput.value) fileInput.value.value = ''
 }
 
-function labelAll() {
-  ai.requestBulk({ query: { accountId: props.accountId }, ids: [], title: `All mail in ${account.value?.email ?? 'this mailbox'}` })
-}
 </script>
 
 <template>
   <div v-if="settings.settings">
     <SettingSection title="Labels" description="This mailbox’s labels; other mailboxes have their own. Jev uses each description to decide when a label applies.">
+      <SettingRow v-if="account" title="Labels that go to Junk" description="Mail that gets one of these labels moves to Junk, marked read. Same as “Move to Junk” on a label below." stacked>
+        <JunkLabelChips :account="account" />
+      </SettingRow>
       <div v-for="(l, i) in userLabels" :key="l.id" class="group flex items-start gap-3 py-3">
         <Popover>
           <PopoverTrigger as-child>
@@ -214,18 +216,18 @@ function labelAll() {
                 :class="['h-6 shrink-0 gap-1 rounded-full px-2 text-xs data-[size=sm]:h-6', thenOf(l).chip ? 'bg-muted text-foreground border-transparent' : 'text-muted-foreground border-dashed']"
                 :aria-label="`When “${l.name}” is added`"
               >
-                {{ thenOf(l).chip || 'When added…' }}
+                {{ thenOf(l).chip || 'Move mail…' }}
               </SelectTrigger>
               <SelectContent>
-                <div class="text-muted-foreground px-2 py-1.5 text-xs">When Jev or a rule adds it</div>
+                <div class="text-muted-foreground px-2 py-1.5 text-xs">{{ whenHeader }}</div>
                 <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
               </SelectContent>
             </Select>
+            <Button v-if="l.then && hasMethod('ApplyLabelAction')" variant="ghost" size="icon-xs" class="text-muted-foreground" :disabled="mb.isApplying(l.id)" :title="`Move mail that already has “${l.name}” to ${mb.placeOf(l.then)}`" :aria-label="`Move mail that already has ${l.name} to ${mb.placeOf(l.then)}`" @click="mb.applyThen(l)"><PlayIcon /></Button>
           </div>
           <Textarea :model-value="l.description" rows="1" :aria-label="`Description for ${l.name}`" placeholder="When should this label apply? e.g. “Invoices, receipts and bank statements”" class="min-h-8 resize-none py-1.5 text-xs" @update:model-value="(v) => patch(l.id, { description: String(v) })" />
         </div>
         <div class="flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-          <Button v-if="l.then && hasMethod('ApplyLabelAction')" variant="ghost" size="icon-xs" :disabled="mb.isApplying(l.id)" :title="`Move mail that already has “${l.name}” to ${mb.placeOf(l.then)}`" :aria-label="`Move mail that already has ${l.name} to ${mb.placeOf(l.then)}`" @click="mb.applyThen(l)"><PlayIcon /></Button>
           <Button variant="ghost" size="icon-xs" aria-label="Move up" :disabled="i === 0" @click="move(l.id, -1)"><ArrowUpIcon /></Button>
           <Button variant="ghost" size="icon-xs" aria-label="Move down" :disabled="i === userLabels.length - 1" @click="move(l.id, 1)"><ArrowDownIcon /></Button>
           <Button variant="ghost" size="icon-xs" class="hover:text-destructive" :aria-label="`Delete ${l.name}`" @click="askRemove(l)"><Trash2Icon /></Button>
@@ -246,7 +248,6 @@ function labelAll() {
         <Button variant="ghost" size="sm" :disabled="!userLabels.length" @click="exportLabels"><DownloadIcon /> Export</Button>
         <Button variant="ghost" size="sm" @click="fileInput?.click()"><UploadIcon /> Import</Button>
         <input ref="fileInput" type="file" accept="application/json,.json" class="hidden" @change="onImportFile" />
-        <Button variant="ghost" size="sm" @click="labelAll"><SparklesIcon class="text-violet-500" /> Label all mail with AI…</Button>
       </div>
     </SettingSection>
 
@@ -256,7 +257,7 @@ function labelAll() {
       <template #actions>
         <span class="text-muted-foreground inline-flex items-center gap-1 text-[11px]"><ProviderIcon v-if="account" :provider="account.provider" class="size-3" /> Imported</span>
       </template>
-      <SettingRow :title="`Show ${account?.provider === 'outlook' ? 'Outlook categories' : 'Gmail labels'} as labels`" description="For every mailbox. When off, they stay in sync but are hidden.">
+      <SettingRow :title="`Show ${account?.provider === 'outlook' ? 'Outlook categories' : 'Gmail labels'}`" description="For every mailbox. When off, they stay in sync but are hidden.">
         <Switch :model-value="s.importProviderLabels" @update:model-value="(v: boolean) => settings.update({ importProviderLabels: v })" />
       </SettingRow>
       <template v-if="s.importProviderLabels">
@@ -283,10 +284,10 @@ function labelAll() {
                   :class="['h-6 shrink-0 gap-1 rounded-full px-2 text-xs data-[size=sm]:h-6', thenOf(l).chip ? 'bg-muted text-foreground border-transparent' : 'text-muted-foreground border-dashed']"
                   :aria-label="`When “${l.name}” is added`"
                 >
-                  {{ thenOf(l).chip || 'When added…' }}
+                  {{ thenOf(l).chip || 'Move mail…' }}
                 </SelectTrigger>
                 <SelectContent>
-                  <div class="text-muted-foreground px-2 py-1.5 text-xs">When mail arrives with it, or Jev or a rule adds it</div>
+                  <div class="text-muted-foreground px-2 py-1.5 text-xs">{{ whenHeaderImported }}</div>
                   <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
                 </SelectContent>
               </Select>

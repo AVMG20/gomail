@@ -84,12 +84,20 @@ export function useMailboxSettings() {
 
   // ---- what a label does to mail Jev or a rule gives it (Label.then), and offering to do it
   // for the mail that already has it.
-  function setThen(l: Label, then: string) {
+  async function setThen(l: Label, then: string) {
     void settings.update({ labels: settings.labels.map((x) => (x.id === l.id ? { ...x, then } : x)) }, 500)
-    if (!then || !hasMethod('ApplyLabelAction') || accounts.labelTotals.get(l.id)?.total === 0) return
+    if (!then || !hasMethod('ApplyLabelAction') || !l.accountIds?.[0]) return
+    // Only offer it when mail has the label (counts leave out labels nothing has).
+    try {
+      const counts = await api.getLabelCounts(l.accountIds[0])
+      if (!counts.some((c) => c.labelId === l.id && c.total > 0)) return
+    } catch {
+      return
+    }
     toast(`“${l.name}” now goes to ${THEN_PLACE[then]}`, {
       description: 'Mail that already has it stays where it is.',
-      action: { label: 'Move it too', onClick: () => void applyThen(l) },
+      action: { label: 'Move existing mail', onClick: () => void applyThen(l) },
+      duration: 10000,
     })
   }
   async function applyThen(l: Label) {
@@ -98,7 +106,7 @@ export function useMailboxSettings() {
     try {
       await settings.flush()
       const n = await api.applyLabelAction(l.id)
-      toast(n ? `${n.toLocaleString()} message${n === 1 ? '' : 's'} moved` : `Nothing to move: mail with “${l.name}” is already there`)
+      toast(n ? `Moved ${n.toLocaleString()} message${n === 1 ? '' : 's'} to ${placeOf(l.then ?? '')}` : `Nothing to move: mail with “${l.name}” is already there`)
       accounts.refreshCounts()
     } catch (e) {
       toast.error('Couldn’t move the mail', { description: errorMessage(e) })

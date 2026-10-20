@@ -68,6 +68,16 @@ func labelWhy(l models.Label, byAI bool) string {
 	}
 }
 
+// thenOf is thenKind, except that imported labels do nothing while they
+// are hidden (Settings.ImportProviderLabels off): what the user can't see
+// doesn't move mail.
+func (s *Service) thenOf(l models.Label, byAI bool) string {
+	if l.Source == config.LabelSourceProvider && !s.Settings().ImportProviderLabels {
+		return ""
+	}
+	return thenKind(l, byAI)
+}
+
 // thenKind is the folder kind a label sends new mail to ("" = stays put).
 func thenKind(l models.Label, byAI bool) string {
 	if l.ID == config.JunkLabelID {
@@ -91,10 +101,10 @@ func thenKind(l models.Label, byAI bool) string {
 // archiving only from the inbox, and never moving sent mail, drafts or
 // mail in Trash (a label is about received mail; Trash is the user's own
 // choice). It stops between batches when ctx ends. It returns the moved
-// ids: kind -> ids.
-func (s *Service) applyLabelMoves(ctx context.Context, moves labelMoves, what string) map[string][]string {
+// ids (kind -> ids) and the first move error.
+func (s *Service) applyLabelMoves(ctx context.Context, moves labelMoves, what string) (map[string][]string, error) {
 	if len(moves) == 0 {
-		return nil
+		return nil, nil
 	}
 	ids := make([]string, 0, len(moves))
 	for id := range moves {
@@ -103,7 +113,7 @@ func (s *Service) applyLabelMoves(ctx context.Context, moves labelMoves, what st
 	places, err := s.store.FolderKinds(ids)
 	if err != nil {
 		slog.Warn(what+": lookup failed", "err", err)
-		return nil
+		return nil, err
 	}
 	byKind := map[string][]string{}
 	var readFirst []string // Junk and Trash moves
@@ -143,9 +153,11 @@ func (s *Service) applyLabelMoves(ctx context.Context, moves labelMoves, what st
 		return out
 	}
 	moved := map[string][]string{}
+	var firstErr error
 	// Junk and Trash: read first, then move.
 	if ctx.Err() == nil {
-		junked, _ := s.junkRead(unreadIn(byKind[models.FolderSpam]), byKind[models.FolderSpam], what)
+		junked, err := s.junkRead(unreadIn(byKind[models.FolderSpam]), byKind[models.FolderSpam], what)
+		firstErr = err
 		if len(junked) > 0 {
 			moved[models.FolderSpam] = junked
 		}
@@ -164,13 +176,16 @@ func (s *Service) applyLabelMoves(ctx context.Context, moves labelMoves, what st
 			}
 			if err := s.engine.MoveToKind(b, kind); err != nil {
 				slog.Warn(what+": move failed", "to", kind, "err", err)
+				if firstErr == nil {
+					firstErr = err
+				}
 				continue
 			}
 			moved[kind] = append(moved[kind], b...)
 		}
 	}
 	s.logAutoMoves(movedIDs(moved), func(id string) (string, string) { return moves[id].kind, moves[id].why })
-	return moved
+	return moved, firstErr
 }
 
 // ApplyLabelAction does a label's "When added" once for the mail that
@@ -182,7 +197,7 @@ func (s *Service) ApplyLabelAction(labelID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	kind := thenKind(l, false)
+	kind := s.thenOf(l, false)
 	if kind == "" || l.ID == config.JunkLabelID {
 		return 0, errors.New("this label doesn’t move mail")
 	}
@@ -202,8 +217,12 @@ func (s *Service) ApplyLabelAction(labelID string) (int, error) {
 	for _, id := range ids {
 		moves.add(id, l, kind, "Labeled “"+l.Name+"”", nil)
 	}
-	moved := movedIDs(s.applyLabelMoves(s.ctx, moves, "label action"))
+	done, err := s.applyLabelMoves(s.ctx, moves, "label action")
+	moved := movedIDs(done)
 	s.messagesChanged(moved)
+	if len(moved) == 0 && err != nil {
+		return 0, err
+	}
 	return len(moved), nil
 }
 
