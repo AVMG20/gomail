@@ -276,3 +276,33 @@ func TestLabelPushesKeepTheirOrder(t *testing.T) {
 		t.Fatalf("pushed %v, want %v", p.labels, want)
 	}
 }
+
+// A slow older-mail page (timeout) while the network is fine is that
+// folder's problem: it must not flip the app offline (which made every
+// account sync again once the probe succeeded, every minute or so) and
+// the folder backs off like any failing folder.
+func TestSlowBackfillPageDoesNotGoOffline(t *testing.T) {
+	te := newTestEnv(t)
+	for _, a := range []string{demo.GmailAccountID, demo.OutlookAccountID} {
+		if err := te.e.SyncNow(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+		te.provs[a].set("older", fmt.Errorf("listing older mail: %w", context.DeadlineExceeded))
+	}
+	for range 40 {
+		te.e.BackfillStep(context.Background())
+	}
+	if te.e.Offline() {
+		t.Fatal("a slow page took the app offline although the network is up")
+	}
+	calls := 0
+	for _, a := range []string{demo.GmailAccountID, demo.OutlookAccountID} {
+		f := te.provs[a]
+		f.mu.Lock()
+		calls += f.calls["older"]
+		f.mu.Unlock()
+	}
+	if calls > 20 {
+		t.Fatalf("%d older-mail requests: the failing folders don't back off", calls)
+	}
+}

@@ -164,10 +164,10 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 	fetched := time.Now()
 	msgs, err := p.ListOlder(pctx, mail.Folder{RemoteID: c.folder.RemoteID, Name: c.folder.Name, Kind: c.folder.Kind}, c.oldest, backfillPage)
 	if err != nil {
-		if IsNetworkError(err) {
+		if IsNetworkError(err) && ctx.Err() == nil && (e.cfg.Online == nil || !e.cfg.Online(ctx)) {
 			e.setOnline(false)
-		} else {
-			// Don't retry a failing folder every few seconds.
+		} else if ctx.Err() == nil {
+			// Don't retry a failing (or just slow) folder every few seconds.
 			e.backfill.failed(c.folder.ID)
 		}
 		slog.Debug("backfill page failed", "account", c.acct.ID, "folder", c.folder.Name, "err", err)
