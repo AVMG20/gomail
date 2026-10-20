@@ -87,7 +87,8 @@ func (s *Store) ReplaceCalendars(accountID string, cals []calendar.Calendar) err
 				return err
 			}
 		}
-		return nil
+		// Preferences restored from a backup, waiting for these calendars.
+		return applyPendingCalendars(tx, accountID)
 	})
 }
 

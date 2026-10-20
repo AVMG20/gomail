@@ -381,6 +381,28 @@ CREATE TABLE label_rejections (
 	`
 ALTER TABLE calendars ADD COLUMN color_override TEXT NOT NULL DEFAULT '';
 `,
+	// 12: restored backups: label marks and calendar preferences waiting
+	// for their messages / calendars to sync (see backup.go).
+	`
+CREATE TABLE pending_labels (
+	provider   TEXT NOT NULL,
+	email      TEXT NOT NULL,
+	remote_id  TEXT NOT NULL,
+	label_id   TEXT NOT NULL, -- '' for kind 'classified'
+	kind       TEXT NOT NULL, -- 'manual' | 'ai' | 'rejected' | 'override' | 'classified'
+	confidence REAL NOT NULL DEFAULT 1,
+	PRIMARY KEY(provider, email, remote_id, label_id, kind)
+) WITHOUT ROWID;
+
+CREATE TABLE pending_calendars (
+	provider  TEXT NOT NULL,
+	email     TEXT NOT NULL,
+	remote_id TEXT NOT NULL,
+	visible   INTEGER NOT NULL DEFAULT 1,
+	color     TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY(provider, email, remote_id)
+) WITHOUT ROWID;
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

@@ -124,6 +124,15 @@ export function EstimateClassify(q: models$0.ListQuery, onlyUnlabeled: boolean, 
 }
 
 /**
+ * ExportBackup asks where to save and writes a backup of settings,
+ * accounts (without sign-ins) and local label decisions. includeSecrets
+ * adds the OpenRouter key and OAuth app credentials.
+ */
+export function ExportBackup(includeSecrets: boolean): $CancellablePromise<models$0.BackupResult> {
+    return $Call.ByID(3568189526, includeSecrets);
+}
+
+/**
  * GetAIUsage returns OpenRouter spending recorded today and this month,
  * and whether the daily budget paused automatic labeling.
  */
@@ -220,6 +229,14 @@ export function GetSettings(): $CancellablePromise<models$0.Settings> {
  */
 export function GetThread(id: string): $CancellablePromise<models$0.Message[] | null> {
     return $Call.ByID(3829466066, id);
+}
+
+/**
+ * ImportBackup asks for a backup file and merges it into this install.
+ * Restored accounts need a sign-in (ReauthAccount).
+ */
+export function ImportBackup(): $CancellablePromise<models$0.RestoreSummary> {
+    return $Call.ByID(1149873437);
 }
 
 /**

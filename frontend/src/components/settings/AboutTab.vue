@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { api, hasMethod } from '@/lib/api'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
+import BackupSection from './BackupSection.vue'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 
@@ -47,6 +48,7 @@ async function copy(text: string) {
         <Button v-else size="sm" variant="outline" :disabled="settings.checkingUpdate" @click="checkNow"><LoaderIcon v-if="settings.checkingUpdate" class="animate-spin" /> Check now</Button>
       </SettingRow>
     </SettingSection>
+    <BackupSection />
     <SettingSection title="Help">
       <SettingRow title="Welcome guide" description="Walk through connecting mail, AI labeling and starter labels again.">
         <Button size="sm" variant="outline" @click="ui.welcomeTick++">Show again</Button>

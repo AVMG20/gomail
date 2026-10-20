@@ -357,6 +357,10 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		if err := saveSyncState(tx, accountID, r.State); err != nil {
 			return err
 		}
+		// Label marks restored from a backup, waiting for these messages.
+		if _, err := applyPendingLabels(tx, accountID, now); err != nil {
+			return err
+		}
 		if err := refreshJunk(tx, touched, now); err != nil {
 			return err
 		}
@@ -1092,7 +1096,12 @@ func (s *Store) DeleteUnknownLabels(valid []string) error {
 				return err
 			}
 		}
-		return nil
+		q := `DELETE FROM pending_labels WHERE label_id != ''`
+		if len(valid) > 0 {
+			q += ` AND label_id NOT IN (` + placeholders(len(valid)) + `)`
+		}
+		_, err := tx.Exec(q, anySlice(valid)...)
+		return err
 	})
 }
 

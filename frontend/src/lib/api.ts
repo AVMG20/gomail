@@ -3,7 +3,7 @@
 // webview (plain browser via `npm run dev`) every call is routed to the
 // in-memory mock in ./mock.
 import type {
-  Account, AIModel, AppInfo, AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
+  Account, AIModel, AppInfo, BackupResult, RestoreSummary, AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
   EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, EventDraft, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
 } from './types'
 import { isSafeExternalUrl } from './format'
@@ -125,7 +125,7 @@ export const USED_METHODS = [
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
 export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', ...CALENDAR_METHODS]
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -414,6 +414,10 @@ export const api = {
   deleteEvent: (id: string, scope: RecurrenceScope) => call<void>('DeleteEvent', id, scope),
   respondToEvent: (id: string, response: AttendeeResponse) => call<void>('RespondToEvent', id, response),
   checkForUpdate: () => call<UpdateInfo>('CheckForUpdate'),
+  /** Native save dialog, then writes a backup; `cancelled` when the dialog was closed. */
+  exportBackup: (includeSecrets: boolean) => call<BackupResult>('ExportBackup', includeSecrets),
+  /** Native open dialog, then merges the backup into this install. */
+  importBackup: () => call<RestoreSummary>('ImportBackup'),
   /** A mailto: link that launched the app before the UI was ready (returned once), or null. */
   getPendingCompose: () => call<EventPayloads['compose:open'] | null>('GetPendingCompose'),
   updateAccountSignature: (id: string, html: string) => call<void>('UpdateAccountSignature', id, html),

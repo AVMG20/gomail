@@ -195,6 +195,19 @@ func (u desktopUI) SaveFile(defaultName string) (string, error) {
 	return d.PromptForSingleSelection()
 }
 
+// OpenFile shows a native open dialog (core.FileOpener).
+func (u desktopUI) OpenFile(title, filterName, pattern string) (string, error) {
+	m := u.m
+	if m.app == nil {
+		return "", errors.New("the app is not ready")
+	}
+	d := m.app.Dialog.OpenFile().SetTitle(title).CanChooseFiles(true).AddFilter(filterName, pattern).AddFilter("All files", "*")
+	if m.window != nil {
+		d = d.AttachToWindow(m.window)
+	}
+	return d.PromptForSingleSelection()
+}
+
 // Notify shows a desktop notification (errors are only logged).
 func (u desktopUI) Notify(title, body string, open models.NotificationOpen) {
 	m := u.m
@@ -776,6 +789,27 @@ func (m *MailService) SetOpenRouterKey(key string) error {
 		return err
 	}
 	return uiError(s.SetOpenRouterKey(key))
+}
+
+// ExportBackup asks where to save and writes a backup of settings,
+// accounts (without sign-ins) and local label decisions. includeSecrets
+// adds the OpenRouter key and OAuth app credentials.
+func (m *MailService) ExportBackup(includeSecrets bool) (models.BackupResult, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.BackupResult{}, err
+	}
+	return uiResult(s.ExportBackup(includeSecrets))
+}
+
+// ImportBackup asks for a backup file and merges it into this install.
+// Restored accounts need a sign-in (ReauthAccount).
+func (m *MailService) ImportBackup() (models.RestoreSummary, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.RestoreSummary{}, err
+	}
+	return uiResult(s.ImportBackup())
 }
 
 // GetDefaultPrompts returns the built-in grammar prompt and classifier
