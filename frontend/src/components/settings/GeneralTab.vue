@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
+import { localeUses12h } from '@/lib/calendar'
 import { shortcutLabel } from '@/lib/platform'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useSettingsStore } from '@/stores/settings'
@@ -9,6 +10,7 @@ import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 
 const settings = useSettingsStore()
+const localeClock = localeUses12h() ? '12-hour' : '24-hour'
 const intervals = [1, 5, 15, 30, 60]
 const mail = useMailStore()
 async function setConversation(v: boolean) {
@@ -30,6 +32,16 @@ async function setConversation(v: boolean) {
             <SelectItem value="immediate">Immediately</SelectItem>
             <SelectItem value="delay">After 2 seconds</SelectItem>
             <SelectItem value="manual">Manually</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow title="Time format" :description="`For mail and calendar times. Follows your language and region by default (${localeClock}).`">
+        <Select :model-value="settings.settings.calendarTimeFormat || 'auto'" @update:model-value="(v) => settings.update({ calendarTimeFormat: String(v) })">
+          <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="auto">Automatic ({{ localeClock }})</SelectItem>
+            <SelectItem value="12h">12-hour (1:30 PM)</SelectItem>
+            <SelectItem value="24h">24-hour (13:30)</SelectItem>
           </SelectContent>
         </Select>
       </SettingRow>

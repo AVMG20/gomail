@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import {
-  defaultCalendarId, editableCalendars, effectiveWeekStart, eventDate, eventToInput, isEventShown, scopeTargetId, setClockPreference, shiftTimes, type CalendarViewKind,
+  defaultCalendarId, editableCalendars, effectiveWeekStart, eventDate, eventToInput, isEventShown, scopeTargetId, shiftTimes, type CalendarViewKind,
 } from '@/lib/calendar'
 import type { AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope } from '@/lib/types'
 import { useAccountsStore } from './accounts'
@@ -48,7 +48,6 @@ export const useCalendarStore = defineStore('calendar', () => {
   const available = computed(() => hasMethod('ListCalendars'))
   const calendarMap = computed(() => new Map(calendars.value.map((c) => [c.id, c])))
   const weekStart = computed(() => effectiveWeekStart(settings.settings?.calendarWeekStart))
-  watch(() => settings.settings?.calendarTimeFormat, (f) => setClockPreference(f), { immediate: true })
   const showDeclined = computed(() => !!settings.settings?.calendarShowDeclined)
 
   const disabledAccounts = computed(() => new Set(accounts.accounts.filter((a) => a.calendarEnabled === false).map((a) => a.id)))

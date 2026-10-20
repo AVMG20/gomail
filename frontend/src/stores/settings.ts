@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, isWails, setWindowChrome } from '@/lib/api'
+import { setClockPreference } from '@/lib/calendar'
 import { applyTheme, themeFromSettings } from '@/lib/theme'
 import type { AIModel, AppInfo, DefaultPrompts, Label, Settings, UpdateInfo } from '@/lib/types'
 
@@ -136,6 +137,8 @@ export const useSettingsStore = defineStore('settings', () => {
       modelsLoading.value = false
     }
   }
+
+  watch(() => settings.value?.calendarTimeFormat, (f) => setClockPreference(f), { immediate: true })
 
   // Live-apply appearance settings and cache them for the pre-paint script.
   watch(

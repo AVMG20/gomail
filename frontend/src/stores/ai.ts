@@ -145,9 +145,15 @@ export const useAiStore = defineStore('ai', () => {
     if (!j.jobId.startsWith('local_')) await api.cancelClassify(j.jobId).catch(() => {})
   }
 
-  function onProgress(p: Partial<ClassifyJobProgress>) {
+  /** Events for another job while one is running, e.g. the per-batch "selection" events of a local job. */
+  function isForeign(p: Partial<ClassifyJobProgress>) {
     const cur = job.value
-    if (cur && p.jobId && cur.jobId !== p.jobId && !cur.finished) return
+    return !!(cur && p.jobId && cur.jobId !== p.jobId && !cur.finished)
+  }
+
+  function onProgress(p: Partial<ClassifyJobProgress>) {
+    if (isForeign(p)) return
+    const cur = job.value
     job.value = {
       jobId: p.jobId ?? cur?.jobId ?? 'job',
       done: p.done ?? cur?.done ?? 0,
@@ -162,6 +168,7 @@ export const useAiStore = defineStore('ai', () => {
   }
 
   function onFinished(p: Partial<ClassifyJobProgress>) {
+    if (isForeign(p)) return
     onProgress(p)
     if (job.value) job.value = { ...job.value, finished: true, cancelled: p.cancelled ?? job.value.cancelled, error: p.error }
     void mail.softRefresh()

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { DURATION_CHOICES, formatReminder, localeUses12h, localeWeekStart, REMINDER_CHOICES } from '@/lib/calendar'
+import { DURATION_CHOICES, formatReminder, localeWeekStart, REMINDER_CHOICES } from '@/lib/calendar'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { Button } from '@/components/ui/button'
 import { useAccountsStore } from '@/stores/accounts'
@@ -18,7 +18,6 @@ const s = computed(() => settings.settings!)
 const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US'
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const localeDay = DAY_NAMES[localeWeekStart(locale)]
-const localeClock = localeUses12h(locale) ? '12-hour' : '24-hour'
 const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} hour${m === 60 ? '' : 's'}`)
 </script>
 
@@ -33,16 +32,6 @@ const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floo
             <SelectItem value="monday">Monday</SelectItem>
             <SelectItem value="sunday">Sunday</SelectItem>
             <SelectItem value="saturday">Saturday</SelectItem>
-          </SelectContent>
-        </Select>
-      </SettingRow>
-      <SettingRow title="Time format" :description="`Follows your language and region by default (${localeClock}).`">
-        <Select :model-value="s.calendarTimeFormat || 'auto'" @update:model-value="(v) => settings.update({ calendarTimeFormat: String(v) })">
-          <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="auto">Automatic ({{ localeClock }})</SelectItem>
-            <SelectItem value="12h">12-hour (1:30 PM)</SelectItem>
-            <SelectItem value="24h">24-hour (13:30)</SelectItem>
           </SelectContent>
         </Select>
       </SettingRow>

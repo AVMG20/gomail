@@ -171,3 +171,21 @@ describe('compose: autosave vs send', () => {
     expect(compose.drafts[0]).toMatchObject({ id: 'q', queued: false, interrupted: true, minimized: true })
   })
 })
+
+describe('AI labeling of a selection', () => {
+  it('labels every selected message although each batch reports its own "selection" job', async () => {
+    const { useAiStore } = await import('@/stores/ai')
+    const ai = useAiStore()
+    vi.spyOn(api, 'listMessages').mockResolvedValue(page([]))
+    const classify = vi.spyOn(api, 'classifyMessages').mockImplementation(async (ids: string[]) => {
+      // The backend emits progress + finished for every batch under the shared "selection" id.
+      ai.onProgress({ jobId: 'selection', done: ids.length, total: ids.length })
+      ai.onFinished({ jobId: 'selection', done: ids.length, total: ids.length })
+      return ids.map((id) => ({ messageId: id, added: [], removed: [], scores: {}, cost: 0, skipped: false }))
+    })
+    const ids = Array.from({ length: 60 }, (_, i) => `m${i}`)
+    await ai.startBulk({ query: null, ids, title: '60 selected messages' }, false, false)
+    expect(classify.mock.calls.flatMap(([c]) => c)).toEqual(ids)
+    expect(ai.job).toMatchObject({ done: 60, total: 60, finished: true })
+  })
+})

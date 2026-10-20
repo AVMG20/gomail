@@ -1,5 +1,6 @@
 // Pure calendar helpers: week/locale rules, date ranges, time zones, recurrence
 // rules and recurrence-scope decisions. No Vue or DOM here (unit tested).
+import { ref } from 'vue'
 import type { Account, Calendar, CalendarEvent, EventInput, RecurrenceScope } from './types'
 
 export type CalendarViewKind = 'day' | 'week' | 'month' | 'agenda'
@@ -43,14 +44,14 @@ export function localeUses12h(locale = typeof navigator !== 'undefined' ? naviga
   }
 }
 
-// Settings → Calendar → Time format ("auto" = null: follow the locale).
-let clockPreference: boolean | null = null
+// Settings → General → Time format ("auto" = null: follow the locale). A ref, so computed dates re-render on change.
+const clockPreference = ref<boolean | null>(null)
 export function setClockPreference(format: string | undefined) {
-  clockPreference = format === '12h' ? true : format === '24h' ? false : null
+  clockPreference.value = format === '12h' ? true : format === '24h' ? false : null
 }
 /** 12-hour clock for displayed times: the user's choice, else the locale's. */
 export function uses12h(locale?: string): boolean {
-  return clockPreference ?? localeUses12h(locale)
+  return clockPreference.value ?? localeUses12h(locale)
 }
 
 // ------------------------------------------------------------------ dates (local time)

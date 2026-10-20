@@ -15,6 +15,7 @@ const anyUnread = computed(() => [...mail.selection].some((id) => mail.byId.get(
 const allStarred = computed(() => mail.selection.size > 0 && [...mail.selection].every((id) => mail.byId.get(id)?.starred))
 
 
+// run() clears the selection before fn runs, so toggles capture anyUnread/allStarred at click time.
 async function run(fn: (ids: string[]) => Promise<void> | void) {
   const ids = await mail.targetIds()
   mail.clearSelection()
@@ -40,11 +41,11 @@ async function labelWithAi() {
     <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="run(mail.archive)"><ArchiveIcon /></Button></Tip>
     <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="run(mail.trash)"><Trash2Icon /></Button></Tip>
     <Tip :label="anyUnread ? 'Mark as read' : 'Mark as unread'">
-      <Button variant="ghost" size="icon-sm" :aria-label="anyUnread ? 'Mark as read' : 'Mark as unread'" @click="run((ids) => mail.setRead(ids, anyUnread))">
+      <Button variant="ghost" size="icon-sm" :aria-label="anyUnread ? 'Mark as read' : 'Mark as unread'" @click="((read) => run((ids) => mail.setRead(ids, read)))(anyUnread)">
         <MailOpenIcon v-if="anyUnread" /><MailIcon v-else />
       </Button>
     </Tip>
-    <Tip :label="allStarred ? 'Unstar' : 'Star'"><Button variant="ghost" size="icon-sm" aria-label="Star" @click="run((ids) => mail.setStarred(ids, !allStarred))"><StarIcon /></Button></Tip>
+    <Tip :label="allStarred ? 'Unstar' : 'Star'"><Button variant="ghost" size="icon-sm" aria-label="Star" @click="((star) => run((ids) => mail.setStarred(ids, star)))(!allStarred)"><StarIcon /></Button></Tip>
     <DropdownMenu>
       <DropdownMenuTrigger as-child>
         <Tip label="Add label"><Button variant="ghost" size="icon-sm" aria-label="Add label"><TagIcon /></Button></Tip>

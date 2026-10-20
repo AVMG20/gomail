@@ -1,12 +1,21 @@
+import { uses12h } from './calendar'
 import type { Address } from './types'
 
-const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+const timeFmts = new Map<boolean, Intl.DateTimeFormat>()
+const longFmts = new Map<boolean, Intl.DateTimeFormat>()
+/** Formatters follow Settings → Time format; one cached instance per clock style. */
+function cached(cache: Map<boolean, Intl.DateTimeFormat>, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const h12 = uses12h()
+  let f = cache.get(h12)
+  if (!f) cache.set(h12, (f = new Intl.DateTimeFormat(undefined, { ...opts, hour12: h12 })))
+  return f
+}
 const weekdayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short' })
 const monthDayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
 const fullDateFmt = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-const longFmt = new Intl.DateTimeFormat(undefined, {
+const longOpts: Intl.DateTimeFormatOptions = {
   weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-})
+}
 
 function startOfDay(d: Date): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
@@ -18,7 +27,7 @@ export function listDate(iso: string): string {
   if (Number.isNaN(d.getTime())) return ''
   const now = new Date()
   const days = Math.round((startOfDay(now) - startOfDay(d)) / 86400000)
-  if (days <= 0) return timeFmt.format(d)
+  if (days <= 0) return cached(timeFmts, { hour: 'numeric', minute: '2-digit' }).format(d)
   if (days === 1) return 'Yesterday'
   if (days < 7) return weekdayFmt.format(d)
   if (d.getFullYear() === now.getFullYear()) return monthDayFmt.format(d)
@@ -27,7 +36,7 @@ export function listDate(iso: string): string {
 
 export function longDate(iso: string): string {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : longFmt.format(d)
+  return Number.isNaN(d.getTime()) ? '' : cached(longFmts, longOpts).format(d)
 }
 
 export function relativeTime(iso: string | null | undefined): string {
