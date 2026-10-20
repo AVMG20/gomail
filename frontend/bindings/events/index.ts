@@ -19,6 +19,11 @@ export const AccountsChanged = "accounts:changed";
 export const AiBudget = "ai:budget";
 
 /**
+ * Name of the custom event "calendar:changed".
+ */
+export const CalendarChanged = "calendar:changed";
+
+/**
  * Name of the custom event "classify:finished".
  */
 export const ClassifyFinished = "classify:finished";

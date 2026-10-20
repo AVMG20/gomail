@@ -14,6 +14,7 @@ declare module "@wailsio/runtime" {
         interface CustomEvents {
             "accounts:changed": models$0.AccountEvent;
             "ai:budget": models$0.AIBudgetEvent;
+            "calendar:changed": models$0.CalendarChanged;
             "classify:finished": models$0.ClassifyProgress;
             "classify:progress": models$0.ClassifyProgress;
             "compose:open": models$0.ComposeOpen;

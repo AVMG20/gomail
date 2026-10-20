@@ -8,8 +8,8 @@ export const isWindows = /Win/i.test(platformString)
 export const modLabel = isMac ? '⌘' : 'Ctrl'
 
 const KEY_LABELS: Record<string, string> = isMac
-  ? { mod: '⌘', shift: '⇧', alt: '⌥', enter: '↩', backspace: '⌫', delete: '⌦', esc: 'Esc', up: '↑', down: '↓' }
-  : { mod: 'Ctrl', shift: 'Shift', alt: 'Alt', enter: 'Enter', backspace: 'Backspace', delete: 'Del', esc: 'Esc', up: '↑', down: '↓' }
+  ? { mod: '⌘', shift: '⇧', alt: '⌥', enter: '↩', backspace: '⌫', delete: '⌦', esc: 'Esc', up: '↑', down: '↓', left: '←', right: '→' }
+  : { mod: 'Ctrl', shift: 'Shift', alt: 'Alt', enter: 'Enter', backspace: 'Backspace', delete: 'Del', esc: 'Esc', up: '↑', down: '↓', left: '←', right: '→' }
 
 /** Split a shortcut like "mod+shift+k" into display key caps. */
 export function shortcutKeys(combo: string): string[] {

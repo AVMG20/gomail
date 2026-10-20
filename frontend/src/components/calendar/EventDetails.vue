@@ -1,0 +1,130 @@
+<script setup lang="ts">
+// Event details card: time, calendar, location, Join, guests with responses,
+// RSVP buttons, Edit / Delete / Email guests.
+import { computed } from 'vue'
+import {
+  CalendarIcon, CheckIcon, CircleHelpIcon, ClockIcon, MailIcon, MapPinIcon, PencilIcon, RepeatIcon, Trash2Icon, UsersIcon, VideoIcon, XIcon,
+} from '@lucide/vue'
+import { Button } from '@/components/ui/button'
+import FloatingCard, { type AnchorRect } from '@/components/common/FloatingCard.vue'
+import { api } from '@/lib/api'
+import { describeRepeat, formatEventWhen, needsScopeChoice, parseRRule } from '@/lib/calendar'
+import { isSafeExternalUrl } from '@/lib/format'
+import type { AttendeeResponse, CalendarEvent } from '@/lib/types'
+import { useAccountsStore } from '@/stores/accounts'
+import { useCalendarStore } from '@/stores/calendar'
+import { useComposeStore } from '@/stores/compose'
+import { openEditor } from './editorState'
+import { askScope } from './scopePrompt'
+
+const props = defineProps<{ anchor: AnchorRect; event: CalendarEvent }>()
+const emit = defineEmits<{ close: [] }>()
+const cal = useCalendarStore()
+const accounts = useAccountsStore()
+const compose = useComposeStore()
+
+// Live copy (RSVP / edits update the store while the card is open).
+const ev = computed(() => cal.events.find((e) => e.id === props.event.id) ?? props.event)
+const calendar = computed(() => cal.calendarMap.get(ev.value.calendarId))
+const account = computed(() => accounts.accountMap.get(ev.value.accountId))
+const canEdit = computed(() => !!calendar.value?.canEdit)
+const joinUrl = computed(() => (ev.value.meetingUrl && isSafeExternalUrl(ev.value.meetingUrl) ? ev.value.meetingUrl : ''))
+const repeat = computed(() => (ev.value.recurrence ? describeRepeat(parseRRule(ev.value.recurrence)) : ev.value.isRecurring ? 'Repeats' : ''))
+const myEmail = computed(() => account.value?.email.toLowerCase() ?? '')
+const guests = computed(() => {
+  const list = [...ev.value.attendees]
+  const org = ev.value.organizer
+  if (org?.email && !list.some((a) => a.email.toLowerCase() === org.email.toLowerCase())) list.unshift({ ...org, response: 'accepted' })
+  return list
+})
+const canRespond = computed(() => !ev.value.isOrganizer && !!ev.value.myResponse)
+
+const RESPONSES: { value: AttendeeResponse; label: string }[] = [
+  { value: 'accepted', label: 'Yes' }, { value: 'tentative', label: 'Maybe' }, { value: 'declined', label: 'No' },
+]
+
+function responseIcon(r: AttendeeResponse) {
+  return r === 'accepted' ? CheckIcon : r === 'declined' ? XIcon : r === 'tentative' ? CircleHelpIcon : ClockIcon
+}
+function responseLabel(r: AttendeeResponse) {
+  return r === 'accepted' ? 'Going' : r === 'declined' ? 'Not going' : r === 'tentative' ? 'Maybe' : 'Awaiting response'
+}
+
+function edit() {
+  openEditor({ event: ev.value })
+  emit('close')
+}
+
+async function del() {
+  let scope: 'this' | 'series' = 'this'
+  if (needsScopeChoice(ev.value)) {
+    const s = await askScope('delete', ev.value.title)
+    if (!s) return
+    scope = s
+  }
+  emit('close')
+  await cal.remove(ev.value, scope)
+}
+
+function emailGuests() {
+  const to = guests.value.filter((g) => g.email && g.email.toLowerCase() !== myEmail.value).map((g) => ({ name: g.name, email: g.email }))
+  compose.composeWith({ to, subject: ev.value.title, body: `${formatEventWhen(ev.value)}${ev.value.location ? `\n${ev.value.location}` : ''}\n\n` })
+  emit('close')
+}
+</script>
+
+<template>
+  <FloatingCard :anchor="anchor" :width="360" :label="ev.title || 'Event'" @close="emit('close')">
+    <div class="p-4">
+      <div class="flex items-start gap-3">
+        <span class="mt-1.5 size-3 shrink-0 rounded-[4px]" :style="{ background: calendar?.color ?? 'var(--muted-foreground)' }" />
+        <div class="min-w-0 flex-1">
+          <h3 :class="['text-base leading-snug font-semibold', ev.myResponse === 'declined' && 'text-muted-foreground line-through']">{{ ev.title || 'Untitled event' }}</h3>
+          <p class="text-muted-foreground mt-0.5 text-[13px]">{{ formatEventWhen(ev) }}</p>
+          <p v-if="repeat" class="text-muted-foreground mt-0.5 flex items-center gap-1.5 text-xs"><RepeatIcon class="size-3" /> {{ repeat }}</p>
+        </div>
+        <div class="-mt-1 -mr-1 flex shrink-0">
+          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Edit event" autofocus @click="edit"><PencilIcon /></Button>
+          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Delete event" class="hover:text-destructive" @click="del"><Trash2Icon /></Button>
+          <Button variant="ghost" size="icon-sm" aria-label="Close" @click="emit('close')"><XIcon /></Button>
+        </div>
+      </div>
+
+      <div class="mt-3 space-y-2.5 text-[13px]">
+        <Button v-if="joinUrl" size="sm" class="w-full" @click="api.openExternal(joinUrl)"><VideoIcon /> Join meeting</Button>
+        <p v-if="ev.location" class="flex items-start gap-2.5"><MapPinIcon class="text-muted-foreground mt-0.5 size-3.5 shrink-0" /> <span class="selectable">{{ ev.location }}</span></p>
+        <p class="flex items-center gap-2.5"><CalendarIcon class="text-muted-foreground size-3.5 shrink-0" /> <span class="truncate">{{ calendar?.name }}</span><span class="text-muted-foreground truncate text-xs">{{ account?.email }}</span></p>
+
+        <div v-if="guests.length" class="flex items-start gap-2.5">
+          <UsersIcon class="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
+          <ul class="min-w-0 flex-1 space-y-1">
+            <li class="text-muted-foreground text-xs">{{ guests.length }} guest{{ guests.length === 1 ? '' : 's' }}</li>
+            <li v-for="g in guests.slice(0, 8)" :key="g.email" class="flex items-center gap-2">
+              <component :is="responseIcon(g.response)" :class="['size-3.5 shrink-0', g.response === 'accepted' ? 'text-emerald-600 dark:text-emerald-400' : g.response === 'declined' ? 'text-destructive' : 'text-muted-foreground']" :aria-label="responseLabel(g.response)" />
+              <span class="min-w-0 flex-1 truncate">{{ g.name || g.email }}<span v-if="g.email === ev.organizer?.email" class="text-muted-foreground"> · organizer</span></span>
+            </li>
+            <li v-if="guests.length > 8" class="text-muted-foreground text-xs">+{{ guests.length - 8 }} more</li>
+          </ul>
+        </div>
+
+        <p v-if="ev.description" class="text-muted-foreground selectable line-clamp-4 text-xs leading-relaxed whitespace-pre-line">{{ ev.description }}</p>
+        <p v-if="!canEdit" class="text-muted-foreground text-xs">Read-only calendar</p>
+      </div>
+
+      <div v-if="canRespond" class="border-border mt-3 flex items-center gap-1.5 border-t pt-3">
+        <span class="text-muted-foreground mr-auto text-xs">Going?</span>
+        <Button
+          v-for="r in RESPONSES"
+          :key="r.value"
+          size="xs"
+          :variant="ev.myResponse === r.value ? 'default' : 'outline'"
+          :aria-pressed="ev.myResponse === r.value"
+          @click="cal.respond(ev, r.value)"
+        >{{ r.label }}</Button>
+      </div>
+      <div v-if="guests.some((g) => g.email && g.email.toLowerCase() !== myEmail)" class="mt-2 flex justify-end">
+        <Button variant="ghost" size="xs" class="text-muted-foreground" @click="emailGuests"><MailIcon /> Email guests</Button>
+      </div>
+    </div>
+  </FloatingCard>
+</template>

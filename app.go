@@ -873,3 +873,105 @@ func uiError(err error) error {
 
 // uiResult applies uiError to a (value, error) result.
 func uiResult[T any](v T, err error) (T, error) { return v, uiError(err) }
+
+// ---- Calendar ----
+
+// ListCalendars lists the calendars of accounts with calendar access.
+func (m *MailService) ListCalendars() ([]models.Calendar, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return uiResult(s.ListCalendars())
+}
+
+// SetCalendarVisible shows or hides one calendar in the unified view.
+func (m *MailService) SetCalendarVisible(calendarID string, visible bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetCalendarVisible(calendarID, visible))
+}
+
+// SetAccountCalendarEnabled turns an account's calendars on or off.
+func (m *MailService) SetAccountCalendarEnabled(accountID string, enabled bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetAccountCalendarEnabled(accountID, enabled))
+}
+
+// EnableCalendar signs in again to grant calendar access (mail is kept).
+func (m *MailService) EnableCalendar(accountID string) (models.Account, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.Account{}, err
+	}
+	return uiResult(s.EnableCalendar(accountID))
+}
+
+// ListEvents returns events overlapping [start, end) (max 400 days) of the
+// visible calendars of enabled accounts.
+func (m *MailService) ListEvents(start, end time.Time) ([]models.CalendarEvent, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return uiResult(s.ListEvents(start, end))
+}
+
+// GetEvent returns one event.
+func (m *MailService) GetEvent(id string) (models.CalendarEvent, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	return uiResult(s.GetEvent(id))
+}
+
+// CreateEvent creates an event (invitations are sent to attendees).
+func (m *MailService) CreateEvent(in models.EventInput) (models.CalendarEvent, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	return uiResult(s.CreateEvent(in))
+}
+
+// UpdateEvent changes an event; scope is "this" or "series".
+func (m *MailService) UpdateEvent(id string, in models.EventInput, scope string) (models.CalendarEvent, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	return uiResult(s.UpdateEvent(id, in, scope))
+}
+
+// DeleteEvent deletes an event; scope is "this" or "series".
+func (m *MailService) DeleteEvent(id, scope string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.DeleteEvent(id, scope))
+}
+
+// RespondToEvent answers an invitation: "accepted" | "tentative" | "declined".
+func (m *MailService) RespondToEvent(id, response string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.RespondToEvent(id, response))
+}
+
+// SyncCalendars syncs the calendars of an account ("" = all) now.
+func (m *MailService) SyncCalendars(accountID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SyncCalendars(accountID))
+}

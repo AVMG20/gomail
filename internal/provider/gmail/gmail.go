@@ -520,6 +520,18 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 		}
 		disp := strings.ToLower(p.header("Content-Disposition"))
 		cid := strings.Trim(strings.TrimSpace(p.header("Content-ID")), "<>")
+		if strings.EqualFold(p.MimeType, "text/calendar") && b.Calendar == "" && p.Body.Size < 1<<20 {
+			var data []byte
+			if p.Body.Data != "" {
+				data, _ = decodeB64URL(p.Body.Data)
+			} else if p.Body.AttachmentID != "" {
+				data, _ = c.attachmentData(ctx, remoteID, p.Body.AttachmentID)
+			}
+			b.Calendar = mailmime.DecodeCharset(data, charsetOf(p.header("Content-Type")))
+			if p.Filename == "" {
+				return // the invitation itself, not a file the user attached
+			}
+		}
 		isBody := p.Filename == "" && !strings.HasPrefix(disp, "attachment") && (p.MimeType == "text/html" || p.MimeType == "text/plain")
 		if isBody {
 			data, _ := decodeB64URL(p.Body.Data)

@@ -62,13 +62,17 @@ export function useShortcuts() {
     }
     if (mod && e.shiftKey && e.code === 'Digit0') {
       e.preventDefault()
+      ui.mainView = 'mail'
       mail.switchAccount('')
       return
     }
     if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(key)) {
       e.preventDefault()
       const acc = accounts.accounts[Number(key) - 1]
-      if (acc) mail.switchAccount(acc.id)
+      if (acc) {
+        ui.mainView = 'mail'
+        mail.switchAccount(acc.id)
+      }
       return
     }
 
@@ -92,13 +96,22 @@ export function useShortcuts() {
     if (gPending) {
       gPending = false
       if (gTimer) clearTimeout(gTimer)
+      if (key === 'c' || key === 'm') {
+        e.preventDefault()
+        ui.mainView = key === 'c' ? 'calendar' : 'mail'
+        return
+      }
       const map: Record<string, string> = { i: 'inbox', s: 'starred', t: 'sent', d: 'drafts', a: 'archive' }
       if (map[key]) {
+        ui.mainView = 'mail'
         e.preventDefault()
         mail.goToKind(map[key])
       }
       return
     }
+
+    // The calendar handles its own single keys (t, d, w, m, a, n, arrows); only g…, c and ? stay global.
+    if (ui.mainView === 'calendar' && key !== 'g' && key !== '?' && key !== 'c') return
 
     switch (key) {
       case 'g':

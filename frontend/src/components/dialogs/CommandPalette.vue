@@ -4,7 +4,7 @@ import DOMPurify from 'dompurify'
 import {
   ArchiveIcon, CheckIcon, ClockIcon, CornerUpLeftIcon, KeyboardIcon, LayersIcon, MoonIcon, PencilIcon, PlusIcon,
   RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, TagIcon, LoaderIcon, ForwardIcon, CornerDownLeftIcon,
-  MailCheckIcon, MailIcon, MessagesSquareIcon, PanelLeftIcon, PanelRightIcon, ReplyAllIcon, StarIcon, Trash2Icon,
+  CalendarDaysIcon, CalendarPlusIcon, MailCheckIcon, MailIcon, MessagesSquareIcon, PanelLeftIcon, PanelRightIcon, ReplyAllIcon, StarIcon, Trash2Icon,
 } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import CmdRoot from '@/components/common/cmd/CmdRoot.vue'
@@ -16,7 +16,7 @@ import KeyCaps from '@/components/common/KeyCaps.vue'
 import LabelPill from '@/components/common/LabelPill.vue'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { FOLDER_ICONS } from '@/components/mail/folderIcons'
-import { api } from '@/lib/api'
+import { api, hasMethod } from '@/lib/api'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import { applyCompletion, operatorCompletions, type Completion } from '@/lib/searchQuery'
 import { displayName, listDate } from '@/lib/format'
@@ -153,6 +153,14 @@ const actions = computed<Action[]>(() => {
     { id: 'shortcuts', title: 'Keyboard shortcuts', icon: KeyboardIcon, shortcut: '?', run: () => (ui.shortcutsOpen = true) },
     { id: 'add', title: 'Add account', icon: PlusIcon, run: () => (ui.addAccountOpen = true) },
     { id: 'welcome', title: 'Show welcome guide', icon: SparklesIcon, run: () => ui.welcomeTick++ },
+    ...(hasMethod('ListCalendars')
+      ? [
+          ui.mainView === 'calendar'
+            ? { id: 'to-mail', title: 'Go to mail', icon: MailIcon, shortcut: 'g m', run: () => (ui.mainView = 'mail') }
+            : { id: 'to-cal', title: 'Open calendar', icon: CalendarDaysIcon, shortcut: 'g c', run: () => (ui.mainView = 'calendar') },
+          { id: 'new-event', title: 'New event', icon: CalendarPlusIcon, shortcut: ui.mainView === 'calendar' ? 'n' : undefined, run: () => { ui.mainView = 'calendar'; ui.newEventPending = true } },
+        ]
+      : []),
     { id: 'read-all', title: `Mark all as read in ${mail.mailboxName}`, icon: MailCheckIcon, run: () => folderAction('markAllRead') },
     { id: 'pane', title: settings.settings?.readingPane === 'off' ? 'Show reading pane' : 'Hide reading pane', icon: PanelRightIcon, run: () => settings.update({ readingPane: settings.settings?.readingPane === 'off' ? 'right' : 'off' }) },
     { id: 'conv', title: settings.settings?.conversationView === false ? 'Group by conversation' : 'Show individual messages', icon: MessagesSquareIcon, run: () => settings.update({ conversationView: settings.settings?.conversationView === false }) },

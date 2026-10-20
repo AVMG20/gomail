@@ -283,6 +283,61 @@ CREATE INDEX messages_account_starred ON messages(account_id, starred, unread);
 ALTER TABLE messages ADD COLUMN ai_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN ai_scores TEXT NOT NULL DEFAULT '';
 `,
+	// 5: calendars
+	`
+ALTER TABLE accounts ADD COLUMN calendar_consent INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN calendar_enabled INTEGER NOT NULL DEFAULT 1;
+
+CREATE TABLE calendars (
+	id           TEXT PRIMARY KEY,
+	account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+	remote_id    TEXT NOT NULL,
+	name         TEXT NOT NULL DEFAULT '',
+	color        TEXT NOT NULL DEFAULT '',
+	is_primary   INTEGER NOT NULL DEFAULT 0,
+	can_edit     INTEGER NOT NULL DEFAULT 0,
+	visible      INTEGER NOT NULL DEFAULT 1,
+	time_zone    TEXT NOT NULL DEFAULT '',
+	reminders    TEXT NOT NULL DEFAULT '', -- JSON default reminder minutes
+	sync_state   TEXT NOT NULL DEFAULT '', -- provider sync token / delta link
+	window_start INTEGER NOT NULL DEFAULT 0, -- unix ms of the synced range
+	window_end   INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(account_id, remote_id)
+);
+
+CREATE TABLE events (
+	id             TEXT PRIMARY KEY,
+	calendar_id    TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+	account_id     TEXT NOT NULL,
+	remote_id      TEXT NOT NULL,
+	series_remote  TEXT NOT NULL DEFAULT '',
+	ical_uid       TEXT NOT NULL DEFAULT '',
+	title          TEXT NOT NULL DEFAULT '',
+	start_ms       INTEGER NOT NULL,
+	end_ms         INTEGER NOT NULL,
+	all_day        INTEGER NOT NULL DEFAULT 0,
+	time_zone      TEXT NOT NULL DEFAULT '',
+	location       TEXT NOT NULL DEFAULT '',
+	description    TEXT NOT NULL DEFAULT '',
+	attendees      TEXT NOT NULL DEFAULT '', -- JSON []Attendee
+	organizer      TEXT NOT NULL DEFAULT '', -- JSON Address
+	is_organizer   INTEGER NOT NULL DEFAULT 0,
+	my_response    TEXT NOT NULL DEFAULT '',
+	meeting_url    TEXT NOT NULL DEFAULT '',
+	is_recurring   INTEGER NOT NULL DEFAULT 0,
+	recurrence     TEXT NOT NULL DEFAULT '',
+	rrule          TEXT NOT NULL DEFAULT '',
+	status         TEXT NOT NULL DEFAULT '',
+	reminders      TEXT NOT NULL DEFAULT '', -- JSON []int
+	can_edit       INTEGER NOT NULL DEFAULT 0,
+	updated_ms     INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(calendar_id, remote_id)
+);
+CREATE INDEX events_calendar_start ON events(calendar_id, start_ms);
+CREATE INDEX events_ical_uid ON events(ical_uid) WHERE ical_uid != '';
+
+ALTER TABLE messages ADD COLUMN invite TEXT NOT NULL DEFAULT ''; -- JSON Invite of a text/calendar part
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

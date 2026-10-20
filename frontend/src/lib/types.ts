@@ -34,6 +34,91 @@ export interface Account {
   needsReauth?: boolean
   /** Per-account HTML signature (backend pass 3). */
   signature?: string
+  /** The mailbox's calendars are shown (Calendar sidebar switch). */
+  calendarEnabled?: boolean
+  /** OAuth grant includes calendar scopes; false = show "Connect calendar" (EnableCalendar). */
+  calendarConsent?: boolean
+}
+
+// ---- calendar ----
+
+export interface Calendar {
+  id: string
+  accountId: string
+  name: string
+  color: string
+  primary: boolean
+  canEdit: boolean
+  visible: boolean
+}
+
+export type AttendeeResponse = 'accepted' | 'tentative' | 'declined' | 'needsAction' | string
+export type RecurrenceScope = 'this' | 'series'
+
+export interface Attendee {
+  name: string
+  email: string
+  response: AttendeeResponse
+}
+
+export interface CalendarEvent {
+  id: string
+  calendarId: string
+  accountId: string
+  title: string
+  /** RFC 3339 for timed events; "YYYY-MM-DD" for all-day events (end exclusive). */
+  start: string
+  end: string
+  allDay: boolean
+  /** IANA zone the event was created in ("" = floating/local). */
+  timeZone: string
+  location: string
+  description: string
+  attendees: Attendee[]
+  organizer: Address
+  isOrganizer: boolean
+  /** Your own response when you're an attendee ("" when you're the organizer). */
+  myResponse: AttendeeResponse
+  meetingUrl: string
+  isRecurring: boolean
+  /** Id of the series master for occurrences of a recurring event. */
+  seriesId: string
+  /** RRULE without the "RRULE:" prefix, e.g. "FREQ=WEEKLY;UNTIL=20261231". */
+  recurrence: string
+  status: 'confirmed' | 'tentative' | 'cancelled' | string
+  /** Minutes before the start. */
+  reminders: number[]
+}
+
+export interface EventInput {
+  calendarId: string
+  title: string
+  start: string
+  end: string
+  allDay: boolean
+  timeZone: string
+  location: string
+  description: string
+  attendees: Attendee[]
+  meetingUrl: string
+  recurrence: string
+  reminders: number[]
+}
+
+/** A meeting invitation parsed from the mail's text/calendar part. */
+export interface EventInvite {
+  /** Matching calendar event, when it is already on a synced calendar. */
+  eventId?: string
+  uid: string
+  title: string
+  start: string
+  end: string
+  allDay: boolean
+  location: string
+  organizer: Address
+  /** iTIP method: REQUEST, CANCEL, REPLY… */
+  method: string
+  myResponse: AttendeeResponse
 }
 
 export interface Contact {
@@ -140,6 +225,8 @@ export interface Message extends MessageSummary {
   remoteContentBlocked?: boolean
   unsubscribe?: UnsubscribeInfo | null
   isDraft?: boolean
+  /** Meeting invitation (ICS) carried by this mail. */
+  invite?: EventInvite | null
 }
 
 export interface ListQuery {
@@ -255,6 +342,14 @@ export interface Settings {
   checkUpdates?: boolean
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
+  /** Calendar: first day of the week (-1 = from the locale, 0 = Sunday, 1 = Monday, 6 = Saturday). */
+  calendarWeekStart?: number
+  calendarDefaultView?: 'week' | 'day' | 'month' | 'agenda'
+  /** Minutes. */
+  calendarDefaultDuration?: number
+  calendarShowDeclined?: boolean
+  /** Minutes before the start (-1 = none). */
+  calendarDefaultReminder?: number
   primaryColor: string
   /** rem */
   radius: number
@@ -389,6 +484,7 @@ export const Events = {
   NotificationOpen: 'notification:open',
   AiBudget: 'ai:budget',
   DatabaseStatus: 'database:status',
+  CalendarChanged: 'calendar:changed',
   ComposeOpen: 'compose:open',
   UpdateAvailable: 'update:available',
 } as const
@@ -407,6 +503,8 @@ export interface EventPayloads {
   'ai:budget': { paused: boolean; todayUsd?: number; budgetUsd?: number }
   /** Database health: integrity problems / repair. */
   'database:status': { ok: boolean; message: string }
+  /** Calendars or events changed (sync, edits elsewhere). */
+  'calendar:changed': { accountId?: string } | undefined
   /** mailto: handler: open compose prefilled (next backend pass). */
   'compose:open': { to?: string | Address[] | null; cc?: string | Address[] | null; bcc?: string | Address[] | null; subject?: string; body?: string }
   /** A newer release exists (next backend pass). */

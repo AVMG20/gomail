@@ -125,10 +125,13 @@ func Recover(path string) error {
 			}
 			rows.Close()
 		}
-		for _, a := range accounts {
+		for i, a := range accounts {
 			var sig string
 			_ = old.QueryRow(`SELECT signature FROM accounts WHERE id = ?`, a.ID).Scan(&sig)
 			signatures = append(signatures, sig)
+			var consent, enabled int = 0, 1
+			_ = old.QueryRow(`SELECT calendar_consent, calendar_enabled FROM accounts WHERE id = ?`, a.ID).Scan(&consent, &enabled)
+			accounts[i].CalendarConsent, accounts[i].CalendarEnabled = consent == 1, enabled == 1
 		}
 		if rows, err := old.Query(`SELECT key, value FROM settings`); err == nil {
 			for rows.Next() {

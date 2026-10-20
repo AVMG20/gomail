@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { PlusIcon, SettingsIcon, LayersIcon } from '@lucide/vue'
+import { CalendarDaysIcon, PlusIcon, SettingsIcon, LayersIcon } from '@lucide/vue'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import Tip from '@/components/common/Tip.vue'
-import { isWails } from '@/lib/api'
+import { hasMethod, isWails } from '@/lib/api'
 import { useAccountsStore } from '@/stores/accounts'
 import { useMailStore } from '@/stores/mail'
 import { useUiStore } from '@/stores/ui'
@@ -13,7 +13,14 @@ const mail = useMailStore()
 const ui = useUiStore()
 const mockMode = !isWails()
 
-const active = computed(() => mail.mailbox.accountId)
+// In the calendar no mailbox is "active": the calendar spans all of them.
+const active = computed(() => (ui.mainView === 'calendar' ? null : mail.mailbox.accountId))
+const hasCalendar = computed(() => hasMethod('ListCalendars'))
+
+function openMailbox(accountId: string) {
+  ui.mainView = 'mail'
+  mail.switchAccount(accountId)
+}
 const totalUnread = computed(() => accounts.unifiedUnread('inbox'))
 
 function badge(n: number) {
@@ -28,7 +35,7 @@ function badge(n: number) {
         type="button"
         class="group relative flex size-11 items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
         :aria-label="totalUnread ? `All inboxes, ${totalUnread} unread` : 'All inboxes'"
-        @click="mail.switchAccount('')"
+        @click="openMailbox('')"
       >
         <span
           class="absolute top-1/2 -left-1.5 w-1 -translate-y-1/2 rounded-r-full bg-foreground transition-all"
@@ -50,7 +57,7 @@ function badge(n: number) {
         type="button"
         class="group relative flex size-11 items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :aria-current="active === acc.id ? 'page' : undefined"
-        @click="mail.switchAccount(acc.id)"
+        @click="openMailbox(acc.id)"
       >
         <span
           class="absolute top-1/2 -left-1.5 w-1 -translate-y-1/2 rounded-r-full transition-all"
@@ -81,6 +88,18 @@ function badge(n: number) {
     <div class="flex-1" />
     <Tip v-if="mockMode" label="Mock data: running in a browser without the Go backend" side="right">
       <span class="mb-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-amber-800 uppercase select-none dark:text-amber-400" role="status">Mock</span>
+    </Tip>
+    <Tip v-if="hasCalendar" :label="ui.mainView === 'calendar' ? 'Back to mail' : 'Calendar'" :shortcut="ui.mainView === 'calendar' ? 'g m' : 'g c'" side="right">
+      <button
+        type="button"
+        :class="['relative mb-0.5 flex size-9 items-center justify-center rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring', ui.mainView === 'calendar' ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-sidebar-accent']"
+        :aria-label="ui.mainView === 'calendar' ? 'Back to mail' : 'Calendar'"
+        :aria-pressed="ui.mainView === 'calendar'"
+        @click="ui.mainView = ui.mainView === 'calendar' ? 'mail' : 'calendar'"
+      >
+        <span v-if="ui.mainView === 'calendar'" class="bg-foreground absolute top-1/2 -left-[11px] h-6 w-1 -translate-y-1/2 rounded-r-full" />
+        <CalendarDaysIcon class="size-[18px]" />
+      </button>
     </Tip>
     <Tip label="Settings" shortcut="mod+," side="right">
       <button

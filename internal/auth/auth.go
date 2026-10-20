@@ -47,11 +47,39 @@ const (
 
 // Scopes requested per provider.
 var (
-	GoogleScopes    = []string{"openid", "email", "profile", "https://www.googleapis.com/auth/gmail.modify"}
+	GoogleScopes    = []string{"openid", "email", "profile", "https://www.googleapis.com/auth/gmail.modify", GoogleCalendarScope}
 	MicrosoftScopes = []string{"offline_access", "openid", "email", "profile",
 		"https://graph.microsoft.com/Mail.ReadWrite", "https://graph.microsoft.com/Mail.Send",
-		"https://graph.microsoft.com/MailboxSettings.Read", "https://graph.microsoft.com/User.Read"}
+		"https://graph.microsoft.com/MailboxSettings.Read", "https://graph.microsoft.com/User.Read", MicrosoftCalendarScope}
 )
+
+// Calendar scopes (Google's is "sensitive", not "restricted").
+const (
+	GoogleCalendarScope    = "https://www.googleapis.com/auth/calendar"
+	MicrosoftCalendarScope = "https://graph.microsoft.com/Calendars.ReadWrite"
+)
+
+// CalendarGranted reports whether a token response includes calendar
+// access. known is false when the provider didn't list granted scopes
+// (gomail requested them, so access is assumed until an API call says no).
+func CalendarGranted(provider string, tok *oauth2.Token) (granted, known bool) {
+	if tok == nil {
+		return false, false
+	}
+	scope, _ := tok.Extra("scope").(string)
+	if scope == "" {
+		return true, false
+	}
+	for _, sc := range strings.Fields(scope) {
+		switch {
+		case provider == models.ProviderGmail && (sc == GoogleCalendarScope || sc == "https://www.googleapis.com/auth/calendar.events"):
+			return true, true
+		case provider == models.ProviderOutlook && strings.EqualFold(strings.TrimPrefix(sc, "https://graph.microsoft.com/"), "Calendars.ReadWrite"):
+			return true, true
+		}
+	}
+	return false, true
+}
 
 // Credentials are the OAuth client identifiers in effect.
 type Credentials struct {
@@ -183,7 +211,10 @@ func Login(ctx context.Context, provider string, c Credentials, openURL func(str
 	verifier := oauth2.GenerateVerifier()
 	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier)}
 	if provider == models.ProviderGmail {
-		opts = append(opts, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+		// include_granted_scopes: incremental authorization keeps the scopes
+		// granted earlier (e.g. Gmail) when adding the calendar.
+		opts = append(opts, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"),
+			oauth2.SetAuthURLParam("include_granted_scopes", "true"))
 	} else {
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", "select_account"))
 	}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/calendar"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/mailmime"
 	"github.com/AVMG20/gomail/internal/models"
@@ -31,8 +32,10 @@ const (
 // Accounts returns the demo accounts.
 func Accounts() []models.Account {
 	return []models.Account{
-		{ID: GmailAccountID, Provider: models.ProviderGmail, Email: "alex.demo@gmail.com", DisplayName: "Alex (Gmail)", Color: "#ea4335"},
-		{ID: OutlookAccountID, Provider: models.ProviderOutlook, Email: "alex.demo@outlook.com", DisplayName: "Alex (Outlook)", Color: "#0078d4"},
+		{ID: GmailAccountID, Provider: models.ProviderGmail, Email: "alex.demo@gmail.com", DisplayName: "Alex (Gmail)", Color: "#ea4335",
+			CalendarConsent: true, CalendarEnabled: true},
+		{ID: OutlookAccountID, Provider: models.ProviderOutlook, Email: "alex.demo@outlook.com", DisplayName: "Alex (Outlook)", Color: "#0078d4",
+			CalendarConsent: true, CalendarEnabled: true},
 	}
 }
 
@@ -243,6 +246,14 @@ func (p *Provider) seed(now time.Time) {
 		t.fromName, t.fromEmail = p.me.Name, p.me.Email
 		p.add(t, models.Address{}, now.Add(-5*time.Hour), p.folderSet(models.FolderDrafts), false, false, nil)
 	}
+	// A meeting invitation (text/calendar part) for the QBR demo event.
+	start, end := qbrTimes(now, p.kind)
+	ceo := models.Address{Name: "Ceo", Email: "ceo@northwind.io"}
+	ics := calendar.BuildInvite(qbrUID, "Quarterly business review", "Board room", ceo, start, end)
+	invite := template{fromName: ceo.Name, fromEmail: ceo.Email, subject: "Invitation: Quarterly business review",
+		paragraphs: []string{"You have been invited to the quarterly business review.", "Please let me know if you can make it."},
+		labels:     []string{"Work"}, attachments: []tmplAttachment{{"invite.ics", "text/calendar", func() []byte { return []byte(ics) }}}}
+	p.add(invite, p.me, now.Add(-2*time.Hour), p.folderSet(models.FolderInbox), true, false, nil)
 	trash := template{fromName: "Daily Deals", fromEmail: "deals@shop.example", subject: "Last chance: 70% off everything", paragraphs: []string{"Ends tonight!"}, newsletter: true}
 	p.add(trash, p.me, now.Add(-9*24*time.Hour), p.folderSet(models.FolderTrash), false, false, nil)
 	p.version = 1
@@ -474,6 +485,9 @@ func (p *Provider) Body(ctx context.Context, remoteID string) (*mail.Body, error
 	}
 	b := &mail.Body{HTML: parsed.HTML, Text: parsed.Text, MessageID: parsed.MessageID, InReplyTo: parsed.InReplyTo, References: parsed.References}
 	for _, a := range parsed.Attachments {
+		if strings.HasPrefix(strings.ToLower(a.ContentType), "text/calendar") && b.Calendar == "" {
+			b.Calendar = string(a.Data)
+		}
 		att := mail.Attachment{Attachment: models.Attachment{ID: a.ID, Filename: a.Filename, MimeType: a.ContentType, Size: int64(len(a.Data)), Inline: a.Inline, ContentID: a.ContentID}}
 		if a.ContentID != "" {
 			att.Data = a.Data

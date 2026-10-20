@@ -2,10 +2,11 @@
 // (`npm run dev` without Wails). It mirrors the bound App methods closely
 // enough that every screen can be demoed and tested.
 import { parseSearch, type ParsedSearch } from '../searchQuery'
+import { MockCalendar } from './calendar'
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
-  SearchQuery, SearchResult, Settings,
+  SearchQuery, SearchResult, Settings, Calendar, CalendarEvent, EventInput, RecurrenceScope, AttendeeResponse,
 } from '../types'
 import {
   DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, PROVIDER_LABELS, SEED_ACCOUNTS, SEED_SETTINGS,
@@ -64,6 +65,7 @@ class MockBackend {
   private changedTimer: ReturnType<typeof setTimeout> | null = null
   private incomingIdx = 0
   private jobSeq = 0
+  private cal = new MockCalendar((accountId) => this.emit('calendar:changed', { accountId }))
 
   constructor() {
     for (const a of this.accounts) this.folders.set(a.id, foldersFor(a.id, a.provider))
@@ -264,7 +266,7 @@ class MockBackend {
   async GetAccounts(): Promise<Account[]> {
     await latency()
     return clone(this.accounts.map((a) => ({
-      ...a,
+      ...this.cal.decorateAccount(a),
       unreadCount: this.inboxUnread(a.id),
     })))
   }
@@ -546,7 +548,75 @@ class MockBackend {
     await latency(50, 150)
     const m = this.messages.get(id)
     if (!m) throw new Error('message not found')
-    return this.visibleLabels(clone(m))
+    return this.withInvite(this.visibleLabels(clone(m)))
+  }
+
+  private withInvite(m: Message): Message {
+    const invite = this.cal.inviteFor(m)
+    return invite ? { ...m, invite } : m
+  }
+
+  // ---------------------------------------------------------------- calendar
+  async ListCalendars(): Promise<Calendar[]> {
+    await latency(30, 90)
+    const consent = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent).map((a) => a.id))
+    return clone(this.cal.calendars.filter((c) => consent.has(c.accountId)))
+  }
+
+  async SetCalendarVisible(id: string, visible: boolean): Promise<void> {
+    await latency(20, 60)
+    this.cal.setVisible(id, visible)
+  }
+
+  async SetAccountCalendarEnabled(accountId: string, enabled: boolean): Promise<void> {
+    await latency(20, 60)
+    const a = this.accounts.find((x) => x.id === accountId)
+    if (!a) throw new Error('account not found')
+    a.calendarEnabled = enabled
+    this.emit('accounts:changed', { accountId })
+    this.emit('calendar:changed', { accountId })
+  }
+
+  async EnableCalendar(accountId: string): Promise<void> {
+    await sleep(1200) // the OAuth round trip
+    const a = this.accounts.find((x) => x.id === accountId)
+    if (!a) throw new Error('account not found')
+    a.calendarConsent = true
+    a.calendarEnabled = true
+    this.cal.connect(accountId)
+    this.emit('accounts:changed', { accountId })
+  }
+
+  async ListEvents(start: string, end: string): Promise<CalendarEvent[]> {
+    await latency(60, 160)
+    const ok = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent && a.calendarEnabled).map((a) => a.id))
+    return this.cal.list(start, end, ok)
+  }
+
+  async GetEvent(id: string): Promise<CalendarEvent> {
+    await latency(20, 60)
+    return this.cal.get(id)
+  }
+
+  async CreateEvent(input: EventInput): Promise<CalendarEvent> {
+    await latency(120, 260)
+    if (!input.title.trim()) input = { ...input, title: '(No title)' }
+    return this.cal.create(input)
+  }
+
+  async UpdateEvent(id: string, input: EventInput, scope: RecurrenceScope): Promise<CalendarEvent> {
+    await latency(120, 260)
+    return this.cal.update(id, input, scope)
+  }
+
+  async DeleteEvent(id: string, scope: RecurrenceScope): Promise<void> {
+    await latency(100, 220)
+    this.cal.remove(id, scope)
+  }
+
+  async RespondToEvent(id: string, response: AttendeeResponse): Promise<void> {
+    await latency(150, 300)
+    this.cal.respond(id, response)
   }
 
   async GetThread(id: string): Promise<Message[]> {
@@ -555,7 +625,7 @@ class MockBackend {
     if (!m) throw new Error('message not found')
     const thread = [...this.messages.values()].filter((x) => x.threadId === m.threadId && x.accountId === m.accountId)
     thread.sort((a, b) => (a.date < b.date ? -1 : 1))
-    return clone(thread).map((x) => this.visibleLabels(x))
+    return clone(thread).map((x) => this.withInvite(this.visibleLabels(x)))
   }
 
   /** "c:<threadId>" conversation ids expand to the thread's messages (like the Go backend). */

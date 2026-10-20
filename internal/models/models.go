@@ -45,6 +45,12 @@ type Account struct {
 	NeedsReauth bool `json:"needsReauth"`
 	// Signature is sanitized HTML inserted by the composer.
 	Signature string `json:"signature"`
+	// CalendarConsent is true when the sign-in includes calendar access.
+	// Accounts added before calendar support need EnableCalendar.
+	CalendarConsent bool `json:"calendarConsent"`
+	// CalendarEnabled is the per-account calendar toggle (default true).
+	// Events are shown and synced only with consent and this on.
+	CalendarEnabled bool `json:"calendarEnabled"`
 }
 
 // Contact is an address seen in mail, ranked by frequency and recency.
@@ -130,6 +136,8 @@ type Message struct {
 	RemoteContentBlocked bool         `json:"remoteContentBlocked"`
 	Unsubscribe          *Unsubscribe `json:"unsubscribe"` // nil when the sender offers none
 	IsDraft              bool         `json:"isDraft"`     // message is in a Drafts folder (editable via SaveDraft)
+	// Invite is set when the message carries a text/calendar (ICS) part.
+	Invite *Invite `json:"invite"`
 }
 
 // Unsubscribe describes the List-Unsubscribe options of a message.
@@ -367,6 +375,7 @@ const (
 	EventDatabaseStatus   = "database:status"   // DatabaseStatus: integrity problems / repair
 	EventComposeOpen      = "compose:open"      // ComposeOpen: a mailto: link was opened
 	EventUpdateAvailable  = "update:available"  // UpdateInfo: a newer release exists
+	EventCalendarChanged  = "calendar:changed"  // CalendarChanged: calendars or events of an account changed
 )
 
 // ComposeOpen asks the UI to open the composer (mailto: links).

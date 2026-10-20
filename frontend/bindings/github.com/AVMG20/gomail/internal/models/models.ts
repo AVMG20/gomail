@@ -79,6 +79,18 @@ export interface Account {
      * Signature is sanitized HTML inserted by the composer.
      */
     "signature": string;
+
+    /**
+     * CalendarConsent is true when the sign-in includes calendar access.
+     * Accounts added before calendar support need EnableCalendar.
+     */
+    "calendarConsent": boolean;
+
+    /**
+     * CalendarEnabled is the per-account calendar toggle (default true).
+     * Events are shown and synced only with consent and this on.
+     */
+    "calendarEnabled": boolean;
 }
 
 /**
@@ -135,6 +147,130 @@ export interface AttachmentData {
     "mimeType": string;
     "size": number;
     "dataBase64": string;
+}
+
+/**
+ * Attendee is an event participant.
+ */
+export interface Attendee {
+    "name": string;
+    "email": string;
+
+    /**
+     * none | accepted | tentative | declined | organizer
+     */
+    "response": string;
+    "optional": boolean;
+}
+
+/**
+ * Calendar is one calendar of an account (Google calendarList entry,
+ * Outlook calendar).
+ */
+export interface Calendar {
+    "id": string;
+    "accountId": string;
+    "remoteId": string;
+    "name": string;
+
+    /**
+     * hex
+     */
+    "color": string;
+    "primary": boolean;
+
+    /**
+     * owner/writer: events can be created and changed
+     */
+    "canEdit": boolean;
+
+    /**
+     * shown in the unified view (SetCalendarVisible)
+     */
+    "visible": boolean;
+}
+
+/**
+ * CalendarChanged is the payload of calendar:changed.
+ */
+export interface CalendarChanged {
+    /**
+     * "" = several accounts
+     */
+    "accountId": string;
+}
+
+/**
+ * CalendarEvent is one event or one occurrence of a recurring series.
+ * 
+ * Times are UTC. All-day events have AllDay set and Start/End at 00:00 UTC
+ * of their dates, with End exclusive (a one-day event on Oct 20 has Start
+ * 2026-10-20 and End 2026-10-21): read the date, ignore the time.
+ */
+export interface CalendarEvent {
+    "id": string;
+    "calendarId": string;
+    "accountId": string;
+    "title": string;
+    "start": string;
+    "end": string;
+    "allDay": boolean;
+
+    /**
+     * IANA zone the event was created in ("" = unknown/UTC)
+     */
+    "timeZone": string;
+    "location": string;
+
+    /**
+     * plain text
+     */
+    "description": string;
+    "attendees": Attendee[] | null;
+    "organizer": Address;
+    "isOrganizer": boolean;
+
+    /**
+     * see Response*; "organizer" for own events
+     */
+    "myResponse": string;
+
+    /**
+     * https join link (Meet, Teams, ...) or ""
+     */
+    "meetingUrl": string;
+    "isRecurring": boolean;
+
+    /**
+     * local id shared by all occurrences of a series ("" if single)
+     */
+    "seriesId": string;
+
+    /**
+     * human summary, e.g. "Weekly on Monday"; "" if single
+     */
+    "recurrence": string;
+
+    /**
+     * RRULE when known (always for series created in gomail)
+     */
+    "rrule": string;
+
+    /**
+     * confirmed | tentative | cancelled
+     */
+    "status": string;
+
+    /**
+     * minutes before start
+     */
+    "reminders": number[] | null;
+
+    /**
+     * the calendar is writable and we may change this event
+     */
+    "canEdit": boolean;
+    "updatedAt": string;
 }
 
 /**
@@ -298,6 +434,62 @@ export interface DefaultPrompts {
     "classify": string;
 }
 
+/**
+ * EventInput creates or updates an event. Start/End follow CalendarEvent
+ * (all-day: dates at 00:00 UTC, End exclusive; a zero End means one hour,
+ * or one day for all-day events).
+ */
+export interface EventInput {
+    "accountId": string;
+
+    /**
+     * "" = the account's primary calendar
+     */
+    "calendarId": string;
+    "title": string;
+    "start": string;
+    "end": string;
+    "allDay": boolean;
+
+    /**
+     * IANA, e.g. "Europe/Amsterdam"; "" = UTC
+     */
+    "timeZone": string;
+    "location": string;
+    "description": string;
+
+    /**
+     * invitations are sent by the provider
+     */
+    "attendees": Attendee[] | null;
+    "recurrence": EventRecurrence;
+
+    /**
+     * nil = calendar default
+     */
+    "reminderMinutes": number[] | null;
+}
+
+/**
+ * EventRecurrence describes a simple repeating rule.
+ */
+export interface EventRecurrence {
+    /**
+     * none | daily | weekly | monthly | yearly
+     */
+    "frequency": string;
+
+    /**
+     * last day (inclusive), or null
+     */
+    "until": string | null;
+
+    /**
+     * number of occurrences, 0 = unlimited (or Until)
+     */
+    "count": number;
+}
+
 export interface Folder {
     /**
      * local id, unique across accounts
@@ -313,6 +505,29 @@ export interface Folder {
     "kind": string;
     "unread": number;
     "total": number;
+}
+
+/**
+ * Invite is the calendar invitation (text/calendar part) of a message.
+ */
+export interface Invite {
+    "uid": string;
+    "title": string;
+    "start": string;
+    "end": string;
+    "allDay": boolean;
+    "location": string;
+    "organizer": Address;
+
+    /**
+     * REQUEST | CANCEL | REPLY | PUBLISH
+     */
+    "method": string;
+
+    /**
+     * the matching synced event ("" if not in a synced calendar): RespondToEvent works on it
+     */
+    "eventId": string;
 }
 
 /**
@@ -446,6 +661,11 @@ export interface Message {
      * message is in a Drafts folder (editable via SaveDraft)
      */
     "isDraft": boolean;
+
+    /**
+     * Invite is set when the message carries a text/calendar (ICS) part.
+     */
+    "invite": Invite | null;
 }
 
 /**

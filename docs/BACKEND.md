@@ -13,7 +13,10 @@ internal/core        use cases: accounts, messages, compose, labels, AI jobs
 internal/syncer      per-account background sync + optimistic actions
 internal/provider    Provider interface
   ├─ gmail           Gmail REST v1 client (history.list incremental sync)
-  └─ outlook         Microsoft Graph v1.0 client (delta queries, $batch)
+  ├─ outlook         Microsoft Graph v1.0 client (delta queries, $batch)
+  ├─ gcal            Google Calendar v3 client (singleEvents, syncToken)
+  └─ graphcal        Graph calendar client (calendarView delta, UTC times)
+internal/calendar    calendar types, Windows→IANA zones, RRULE, ICS invites
 internal/demo        in-memory Gmail-like and Outlook-like accounts
 internal/store       SQLite (modernc.org/sqlite, pure Go): cache, FTS5 search
 internal/mailmime    MIME build/parse, charsets, HTML sanitizing, cid: images
@@ -372,6 +375,75 @@ so their `<style>` rules cannot affect the app.
   for Microsoft's `localhost` redirect. It shuts down as soon as the flow
   ends or times out.
 
+## Calendar
+
+One unified calendar shows the events of every account. Each account has a
+toggle (`SetAccountCalendarEnabled`, stored as `Account.calendarEnabled`,
+default true), and each calendar has its own (`SetCalendarVisible`). Turning
+an account off hides its events and stops syncing its calendars.
+
+**Access.** New sign-ins request calendar access as well: Google
+`https://www.googleapis.com/auth/calendar` and Microsoft
+`Calendars.ReadWrite`. `Account.calendarConsent` comes from the granted
+scopes in the token response. A 403 "insufficient scope" from either API
+sets it back to false and emits `accounts:changed` and `calendar:changed`.
+Accounts added before calendar support start without consent;
+`EnableCalendar(accountId)` signs in again for the same mailbox. For Google
+this is incremental authorization (`include_granted_scopes=true`), and mail
+data is kept. If the user leaves calendar access unticked on the consent
+screen, it returns an error. Demo accounts always have consent.
+
+**Sync** runs after each successful mail sync (same interval), with one
+state per calendar. The window runs from the first of the month three
+months back to twelve months ahead; when the month changes, the next round
+is a full fetch.
+- Google: `events.list?singleEvents=true` over the window, then
+  `syncToken` rounds. A 410 means a full resync.
+- Graph: `/me/calendarView/delta` for the default calendar, the only
+  calendar v1.0 supports delta on. Other calendars refetch their
+  `calendarView` window each round. Requests send
+  `Prefer: IdType="ImmutableId", outlook.timezone="UTC",
+  outlook.body-content-type="text"`.
+- When `ListEvents` asks for a range outside the window, it answers from the
+  cache and fetches that range in the background (once per 10 minutes per
+  calendar and range), followed by `calendar:changed`.
+
+**Model.**
+- Times are UTC. `timeZone` keeps the event's IANA zone; Graph's Windows
+  zone names are mapped through the CLDR table, and the binary embeds tzdata
+  so this also works on Windows.
+- All-day events have dates at 00:00 UTC and an exclusive end.
+- Occurrences of a series carry `isRecurring`, a `seriesId` shared by the
+  series, and `recurrence`, a text summary read from the series master.
+- Also mapped:
+  - attendees with their responses, the organizer and `myResponse`;
+  - meeting links (Google `hangoutLink`/conference data, Graph
+    `onlineMeeting.joinUrl`; https only);
+  - pop-up reminders (Google calendar defaults are applied);
+  - `canEdit`.
+- Cancelled events are removed.
+
+**Changes** are optimistic, like mail: the local cache changes first and is
+restored if the provider refuses.
+- `CreateEvent` shows single events at once. For a series, it syncs the
+  occurrences from the provider and returns the first.
+- `UpdateEvent(id, input, "this"|"series")` with "series" targets the series
+  master and shifts it by the change made to this occurrence. A recurrence
+  in the input replaces the rule; `none` keeps it.
+- `DeleteEvent(id, scope)` deletes one occurrence or the whole series.
+- `RespondToEvent` answers for the whole series. Google patches your
+  attendee status; Graph uses accept/tentativelyAccept/decline. Invitations
+  and responses are sent to the other attendees.
+- Moving events between calendars isn't supported.
+
+**Invitations in mail.** A `text/calendar` part (Gmail, and the demo
+invitation) is parsed into `Message.invite {uid, title, start, end, allDay,
+location, organizer, method, eventId}`. `eventId` points to the synced
+event with the same iCalUID, so the UI can call `RespondToEvent`. Outlook
+delivers invitations as event messages without an ICS part, so Outlook
+invitations aren't detected in mail; they still appear in the calendar,
+where you can answer them.
+
 ## Data directory
 
 | OS      | Default                                   |
@@ -450,11 +522,13 @@ in the build-time defaults:
 ## Creating a Google OAuth client (Gmail)
 
 1. Open the [Google Cloud console](https://console.cloud.google.com/) and create a project, or select one.
-2. Go to **APIs & Services → Library**, search for **Gmail API** and click **Enable**.
+2. Go to **APIs & Services → Library** and enable the **Gmail API** and the **Google
+   Calendar API**.
 3. Go to **APIs & Services → OAuth consent screen** (Google Auth Platform) and set it up:
    - Pick the **External** user type and fill in the app name and support email.
-   - Under **Data access**, add the scopes `openid`, `email`, `profile` and
-     `https://www.googleapis.com/auth/gmail.modify`.
+   - Under **Data access**, add the scopes `openid`, `email`, `profile`,
+     `https://www.googleapis.com/auth/gmail.modify` and
+     `https://www.googleapis.com/auth/calendar` (sensitive, not restricted).
    - Under **Audience**, add your Google account as a **test user**. While the app is in
      "Testing", only test users can sign in, and their refresh tokens expire after 7 days.
      Publishing a Gmail app to everyone requires Google's verification.
@@ -480,8 +554,8 @@ clients accept it without any redirect URI configuration.
    client secret is needed.
 5. Open **API permissions → Add a permission → Microsoft Graph → Delegated** and add
    `offline_access`, `openid`, `email`, `profile`, `User.Read`, `Mail.ReadWrite`,
-   `Mail.Send` and `MailboxSettings.Read`. The last one is used to read the colors of
-   Outlook categories.
+   `Mail.Send`, `MailboxSettings.Read` and `Calendars.ReadWrite`. `MailboxSettings.Read`
+   is used to read the colors of Outlook categories.
 6. Copy the **Application (client) ID** into gomail **Settings → Accounts**, or set
    `GOMAIL_MICROSOFT_CLIENT_ID`. Leave the tenant at `common`, or enter your tenant ID or
    `organizations` / `consumers`.

@@ -23,6 +23,14 @@ export function useBackendEvents() {
     void accounts.loadLabelCounts()
   }, 300)
 
+  // Only refetch calendar data when the calendar has been opened this session.
+  const refreshCalendar = useDebounceFn(async () => {
+    // Lazy: the calendar store (and its helpers) stay out of the mail bundle.
+    const { useCalendarStore } = await import('@/stores/calendar')
+    const cal = useCalendarStore()
+    if (cal.loaded) void cal.refresh()
+  }, 250)
+
   const refreshList = useDebounceFn(() => {
     mail.invalidateThread()
     void mail.softRefresh()
@@ -83,6 +91,7 @@ export function useBackendEvents() {
       if (!p?.available) return
       settings.updateInfo = p
     }),
+    api.on('calendar:changed', () => refreshCalendar()),
     api.on('database:status', (p) => {
       if (p && !p.ok) toast.error('Mail database problem', { description: p.message || 'gomail is repairing its local database.', duration: 10000 })
     }),

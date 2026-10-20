@@ -9,12 +9,12 @@ const ui = useUiStore()
 
 <template>
   <Dialog v-model:open="ui.shortcutsOpen">
-    <DialogContent class="sm:max-w-[720px]">
+    <DialogContent class="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-[min(960px,calc(100vw-2rem))]">
       <DialogHeader>
         <DialogTitle>Keyboard shortcuts</DialogTitle>
         <DialogDescription>Single-key shortcuts work whenever you are not typing.</DialogDescription>
       </DialogHeader>
-      <div class="grid gap-6 sm:grid-cols-3">
+      <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <section v-for="g in SHORTCUT_GROUPS" :key="g.title">
           <h3 class="text-muted-foreground mb-2 text-[11px] font-medium tracking-wide uppercase">{{ g.title }}</h3>
           <ul class="space-y-1.5">

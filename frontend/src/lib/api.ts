@@ -3,7 +3,7 @@
 // webview (plain browser via `npm run dev`) every call is routed to the
 // in-memory mock in ./mock.
 import type {
-  Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
+  Account, AIModel, AppInfo, AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
   EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
 } from './types'
 import { isSafeExternalUrl } from './format'
@@ -122,7 +122,12 @@ export const USED_METHODS = [
   'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose']
+/** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
+const CALENDAR_PREFS = ['calendarWeekStart', 'calendarDefaultView', 'calendarDefaultDuration', 'calendarShowDeclined', 'calendarDefaultReminder'] as const
+
+export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetAccountCalendarEnabled', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent']
+
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', ...CALENDAR_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -193,6 +198,24 @@ export function normMessage(m: Message): Message {
   return m
 }
 
+export function normEvent(e: CalendarEvent): CalendarEvent {
+  return {
+    ...e,
+    title: e.title ?? '',
+    location: e.location ?? '',
+    description: e.description ?? '',
+    attendees: e.attendees ?? [],
+    reminders: e.reminders ?? [],
+    organizer: e.organizer ?? { name: '', email: '' },
+    myResponse: e.myResponse ?? '',
+    meetingUrl: e.meetingUrl ?? '',
+    recurrence: e.recurrence ?? '',
+    seriesId: e.seriesId ?? '',
+    timeZone: e.timeZone ?? '',
+    status: e.status || 'confirmed',
+  }
+}
+
 export function normSettings(s: Settings): Settings {
   const legacy = (s as unknown as { categories?: Settings['labels'] }).categories
   return {
@@ -226,6 +249,12 @@ export function normSettings(s: Settings): Settings {
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,
     syncDepthDays: s.syncDepthDays ?? 90,
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
+    // Calendar preferences: backend values win; older backends keep a local copy.
+    calendarWeekStart: s.calendarWeekStart ?? readLocal('calendarWeekStart', -1),
+    calendarDefaultView: s.calendarDefaultView || readLocal('calendarDefaultView', 'week'),
+    calendarDefaultDuration: s.calendarDefaultDuration || readLocal('calendarDefaultDuration', 30),
+    calendarShowDeclined: s.calendarShowDeclined ?? readLocal('calendarShowDeclined', false),
+    calendarDefaultReminder: s.calendarDefaultReminder ?? readLocal('calendarDefaultReminder', 10),
   }
 }
 
@@ -297,6 +326,20 @@ export const api = {
 
   /** AI spend so far (next backend pass). */
   getAIUsage: () => call<AIUsage>('GetAIUsage'),
+
+  // ---- calendar
+  listCalendars: async () => ((await call<Calendar[] | null>('ListCalendars')) ?? []).map((c) => ({ ...c, color: safeColor(c.color, '#64748b') })),
+  setCalendarVisible: (id: string, visible: boolean) => call<void>('SetCalendarVisible', id, visible),
+  setAccountCalendarEnabled: (accountId: string, enabled: boolean) => call<void>('SetAccountCalendarEnabled', accountId, enabled),
+  /** Re-runs OAuth to add calendar scopes to an existing account. */
+  enableCalendar: (accountId: string) => call<void>('EnableCalendar', accountId),
+  /** Events overlapping [start, end) (RFC 3339), recurring events expanded into occurrences. */
+  listEvents: async (start: string, end: string) => ((await call<CalendarEvent[] | null>('ListEvents', start, end)) ?? []).map(normEvent),
+  getEvent: async (id: string) => normEvent(await call<CalendarEvent>('GetEvent', id)),
+  createEvent: async (input: EventInput) => normEvent(await call<CalendarEvent>('CreateEvent', input)),
+  updateEvent: async (id: string, input: EventInput, scope: RecurrenceScope) => normEvent(await call<CalendarEvent>('UpdateEvent', id, input, scope)),
+  deleteEvent: (id: string, scope: RecurrenceScope) => call<void>('DeleteEvent', id, scope),
+  respondToEvent: (id: string, response: AttendeeResponse) => call<void>('RespondToEvent', id, response),
   checkForUpdate: () => call<UpdateInfo>('CheckForUpdate'),
   /** A mailto: link that launched the app before the UI was ready (returned once), or null. */
   getPendingCompose: () => call<EventPayloads['compose:open'] | null>('GetPendingCompose'),
@@ -341,7 +384,10 @@ export const api = {
   getSettings: async () => normSettings(await call<Settings>('GetSettings')),
   // Reading/sending preferences now live in the backend's Settings; the
   // readLocal() fallbacks in normSettings only cover older backends.
-  saveSettings: (s: Settings) => call<void>('SaveSettings', s),
+  saveSettings: (s: Settings) => {
+    for (const k of CALENDAR_PREFS) if (s[k] !== undefined) writeLocal(k, s[k])
+    return call<void>('SaveSettings', s)
+  },
 
   setOpenRouterKey: (key: string) => call<void>('SetOpenRouterKey', key),
   getAppInfo: () => call<AppInfo>('GetAppInfo'),

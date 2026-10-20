@@ -84,6 +84,8 @@ type Body struct {
 	Bcc         []models.Address
 	ReplyTo     []models.Address
 	Unsubscribe Unsubscribe
+	// Calendar is the raw text/calendar (ICS) part of an invitation, if any.
+	Calendar string
 }
 
 // SyncResult is what a provider returns from one sync round.

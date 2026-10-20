@@ -24,6 +24,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { FOLDER_ICONS } from './folderIcons'
 import LabelPopover from './LabelPopover.vue'
 import ThreadMessage from './ThreadMessage.vue'
+import InviteCard from './InviteCard.vue'
 
 defineProps<{ showBack?: boolean }>()
 const mail = useMailStore()
@@ -99,6 +100,8 @@ watch(() => mail.openId, (id) => {
 
 const current = computed(() => mail.openSummary ?? thread.value.find((m) => m.id === mail.openId) ?? null)
 const newest = computed(() => thread.value[thread.value.length - 1] ?? null)
+/** Meeting invitation carried by the conversation (latest one wins). */
+const invite = computed(() => [...thread.value].reverse().find((m) => m.invite)?.invite ?? null)
 const ownEmail = computed(() => (current.value ? accounts.accountMap.get(current.value.accountId)?.email ?? '' : ''))
 const account = computed(() => (current.value ? accounts.accountMap.get(current.value.accountId) : undefined))
 const allowRemote = computed(() => !!settings.settings?.showRemoteImages || (!!current.value && remoteAllowed.value.has(current.value.threadId)))
@@ -283,6 +286,8 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
             <p v-if="summary.loading" class="ai-shimmer text-sm">Reading the conversation…</p>
             <p v-else class="selectable text-sm leading-relaxed whitespace-pre-line">{{ summary.text }}</p>
           </div>
+
+          <InviteCard v-if="invite" :key="invite.uid" :invite="invite" class="mb-4" />
 
           <div class="border-border/70 border-t">
             <ThreadMessage

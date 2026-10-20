@@ -74,6 +74,13 @@ export function ClassifyQuery(q: models$0.ListQuery, onlyUnlabeled: boolean, inc
 }
 
 /**
+ * CreateEvent creates an event (invitations are sent to attendees).
+ */
+export function CreateEvent($in: models$0.EventInput): $CancellablePromise<models$0.CalendarEvent> {
+    return $Call.ByID(1220432954, $in);
+}
+
+/**
  * DeleteDraft discards a draft (draft id or draft message id).
  */
 export function DeleteDraft(id: string): $CancellablePromise<void> {
@@ -81,10 +88,24 @@ export function DeleteDraft(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * DeleteEvent deletes an event; scope is "this" or "series".
+ */
+export function DeleteEvent(id: string, scope: string): $CancellablePromise<void> {
+    return $Call.ByID(2693576607, id, scope);
+}
+
+/**
  * EmptyFolder permanently deletes everything in a Trash or Spam folder.
  */
 export function EmptyFolder(folderID: string): $CancellablePromise<void> {
     return $Call.ByID(2763767611, folderID);
+}
+
+/**
+ * EnableCalendar signs in again to grant calendar access (mail is kept).
+ */
+export function EnableCalendar(accountID: string): $CancellablePromise<models$0.Account> {
+    return $Call.ByID(2435637363, accountID);
 }
 
 /**
@@ -137,6 +158,13 @@ export function GetDefaultGrammarPrompt(): $CancellablePromise<string> {
  */
 export function GetDefaultPrompts(): $CancellablePromise<models$0.DefaultPrompts> {
     return $Call.ByID(338704894);
+}
+
+/**
+ * GetEvent returns one event.
+ */
+export function GetEvent(id: string): $CancellablePromise<models$0.CalendarEvent> {
+    return $Call.ByID(2723351490, id);
 }
 
 /**
@@ -200,6 +228,21 @@ export function ImproveGrammar(text: string): $CancellablePromise<string> {
  */
 export function ListAIModels(): $CancellablePromise<models$0.AIModel[] | null> {
     return $Call.ByID(1469931606);
+}
+
+/**
+ * ListCalendars lists the calendars of accounts with calendar access.
+ */
+export function ListCalendars(): $CancellablePromise<models$0.Calendar[] | null> {
+    return $Call.ByID(2497297841);
+}
+
+/**
+ * ListEvents returns events overlapping [start, end) (max 400 days) of the
+ * visible calendars of enabled accounts.
+ */
+export function ListEvents(start: string, end: string): $CancellablePromise<models$0.CalendarEvent[] | null> {
+    return $Call.ByID(2569591363, start, end);
 }
 
 /**
@@ -278,6 +321,13 @@ export function ResolveQueryIDs(q: models$0.ListQuery, max: number): $Cancellabl
 }
 
 /**
+ * RespondToEvent answers an invitation: "accepted" | "tentative" | "declined".
+ */
+export function RespondToEvent(id: string, response: string): $CancellablePromise<void> {
+    return $Call.ByID(1980987154, id, response);
+}
+
+/**
  * SaveAttachment asks for a location and saves the attachment there.
  */
 export function SaveAttachment(messageID: string, attachmentID: string): $CancellablePromise<void> {
@@ -319,6 +369,20 @@ export function SendMessage(req: models$0.ComposeRequest): $CancellablePromise<v
 }
 
 /**
+ * SetAccountCalendarEnabled turns an account's calendars on or off.
+ */
+export function SetAccountCalendarEnabled(accountID: string, enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3272576564, accountID, enabled);
+}
+
+/**
+ * SetCalendarVisible shows or hides one calendar in the unified view.
+ */
+export function SetCalendarVisible(calendarID: string, visible: boolean): $CancellablePromise<void> {
+    return $Call.ByID(2410095934, calendarID, visible);
+}
+
+/**
  * SetOpenRouterKey stores the key securely ("" removes it). The key is
  * never returned to the frontend.
  */
@@ -335,6 +399,13 @@ export function SetStarred(ids: string[] | null, starred: boolean): $Cancellable
  */
 export function SummarizeMessage(id: string): $CancellablePromise<string> {
     return $Call.ByID(3887083514, id);
+}
+
+/**
+ * SyncCalendars syncs the calendars of an account ("" = all) now.
+ */
+export function SyncCalendars(accountID: string): $CancellablePromise<void> {
+    return $Call.ByID(2946959160, accountID);
 }
 
 /**
@@ -375,4 +446,11 @@ export function UpdateAccount(accountID: string, displayName: string, color: str
  */
 export function UpdateAccountSignature(accountID: string, html: string): $CancellablePromise<void> {
     return $Call.ByID(3311730108, accountID, html);
+}
+
+/**
+ * UpdateEvent changes an event; scope is "this" or "series".
+ */
+export function UpdateEvent(id: string, $in: models$0.EventInput, scope: string): $CancellablePromise<models$0.CalendarEvent> {
+    return $Call.ByID(931004577, id, $in, scope);
 }

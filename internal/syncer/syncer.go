@@ -49,6 +49,9 @@ type Config struct {
 	// is paused; nil disables background backfill.
 	Backfill func() (depthDays int, paused bool)
 	Limits   provider.Limits
+	// Calendar, if set, syncs the account's calendars after each successful
+	// mail sync (same interval; it reports its own errors).
+	Calendar func(ctx context.Context, accountID string)
 }
 
 // Backoff bounds for repeated sync failures.
@@ -394,6 +397,9 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 
 	newIDs, initial, err := e.doSync(ctx, acct)
+	if err == nil && e.cfg.Calendar != nil {
+		e.cfg.Calendar(ctx, accountID)
+	}
 
 	e.mu.Lock()
 	st.syncing = false

@@ -12,6 +12,12 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fullcalendar/core": "^6.1.22",
+    "@fullcalendar/daygrid": "^6.1.22",
+    "@fullcalendar/interaction": "^6.1.22",
+    "@fullcalendar/list": "^6.1.22",
+    "@fullcalendar/timegrid": "^6.1.22",
+    "@fullcalendar/vue3": "^6.1.22",
     "@lucide/vue": "^1.59.0",
     "@tanstack/vue-virtual": "^3.13.47",
     "@tiptap/extensions": "^3.32.0",

@@ -52,8 +52,11 @@ notarization aren't set up yet; see the TODO at the end.
 2. The consent screen must use the **External** user type, with your app name, logo,
    support email, homepage and privacy policy URL. Verify that you own the domains you
    list.
-3. **Scopes.** gomail requests `openid email profile` and
-   `https://www.googleapis.com/auth/gmail.modify`:
+3. **Scopes.** gomail requests `openid email profile`,
+   `https://www.googleapis.com/auth/gmail.modify` and
+   `https://www.googleapis.com/auth/calendar`. Enable the Google Calendar API too. The
+   calendar scope is **sensitive**, not restricted: verification needs a justification
+   and a demo, but no security assessment.
    - `gmail.modify` is a **restricted scope**.
    - In "Testing" mode only listed test users (up to 100) can sign in, and their
      refresh tokens expire after 7 days.
@@ -79,7 +82,7 @@ notarization aren't set up yet; see the TODO at the end.
    - Use platform **Mobile and desktop applications** with redirect `http://localhost`.
    - Turn on **Allow public client flows**.
    - Add the delegated Graph permissions `offline_access openid email profile User.Read
-     Mail.ReadWrite Mail.Send MailboxSettings.Read`.
+     Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite`.
 2. **Publisher verification:** link the app registration to a verified Microsoft Partner
    Network (Cloud Partner Program) account under **Branding & properties → Publisher
    verification**. Without it:

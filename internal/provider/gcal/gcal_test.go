@@ -1,0 +1,260 @@
+package gcal
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/AVMG20/gomail/internal/calendar"
+	"github.com/AVMG20/gomail/internal/httpx"
+	"github.com/AVMG20/gomail/internal/models"
+)
+
+type fake struct {
+	mu        sync.Mutex
+	noScope   bool
+	tokenGone bool
+	requests  []string
+	bodies    []map[string]any
+}
+
+func (f *fake) handler(t *testing.T) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.requests = append(f.requests, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		var body map[string]any
+		if data, _ := io.ReadAll(r.Body); len(data) > 0 {
+			json.Unmarshal(data, &body)
+			f.bodies = append(f.bodies, body)
+		}
+		noScope, gone := f.noScope, f.tokenGone
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		write := func(v any) { json.NewEncoder(w).Encode(v) }
+		if noScope {
+			w.WriteHeader(403)
+			write(map[string]any{"error": map[string]any{"code": 403, "message": "Request had insufficient authentication scopes.",
+				"status": "PERMISSION_DENIED", "errors": []any{map[string]any{"reason": "insufficientPermissions"}}}})
+			return
+		}
+		q := r.URL.Query()
+		switch {
+		case r.URL.Path == "/users/me/calendarList":
+			write(map[string]any{"items": []any{
+				map[string]any{"id": "me@gmail.com", "summary": "Me", "backgroundColor": "#9fe1e7", "primary": true, "accessRole": "owner",
+					"timeZone": "Europe/Amsterdam", "defaultReminders": []any{map[string]any{"method": "popup", "minutes": 30}}},
+				map[string]any{"id": "holidays", "summary": "Holidays", "summaryOverride": "Dutch holidays", "accessRole": "reader"},
+				map[string]any{"id": "gone", "summary": "Gone", "deleted": true},
+			}})
+		case r.URL.Path == "/calendars/me@gmail.com/events" && r.Method == "GET":
+			if tok := q.Get("syncToken"); tok != "" {
+				if gone || tok != "tok1" {
+					w.WriteHeader(410)
+					write(map[string]any{"error": map[string]any{"code": 410, "message": "Sync token is no longer valid"}})
+					return
+				}
+				if q.Get("timeMin") != "" {
+					t.Error("timeMin sent with a sync token")
+				}
+				write(map[string]any{"items": []any{
+					map[string]any{"id": "single", "status": "cancelled"},
+					map[string]any{"id": "new", "status": "confirmed", "summary": "New", "start": map[string]any{"dateTime": "2026-10-21T10:00:00+02:00"},
+						"end": map[string]any{"dateTime": "2026-10-21T11:00:00+02:00"}},
+				}, "nextSyncToken": "tok2"})
+				return
+			}
+			if q.Get("singleEvents") != "true" || q.Get("timeMin") == "" || q.Get("timeMax") == "" {
+				t.Errorf("full sync query %v", q)
+			}
+			if q.Get("pageToken") == "" {
+				write(map[string]any{"items": []any{
+					map[string]any{"id": "single", "status": "confirmed", "summary": "Lunch", "description": "<b>Bring</b> the slides",
+						"location": "Café", "start": map[string]any{"dateTime": "2026-10-20T12:00:00+02:00", "timeZone": "Europe/Amsterdam"},
+						"end":     map[string]any{"dateTime": "2026-10-20T13:00:00+02:00", "timeZone": "Europe/Amsterdam"},
+						"iCalUID": "single@google.com", "hangoutLink": "https://meet.google.com/abc", "reminders": map[string]any{"useDefault": true},
+						"organizer": map[string]any{"email": "boss@x.com", "displayName": "Boss"},
+						"attendees": []any{map[string]any{"email": "boss@x.com", "organizer": true, "responseStatus": "accepted"},
+							map[string]any{"email": "me@gmail.com", "self": true, "responseStatus": "needsAction"}}},
+					map[string]any{"id": "allday", "summary": "Holiday", "start": map[string]any{"date": "2026-10-24"}, "end": map[string]any{"date": "2026-10-26"}},
+				}, "nextPageToken": "p2"})
+				return
+			}
+			write(map[string]any{"items": []any{
+				map[string]any{"id": "weekly_20261019T070000Z", "recurringEventId": "weekly", "summary": "Standup",
+					"start": map[string]any{"dateTime": "2026-10-19T09:00:00+02:00"}, "end": map[string]any{"dateTime": "2026-10-19T09:15:00+02:00"},
+					"organizer":      map[string]any{"email": "me@gmail.com", "self": true},
+					"conferenceData": map[string]any{"entryPoints": []any{map[string]any{"entryPointType": "video", "uri": "https://meet.google.com/xyz"}}}},
+			}, "nextSyncToken": "tok1"})
+		case r.URL.Path == "/calendars/me@gmail.com/events/weekly" && r.Method == "GET":
+			write(map[string]any{"id": "weekly", "recurrence": []string{"RRULE:FREQ=WEEKLY;BYDAY=MO"}, "summary": "Standup",
+				"start": map[string]any{"dateTime": "2026-01-05T09:00:00+01:00"}, "end": map[string]any{"dateTime": "2026-01-05T09:15:00+01:00"},
+				"organizer": map[string]any{"email": "me@gmail.com", "self": true}})
+		case r.URL.Path == "/calendars/me@gmail.com/events/single" && r.Method == "GET":
+			write(map[string]any{"id": "single", "attendees": []any{map[string]any{"email": "boss@x.com", "organizer": true},
+				map[string]any{"email": "me@gmail.com", "self": true, "responseStatus": "needsAction"}}})
+		case r.URL.Path == "/calendars/me@gmail.com/events" && r.Method == "POST":
+			if q.Get("sendUpdates") != "all" {
+				t.Error("invitations not sent")
+			}
+			body["id"], body["organizer"] = "created", map[string]any{"email": "me@gmail.com", "self": true}
+			write(body)
+		case strings.HasPrefix(r.URL.Path, "/calendars/me@gmail.com/events/") && r.Method == "PATCH":
+			body["id"] = strings.TrimPrefix(r.URL.Path, "/calendars/me@gmail.com/events/")
+			if body["start"] == nil {
+				body["start"] = map[string]any{"dateTime": "2026-10-20T12:00:00+02:00"}
+				body["end"] = map[string]any{"dateTime": "2026-10-20T13:00:00+02:00"}
+			}
+			write(body)
+		case r.Method == "DELETE":
+			if strings.HasSuffix(r.URL.Path, "/gone") {
+				w.WriteHeader(410)
+				return
+			}
+			w.WriteHeader(204)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			w.WriteHeader(404)
+		}
+	}
+}
+
+func newTest(t *testing.T) (*Client, *fake) {
+	f := &fake{}
+	srv := httptest.NewServer(f.handler(t))
+	t.Cleanup(srv.Close)
+	c := New(httpx.StaticToken("tok"), srv.URL)
+	c.SetSleep(func(context.Context, time.Duration) error { return nil })
+	return c, f
+}
+
+func TestCalendarsAndSync(t *testing.T) {
+	c, f := newTest(t)
+	ctx := context.Background()
+	cals, err := c.Calendars(ctx)
+	if err != nil || len(cals) != 2 {
+		t.Fatalf("%+v %v", cals, err)
+	}
+	me, hol := cals[0], cals[1]
+	if !me.Primary || !me.CanEdit || me.TimeZone != "Europe/Amsterdam" || me.Color != "#9fe1e7" || len(me.DefaultReminders) != 1 {
+		t.Fatalf("primary %+v", me)
+	}
+	if hol.CanEdit || hol.Name != "Dutch holidays" {
+		t.Fatalf("holidays %+v", hol)
+	}
+	start, end := calendar.WindowFor(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC))
+	res, err := c.Sync(ctx, me, calendar.SyncRequest{Start: start, End: end})
+	if err != nil || !res.Full || res.State != "tok1" || len(res.Upserts) != 3 {
+		t.Fatalf("full sync %+v %v", res, err)
+	}
+	lunch, allday, standup := res.Upserts[0], res.Upserts[1], res.Upserts[2]
+	if !lunch.Start.Equal(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)) || lunch.TimeZone != "Europe/Amsterdam" ||
+		lunch.Description != "Bring the slides" || lunch.MeetingURL != "https://meet.google.com/abc" || lunch.MyResponse != models.ResponseNone ||
+		lunch.IsOrganizer || lunch.CanEdit || lunch.Organizer.Email != "boss@x.com" || len(lunch.Reminders) != 1 || lunch.Reminders[0] != 30 ||
+		lunch.ICalUID != "single@google.com" || lunch.Attendees[0].Response != models.ResponseOrganizer {
+		t.Fatalf("lunch %+v", lunch)
+	}
+	if !allday.AllDay || !allday.Start.Equal(time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)) || allday.End.Sub(allday.Start) != 48*time.Hour {
+		t.Fatalf("all-day %+v", allday)
+	}
+	if !standup.IsRecurring || standup.SeriesRemoteID != "weekly" || standup.Recurrence != "Weekly on Monday" ||
+		standup.MeetingURL != "https://meet.google.com/xyz" || !standup.CanEdit || standup.MyResponse != models.ResponseOrganizer {
+		t.Fatalf("standup %+v", standup)
+	}
+	// Incremental.
+	res, err = c.Sync(ctx, me, calendar.SyncRequest{Start: start, End: end, State: "tok1"})
+	if err != nil || res.Full || res.State != "tok2" || len(res.Deleted) != 1 || res.Deleted[0] != "single" || len(res.Upserts) != 1 {
+		t.Fatalf("incremental %+v %v", res, err)
+	}
+	// 410: full resync.
+	f.mu.Lock()
+	f.tokenGone = true
+	f.mu.Unlock()
+	res, err = c.Sync(ctx, me, calendar.SyncRequest{Start: start, End: end, State: "tok1"})
+	if err != nil || !res.Full || res.State != "tok1" || len(res.Upserts) != 3 {
+		t.Fatalf("after 410 %+v %v", res, err)
+	}
+	if evs, err := c.Range(ctx, me, start, end); err != nil || len(evs) != 3 {
+		t.Fatalf("range %d %v", len(evs), err)
+	}
+}
+
+func TestCRUDRespondAndScopes(t *testing.T) {
+	c, f := newTest(t)
+	ctx := context.Background()
+	me := calendar.Calendar{RemoteID: "me@gmail.com", CanEdit: true, Primary: true}
+	in := models.EventInput{Title: "Review", Start: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC), TimeZone: "America/New_York",
+		Attendees: []models.Attendee{{Email: "a@x.com"}}, ReminderMinutes: []int{15},
+		Recurrence: models.EventRecurrence{Frequency: models.RepeatWeekly, Count: 4}}
+	if err := calendar.NormalizeInput(&in); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := c.Create(ctx, me, calendar.FromInput(in))
+	if err != nil || ev.RemoteID != "created" || !ev.IsOrganizer {
+		t.Fatalf("create %+v %v", ev, err)
+	}
+	b := f.bodies[len(f.bodies)-1]
+	start := b["start"].(map[string]any)
+	if start["timeZone"] != "America/New_York" || start["dateTime"] != "2026-11-02T04:00:00-05:00" {
+		t.Fatalf("start %v", start)
+	}
+	if rec := b["recurrence"].([]any); len(rec) != 1 || rec[0] != "RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4" {
+		t.Fatalf("recurrence %v", rec)
+	}
+	if rem := b["reminders"].(map[string]any); rem["useDefault"] != false {
+		t.Fatalf("reminders %v", rem)
+	}
+	// All-day body uses dates.
+	allday := calendar.Event{Title: "Off", AllDay: true, Start: time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 12, 25, 0, 0, 0, 0, time.UTC)}
+	if _, err := c.Create(ctx, me, allday); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.bodies[len(f.bodies)-1]["start"].(map[string]any); s["date"] != "2026-12-24" || s["dateTime"] != nil {
+		t.Fatalf("all-day start %v", s)
+	}
+	// Series update targets the master and shifts it by the change.
+	upd := calendar.Event{Title: "Standup (later)", SeriesRemoteID: "weekly", OriginalStart: time.Date(2026, 10, 19, 7, 0, 0, 0, time.UTC),
+		Start: time.Date(2026, 10, 19, 7, 30, 0, 0, time.UTC), End: time.Date(2026, 10, 19, 7, 45, 0, 0, time.UTC)}
+	if _, err := c.Update(ctx, me, "weekly_20261019T070000Z", upd, models.ScopeSeries); err != nil {
+		t.Fatal(err)
+	}
+	last := f.requests[len(f.requests)-1]
+	if !strings.HasPrefix(last, "PATCH /calendars/me@gmail.com/events/weekly?") {
+		t.Fatalf("series patch %s", last)
+	}
+	ms := f.bodies[len(f.bodies)-1]["start"].(map[string]any)
+	if ms["dateTime"] != "2026-01-05T08:30:00Z" { // master 08:00 UTC + 30 min
+		t.Fatalf("shifted master start %v", ms)
+	}
+	if rec := f.bodies[len(f.bodies)-1]["recurrence"].([]any); rec[0] != "RRULE:FREQ=WEEKLY;BYDAY=MO" {
+		t.Fatalf("rule lost %v", rec)
+	}
+	if err := c.Delete(ctx, me, "x", models.ScopeThis); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, me, "gone", models.ScopeThis); err != nil {
+		t.Fatalf("already deleted: %v", err)
+	}
+	if err := c.Respond(ctx, me, "single", models.ResponseTentative); err != nil {
+		t.Fatal(err)
+	}
+	atts := f.bodies[len(f.bodies)-1]["attendees"].([]any)
+	if atts[1].(map[string]any)["responseStatus"] != "tentative" {
+		t.Fatalf("respond body %v", atts)
+	}
+	if _, err := c.Create(ctx, calendar.Calendar{RemoteID: "holidays"}, allday); !errors.Is(err, calendar.ErrReadOnly) {
+		t.Fatalf("read-only: %v", err)
+	}
+	f.mu.Lock()
+	f.noScope = true
+	f.mu.Unlock()
+	if _, err := c.Calendars(ctx); !errors.Is(err, calendar.ErrNoConsent) {
+		t.Fatalf("insufficient scope: %v", err)
+	}
+}

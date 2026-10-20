@@ -543,11 +543,11 @@ func (s *Store) Message(id string) (msg models.Message, hasBody bool, err error)
 	var cc, bcc, replyTo string
 	var html, text sql.NullString
 	var remote, oneClick, kinds int
-	var unsubURL, unsubMailto string
+	var unsubURL, unsubMailto, invite string
 	row := s.db.QueryRow(`SELECT `+s.summaryCols()+`, m.cc_json, m.bcc_json, m.reply_to_json, m.message_id_hdr, m.in_reply_to, m.refs,
-		m.body_html, m.body_text, m.has_remote, m.unsub_url, m.unsub_mailto, m.unsub_one_click, m.folder_kinds FROM messages m WHERE m.id = ?`, id)
+		m.body_html, m.body_text, m.has_remote, m.unsub_url, m.unsub_mailto, m.unsub_one_click, m.folder_kinds, m.invite FROM messages m WHERE m.id = ?`, id)
 	sum, err := scanSummary(row, &cc, &bcc, &replyTo, &msg.MessageID, &msg.InReplyTo, &msg.References, &html, &text, &remote,
-		&unsubURL, &unsubMailto, &oneClick, &kinds)
+		&unsubURL, &unsubMailto, &oneClick, &kinds, &invite)
 	if errors.Is(err, sql.ErrNoRows) {
 		return msg, false, ErrNotFound
 	}
@@ -561,6 +561,12 @@ func (s *Store) Message(id string) (msg models.Message, hasBody bool, err error)
 	msg.IsDraft = kinds&kindBits["drafts"] != 0
 	if unsubURL != "" || unsubMailto != "" {
 		msg.Unsubscribe = &models.Unsubscribe{URL: unsubURL, Mailto: unsubMailto, OneClick: oneClick == 1 && unsubURL != ""}
+	}
+	if invite != "" {
+		var inv models.Invite
+		if json.Unmarshal([]byte(invite), &inv) == nil {
+			msg.Invite = &inv
+		}
 	}
 	msg.ThreadCount = 1
 	msg.Participants = []string{displayName(sum.From)}
@@ -610,6 +616,7 @@ type BodyUpdate struct {
 	References       string
 	Cc, Bcc, ReplyTo []models.Address // only stored when non-empty
 	Unsubscribe      mail.Unsubscribe // only stored when non-empty
+	Invite           *models.Invite   // calendar invitation, if any
 }
 
 // SaveBody caches a message body and its attachment metadata.
@@ -628,6 +635,14 @@ func (s *Store) SaveBody(id string, b BodyUpdate) error {
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return ErrNotFound
+		}
+		invite := ""
+		if b.Invite != nil {
+			j, _ := json.Marshal(b.Invite)
+			invite = string(j)
+		}
+		if _, err := tx.Exec(`UPDATE messages SET invite = ? WHERE id = ?`, invite, id); err != nil {
+			return err
 		}
 		if !b.Unsubscribe.Empty() {
 			if _, err := tx.Exec(`UPDATE messages SET unsub_url = ?, unsub_mailto = ?, unsub_one_click = ? WHERE id = ?`,

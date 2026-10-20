@@ -18,6 +18,7 @@ import (
 
 	"github.com/AVMG20/gomail/internal/ai"
 	"github.com/AVMG20/gomail/internal/auth"
+	"github.com/AVMG20/gomail/internal/calendar"
 	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/demo"
 	"github.com/AVMG20/gomail/internal/mailmime"
@@ -60,10 +61,13 @@ type Options struct {
 	OpenRouterBase string
 	// Online overrides the connectivity probe (tests).
 	Online func(ctx context.Context) bool
-	// GmailBase and GraphBase override the provider API base URLs (tests
-	// against fake servers). "" = production.
-	GmailBase string
-	GraphBase string
+	// GmailBase, GraphBase and GoogleCalendarBase override the provider API
+	// base URLs (tests against fake servers). "" = production.
+	GmailBase          string
+	GraphBase          string
+	GoogleCalendarBase string
+	// CalendarFactory overrides calendar provider construction (tests).
+	CalendarFactory func(acct models.Account) (calendar.Provider, error)
 }
 
 // Service implements the application's use cases.
@@ -80,6 +84,9 @@ type Service struct {
 
 	provMu    sync.Mutex
 	providers map[string]provider.Provider
+	tokMu     sync.Mutex
+	tokens    map[string]*auth.TokenSource
+	cal       calState
 
 	addMu     sync.Mutex
 	addCancel context.CancelFunc
@@ -128,7 +135,9 @@ func New(opts Options) (*Service, error) {
 		online = syncer.ProbeHosts("gmail.googleapis.com:443", "graph.microsoft.com:443", "www.google.com:443")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Service{opts: opts, store: st, secrets: sec, ui: opts.UI, providers: map[string]provider.Provider{}, ctx: ctx, cancel: cancel}
+	s := &Service{opts: opts, store: st, secrets: sec, ui: opts.UI, providers: map[string]provider.Provider{},
+		tokens: map[string]*auth.TokenSource{}, ctx: ctx, cancel: cancel}
+	s.cal.init()
 	s.jobs.init()
 	s.repaired, s.firstQuery = repaired, make(chan struct{})
 	s.drafts.entries = map[string]*draftEntry{}
@@ -154,6 +163,7 @@ func New(opts Options) (*Service, error) {
 			st := s.Settings()
 			return st.SyncDepthDays, st.BackfillPaused
 		},
+		Calendar: func(ctx context.Context, accountID string) { s.syncCalendarsQuiet(ctx, accountID) },
 	})
 	s.ui.ApplySettings(s.Settings())
 	if opts.Demo {
@@ -319,6 +329,7 @@ func (s *Service) seedDemo() error {
 				return err
 			}
 			a = existing
+			a.CalendarConsent = true // demo accounts always have calendar access
 		case !errors.Is(err, store.ErrNotFound):
 			return err
 		default:
@@ -363,6 +374,21 @@ func (s *Service) provider(accountID string) (provider.Provider, error) {
 }
 
 func (s *Service) realProvider(acct models.Account) (provider.Provider, error) {
+	ts, err := s.tokenSource(acct)
+	if err != nil {
+		return nil, err
+	}
+	return s.newProvider(acct.Provider, ts)
+}
+
+// tokenSource returns the account's shared token source, so mail and
+// calendar clients refresh (and persist rotated tokens) through one place.
+func (s *Service) tokenSource(acct models.Account) (*auth.TokenSource, error) {
+	s.tokMu.Lock()
+	defer s.tokMu.Unlock()
+	if ts, ok := s.tokens[acct.ID]; ok {
+		return ts, nil
+	}
 	tok, err := auth.LoadToken(s.secrets, acct.ID)
 	if err != nil {
 		return nil, err
@@ -371,8 +397,37 @@ func (s *Service) realProvider(acct models.Account) (provider.Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	ts := auth.NewTokenSource(cfg, tok, acct.Email, func(t *oauth2.Token) error { return auth.SaveToken(s.secrets, acct.ID, t) })
-	return s.newProvider(acct.Provider, ts)
+	id := acct.ID
+	ts := auth.NewTokenSource(cfg, tok, acct.Email, func(t *oauth2.Token) error { return auth.SaveToken(s.secrets, id, t) })
+	s.tokens[acct.ID] = ts
+	return ts, nil
+}
+
+// forgetClients drops cached providers and tokens of an account ("" = all
+// real accounts), e.g. after signing in again.
+func (s *Service) forgetClients(accountID string) {
+	keep := func(id string) bool { return s.opts.Demo && strings.HasPrefix(id, "demo-") }
+	s.provMu.Lock()
+	for id := range s.providers {
+		if (accountID == "" || id == accountID) && !keep(id) {
+			delete(s.providers, id)
+		}
+	}
+	s.provMu.Unlock()
+	s.cal.mu.Lock()
+	for id := range s.cal.providers {
+		if (accountID == "" || id == accountID) && !keep(id) {
+			delete(s.cal.providers, id)
+		}
+	}
+	s.cal.mu.Unlock()
+	s.tokMu.Lock()
+	for id := range s.tokens {
+		if accountID == "" || id == accountID {
+			delete(s.tokens, id)
+		}
+	}
+	s.tokMu.Unlock()
 }
 
 func (s *Service) newProvider(kind string, ts interface {
@@ -388,15 +443,7 @@ func (s *Service) newProvider(kind string, ts interface {
 	return nil, fmt.Errorf("unsupported provider %q", kind)
 }
 
-func (s *Service) resetProviders() {
-	s.provMu.Lock()
-	defer s.provMu.Unlock()
-	for id := range s.providers {
-		if !(s.opts.Demo && strings.HasPrefix(id, "demo-")) {
-			delete(s.providers, id)
-		}
-	}
-}
+func (s *Service) resetProviders() { s.forgetClients("") }
 
 // ---- accounts ----
 
@@ -494,8 +541,9 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 		return models.Account{}, err
 	}
 	if errors.Is(err, store.ErrNotFound) {
+		granted, _ := auth.CalendarGranted(kind, tok)
 		acct = models.Account{ID: randomID("a"), Provider: kind, Email: strings.ToLower(prof.Email), DisplayName: prof.Name,
-			Color: s.pickColor(), CreatedAt: time.Now()}
+			Color: s.pickColor(), CreatedAt: time.Now(), CalendarConsent: granted, CalendarEnabled: true}
 		if acct.DisplayName == "" {
 			acct.DisplayName = acct.Email
 		}
@@ -509,6 +557,8 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 		slog.Info("account added", "provider", kind, "account", acct.ID)
 	} else if err := auth.SaveToken(s.secrets, acct.ID, tok); err != nil {
 		return models.Account{}, fmt.Errorf("could not store the sign-in securely: %w", err)
+	} else {
+		s.recordCalendarConsent(acct.ID, kind, tok)
 	}
 	return s.afterSignIn(acct.ID)
 }
@@ -536,15 +586,12 @@ func (s *Service) ReauthAccount(accountID string) (models.Account, error) {
 		return acct, fmt.Errorf("could not store the sign-in securely: %w", err)
 	}
 	slog.Info("account re-authenticated", "account", acct.ID)
+	s.recordCalendarConsent(acct.ID, acct.Provider, tok)
 	return s.afterSignIn(acct.ID)
 }
 
 func (s *Service) afterSignIn(accountID string) (models.Account, error) {
-	s.provMu.Lock()
-	if !(s.opts.Demo && strings.HasPrefix(accountID, "demo-")) {
-		delete(s.providers, accountID)
-	}
-	s.provMu.Unlock()
+	s.forgetClients(accountID)
 	_ = s.store.SetNeedsReauth(accountID, false)
 	_ = s.store.SetSyncResult(accountID, time.Time{}, "")
 	s.engine.ResetBackoff(accountID)
@@ -577,6 +624,7 @@ func (s *Service) RemoveAccount(accountID string) error {
 	s.provMu.Lock()
 	delete(s.providers, accountID)
 	s.provMu.Unlock()
+	s.forgetClients(accountID)
 	s.engine.Forget(accountID)
 	s.attCache.dropAccount(accountID)
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})

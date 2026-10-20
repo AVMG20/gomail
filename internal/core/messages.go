@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/calendar"
 	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/mailmime"
@@ -81,14 +82,16 @@ func (s *Service) messageRaw(id string) (models.Message, error) {
 	if err != nil {
 		return m, notFound(err)
 	}
-	if has {
-		return m, nil
+	if !has {
+		if err := s.fetchBody(s.ctx, m); err != nil {
+			return m, err
+		}
+		if m, _, err = s.store.Message(id); err != nil {
+			return m, notFound(err)
+		}
 	}
-	if err := s.fetchBody(s.ctx, m); err != nil {
-		return m, err
-	}
-	m, _, err = s.store.Message(id)
-	return m, notFound(err)
+	s.inviteEvent(&m)
+	return m, nil
 }
 
 // Message returns a message with its body. Remote images/CSS are removed
@@ -144,7 +147,7 @@ func processBody(b *mail.Body) store.BodyUpdate {
 	return store.BodyUpdate{
 		HTML: html, Text: text, HasRemoteContent: mailmime.HasRemoteContent(html), Attachments: atts,
 		MessageID: b.MessageID, InReplyTo: b.InReplyTo, References: b.References, Cc: b.Cc, Bcc: b.Bcc, ReplyTo: b.ReplyTo,
-		Unsubscribe: b.Unsubscribe,
+		Unsubscribe: b.Unsubscribe, Invite: calendar.ParseInvite(b.Calendar),
 	}
 }
 

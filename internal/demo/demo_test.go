@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/calendar"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
@@ -173,5 +174,73 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCalendarProvider(t *testing.T) {
+	ctx := context.Background()
+	for _, acct := range Accounts() {
+		p := NewCalendar(acct)
+		cals, err := p.Calendars(ctx)
+		if err != nil || len(cals) != 2 || !cals[0].Primary {
+			t.Fatalf("%+v %v", cals, err)
+		}
+		start, end := time.Now().AddDate(0, 0, -7), time.Now().AddDate(0, 0, 35)
+		total, allDay, recurring, declined := 0, 0, 0, 0
+		for _, c := range cals {
+			res, err := p.Sync(ctx, c, calendar.SyncRequest{Start: start, End: end})
+			if err != nil || !res.Full {
+				t.Fatal(err)
+			}
+			for _, ev := range res.Upserts {
+				total++
+				if ev.AllDay {
+					allDay++
+				}
+				if ev.SeriesRemoteID != "" {
+					recurring++
+				}
+				if ev.MyResponse == models.ResponseDeclined {
+					declined++
+				}
+			}
+		}
+		if total < 40 || allDay < 3 || recurring < 20 || declined != 1 {
+			t.Fatalf("%s: total %d all-day %d recurring %d declined %d", acct.Provider, total, allDay, recurring, declined)
+		}
+		// CRUD in memory.
+		work := cals[1]
+		ev, err := p.Create(ctx, work, calendar.Event{Title: "New", Start: time.Now(), End: time.Now().Add(time.Hour), RRule: "FREQ=DAILY;COUNT=3"})
+		if err != nil || !ev.IsRecurring {
+			t.Fatal(err)
+		}
+		evs, _ := p.Range(ctx, work, time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 5))
+		var occ []calendar.Event
+		for _, e := range evs {
+			if e.SeriesRemoteID == ev.RemoteID {
+				occ = append(occ, e)
+			}
+		}
+		if len(occ) != 3 {
+			t.Fatalf("%d occurrences", len(occ))
+		}
+		if _, err := p.Update(ctx, work, occ[0].RemoteID, calendar.Event{Title: "Moved", Start: occ[0].Start.Add(time.Hour), End: occ[0].End.Add(time.Hour)}, models.ScopeSeries); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Respond(ctx, work, occ[0].RemoteID, models.ResponseAccepted); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Delete(ctx, work, occ[1].RemoteID, models.ScopeSeries); err != nil {
+			t.Fatal(err)
+		}
+		evs, _ = p.Range(ctx, work, time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 5))
+		for _, e := range evs {
+			if e.SeriesRemoteID == ev.RemoteID {
+				t.Fatal("series not deleted")
+			}
+		}
+		if _, err := p.Update(ctx, work, "missing", calendar.Event{}, models.ScopeThis); err == nil {
+			t.Fatal("updated a missing event")
+		}
 	}
 }

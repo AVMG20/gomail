@@ -22,11 +22,15 @@ import (
 type OAuth struct {
 	Server *httptest.Server
 
-	mu         sync.Mutex
-	n          int
-	codes      map[string]string // code -> PKCE challenge
-	access     map[string]bool   // valid access tokens
-	refresh    map[string]bool   // valid refresh tokens
+	mu     sync.Mutex
+	n      int
+	codes  map[string]string // code -> PKCE challenge
+	scopes map[string]string // code or refresh token -> granted scopes
+	// Grant, if set, filters the scopes the user "allows" on the consent
+	// page (e.g. to simulate unticking calendar access).
+	Grant      func(requested string) string
+	access     map[string]bool // valid access tokens
+	refresh    map[string]bool // valid refresh tokens
 	exchanges  int
 	refreshes  int
 	pkceFailed int
@@ -42,7 +46,7 @@ func (o *OAuth) Stats() (exchanges, refreshes, pkceFailed int) {
 
 // NewOAuth starts the server.
 func NewOAuth() *OAuth {
-	o := &OAuth{codes: map[string]string{}, access: map[string]bool{}, refresh: map[string]bool{}}
+	o := &OAuth{codes: map[string]string{}, scopes: map[string]string{}, access: map[string]bool{}, refresh: map[string]bool{}}
 	o.Server = httptest.NewServer(http.HandlerFunc(o.serve))
 	return o
 }
@@ -96,6 +100,11 @@ func (o *OAuth) Consent(authURL string) error {
 	o.n++
 	code := fmt.Sprintf("code-%d", o.n)
 	o.codes[code] = q.Get("code_challenge")
+	granted := q.Get("scope")
+	if o.Grant != nil {
+		granted = o.Grant(granted)
+	}
+	o.scopes[code] = granted
 	o.mu.Unlock()
 	go func() {
 		resp, err := http.Get(redirect + "?" + url.Values{"code": {code}, "state": {state}}.Encode())
@@ -126,6 +135,7 @@ func (o *OAuth) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	scope := ""
 	switch r.Form.Get("grant_type") {
 	case "authorization_code":
 		challenge, ok := o.codes[r.Form.Get("code")]
@@ -141,12 +151,14 @@ func (o *OAuth) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		o.exchanges++
+		scope = o.scopes[r.Form.Get("code")]
 	case "refresh_token":
 		if !o.refresh[r.Form.Get("refresh_token")] {
 			fail("invalid_grant")
 			return
 		}
 		o.refreshes++
+		scope = o.scopes[r.Form.Get("refresh_token")]
 	default:
 		fail("unsupported_grant_type")
 		return
@@ -154,8 +166,9 @@ func (o *OAuth) serve(w http.ResponseWriter, r *http.Request) {
 	o.n++
 	at, rt := fmt.Sprintf("at-%d", o.n), fmt.Sprintf("rt-%d", o.n)
 	o.access[at], o.refresh[rt] = true, true
+	o.scopes[rt] = scope
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"access_token": at, "refresh_token": rt, "token_type": "Bearer", "expires_in": 3600})
+	_ = json.NewEncoder(w).Encode(map[string]any{"access_token": at, "refresh_token": rt, "token_type": "Bearer", "expires_in": 3600, "scope": scope})
 }
 
 // bearer extracts the access token of a request.

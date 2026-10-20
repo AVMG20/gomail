@@ -30,6 +30,7 @@ type e2e struct {
 	oauth  *fakes.OAuth
 	gmail  *fakes.Gmail
 	graph  *fakes.Graph
+	gcal   *fakes.GoogleCalendar
 	ai     *fakes.OpenRouter
 	mu     sync.Mutex
 	events map[string][]any
@@ -76,7 +77,8 @@ func newE2E(t *testing.T) *e2e {
 	e := &e2e{t: t, oauth: fakes.NewOAuth(), ai: fakes.NewOpenRouter(), events: map[string][]any{}}
 	e.gmail = fakes.NewGmail("alice@gmail.example", e.oauth.Valid)
 	e.graph = fakes.NewGraph("bob@contoso.example", "Bob Builder", e.oauth.Valid)
-	t.Cleanup(func() { e.oauth.Close(); e.gmail.Close(); e.graph.Close(); e.ai.Close() })
+	e.gcal = fakes.NewGoogleCalendar("alice@gmail.example", e.oauth.Valid)
+	t.Cleanup(func() { e.oauth.Close(); e.gmail.Close(); e.graph.Close(); e.gcal.Close(); e.ai.Close() })
 
 	oldGoogle, oldMS := auth.GoogleEndpoint, auth.MicrosoftAuthority
 	auth.GoogleEndpoint = oauth2.Endpoint{AuthURL: e.oauth.URL() + "/google/auth", TokenURL: e.oauth.URL() + "/token", AuthStyle: oauth2.AuthStyleInParams}
@@ -88,7 +90,7 @@ func newE2E(t *testing.T) *e2e {
 	e.m = NewMailService(nil)
 	e.m.hooks = &testHooks{
 		options: func(o *core.Options) {
-			o.GmailBase, o.GraphBase, o.OpenRouterBase = e.gmail.URL(), e.graph.URL(), e.ai.URL()
+			o.GmailBase, o.GraphBase, o.OpenRouterBase, o.GoogleCalendarBase = e.gmail.URL(), e.graph.URL(), e.ai.URL(), e.gcal.URL()
 			o.Secrets = secrets.NewMemory()
 			o.Online = func(context.Context) bool { return true }
 		},

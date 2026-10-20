@@ -23,4 +23,12 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutDef[] }[] = [
       { keys: 'mod+enter', label: 'Send' }, { keys: 'mod+k', label: 'Insert link' }, { keys: '?', label: 'Show shortcuts' }, { keys: 'mod+,', label: 'Settings' },
     ],
   },
+  {
+    title: 'Calendar',
+    items: [
+      { keys: 'g c', label: 'Open calendar' }, { keys: 'g m', label: 'Back to mail' }, { keys: 'n', label: 'New event' }, { keys: 't', label: 'Today' },
+      { keys: 'd', label: 'Day view' }, { keys: 'w', label: 'Week view' }, { keys: 'm', label: 'Month view' }, { keys: 'a', label: 'Agenda' },
+      { keys: 'left', label: 'Previous period' }, { keys: 'right', label: 'Next period' },
+    ],
+  },
 ]

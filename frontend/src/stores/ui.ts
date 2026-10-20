@@ -1,8 +1,16 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 
-export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'labels' | 'ai' | 'about'
+export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'labels' | 'ai' | 'calendar' | 'about'
+
+function readMainView(): 'mail' | 'calendar' {
+  try {
+    return localStorage.getItem('gomail.mainView') === 'calendar' ? 'calendar' : 'mail'
+  } catch {
+    return 'mail'
+  }
+}
 
 export const useUiStore = defineStore('ui', () => {
   const settingsOpen = ref(false)
@@ -18,6 +26,17 @@ export const useUiStore = defineStore('ui', () => {
   const focusSearchTick = ref(0)
   /** Show the first-run welcome guide again (Settings → About, command palette). */
   const welcomeTick = ref(0)
+  /** Main area: mail (folders/list/reading pane) or the unified calendar. */
+  const mainView = ref<'mail' | 'calendar'>(readMainView())
+  watch(mainView, (v) => {
+    try {
+      localStorage.setItem('gomail.mainView', v)
+    } catch {
+      /* storage unavailable */
+    }
+  })
+  /** Palette "New event": the calendar view opens the editor once it is mounted. */
+  const newEventPending = ref(false)
 
   function openSettings(tab: SettingsTab = 'general') {
     settingsTab.value = tab
@@ -30,6 +49,6 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     settingsOpen, settingsTab, paletteOpen, shortcutsOpen, addAccountOpen, labelPopoverOpen, folderSidebarOpen, narrow, focusSearchTick,
-    welcomeTick, openSettings, anyDialogOpen,
+    welcomeTick, mainView, newEventPending, openSettings, anyDialogOpen,
   }
 })

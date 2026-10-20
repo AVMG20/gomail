@@ -23,6 +23,7 @@ import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
 const ReadingPane = defineAsyncComponent(() => import('@/components/mail/ReadingPane.vue'))
 const ComposeDock = defineAsyncComponent(() => import('@/components/compose/ComposeDock.vue'))
 const SettingsDialog = defineAsyncComponent(() => import('@/components/settings/SettingsDialog.vue'))
+const CalendarView = defineAsyncComponent(() => import('@/components/calendar/CalendarView.vue'))
 const CommandPalette = defineAsyncComponent(() => import('@/components/dialogs/CommandPalette.vue'))
 const AddAccountDialog = defineAsyncComponent(() => import('@/components/dialogs/AddAccountDialog.vue'))
 const ShortcutsDialog = defineAsyncComponent(() => import('@/components/dialogs/ShortcutsDialog.vue'))
@@ -97,11 +98,12 @@ watch(() => settings.settings?.zoom, (z) => z && void api.setZoom(z).catch(() =>
 watch(() => ui.narrow, (n) => (ui.folderSidebarOpen = !n), { immediate: true })
 
 const paneOff = computed(() => settings.settings?.readingPane === 'off')
+const showCalendar = computed(() => ui.mainView === 'calendar' && hasMethod('ListCalendars'))
 const accountColor = computed(() => mail.mailboxAccount?.color ?? 'var(--muted-foreground)')
 const toasterTheme = computed(() => (settings.settings?.theme === 'light' || settings.settings?.theme === 'dark' ? settings.settings.theme : 'system') as 'light' | 'dark' | 'system')
 
-watch(() => mail.mailboxName, (name) => {
-  document.title = name ? `${name} — gomail` : 'gomail'
+watch([() => mail.mailboxName, showCalendar], ([name, cal]) => {
+  document.title = cal ? 'Calendar — gomail' : name ? `${name} — gomail` : 'gomail'
 }, { immediate: true })
 </script>
 
@@ -126,6 +128,9 @@ watch(() => mail.mailboxName, (name) => {
       <Onboarding v-else-if="!accounts.accounts.length" />
 
       <template v-else>
+        <!-- The unified calendar (lazy chunk: FullCalendar never loads for mail-only use). -->
+        <ErrorBoundary v-if="showCalendar" name="calendar"><CalendarView /></ErrorBoundary>
+        <div v-show="!showCalendar" class="contents">
         <div
           v-if="ui.folderSidebarOpen"
           :class="ui.narrow ? 'absolute inset-y-0 left-14 z-30 w-60 shadow-2xl' : 'w-60 shrink-0'"
@@ -148,6 +153,7 @@ watch(() => mail.mailboxName, (name) => {
             <ErrorBoundary name="reading pane" :reset-key="mail.openId ?? ''"><ReadingPane /></ErrorBoundary>
           </ResizablePanel>
         </ResizablePanelGroup>
+        </div>
       </template>
     </div>
 

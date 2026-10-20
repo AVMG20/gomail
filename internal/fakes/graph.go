@@ -75,6 +75,9 @@ type Graph struct {
 
 	missingImmutable int
 	batches          int
+
+	calEvents  map[string]*CalEvent
+	calRemoved []string
 }
 
 // Stats returns the number of $batch calls and of requests (including
@@ -369,6 +372,9 @@ func timeFilter(list []*GraphMessage, filter string) []*GraphMessage {
 }
 
 func (g *Graph) route(w http.ResponseWriter, r *http.Request, p string, body map[string]any) {
+	if g.calendarRoute(w, r, p, body) {
+		return
+	}
 	q := r.URL.Query()
 	seg := strings.Split(p, "/")
 	get := r.Method == http.MethodGet

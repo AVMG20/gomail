@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, type Component } from 'vue'
-import { InfoIcon, PaletteIcon, SlidersHorizontalIcon, SparklesIcon, TagIcon, UsersIcon, XIcon, CheckIcon, LoaderIcon } from '@lucide/vue'
+import { CalendarDaysIcon, InfoIcon, PaletteIcon, SlidersHorizontalIcon, SparklesIcon, TagIcon, UsersIcon, XIcon, CheckIcon, LoaderIcon } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore, type SettingsTab } from '@/stores/ui'
@@ -8,6 +8,8 @@ import AboutTab from './AboutTab.vue'
 import AccountsTab from './AccountsTab.vue'
 import AiTab from './AiTab.vue'
 import AppearanceTab from './AppearanceTab.vue'
+import CalendarTab from './CalendarTab.vue'
+import { hasMethod } from '@/lib/api'
 import GeneralTab from './GeneralTab.vue'
 import LabelsTab from './LabelsTab.vue'
 import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
@@ -21,6 +23,7 @@ const tabs: { id: SettingsTab; label: string; icon: Component; comp: Component }
   { id: 'accounts', label: 'Accounts', icon: UsersIcon, comp: AccountsTab },
   { id: 'labels', label: 'Labels', icon: TagIcon, comp: LabelsTab },
   { id: 'ai', label: 'AI', icon: SparklesIcon, comp: AiTab },
+  ...(hasMethod('ListCalendars') ? [{ id: 'calendar' as SettingsTab, label: 'Calendar', icon: CalendarDaysIcon, comp: CalendarTab }] : []),
   { id: 'about', label: 'About', icon: InfoIcon, comp: AboutTab },
 ]
 const scrolled = ref(false)
