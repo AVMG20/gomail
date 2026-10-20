@@ -420,6 +420,43 @@ WHEN old.unread != new.unread
 END;
 UPDATE message_labels SET trashed = 1 WHERE trashed = 0 AND message_id IN (SELECT id FROM messages WHERE folder_kinds = 0);
 `,
+	// 14: covering list indexes. folder_kinds sits after the cached bodies
+	// in the row, so filtering on it read every body's overflow pages; with
+	// the filter columns in the index, list pages, counts and the
+	// latest-in-thread check only touch the rows they return. The old
+	// indexes are prefixes of the new ones.
+	`
+CREATE INDEX messages_list ON messages(date DESC, id DESC, folder_kinds, unread, starred, has_attachments, account_id, thread_id);
+CREATE INDEX messages_account_list ON messages(account_id, date DESC, id DESC, folder_kinds, unread, starred, has_attachments, thread_id);
+CREATE INDEX messages_thread_list ON messages(account_id, thread_key, date DESC, id DESC, folder_kinds, unread, starred, has_attachments);
+DROP INDEX IF EXISTS messages_date;
+DROP INDEX IF EXISTS messages_account_date;
+DROP INDEX IF EXISTS messages_thread_key;
+
+-- The emptied-counter cleanups scanned every thread of the folder (or of
+-- all folders) per membership change: look up just the affected row.
+DROP TRIGGER IF EXISTS folder_threads_remove;
+CREATE TRIGGER folder_threads_remove AFTER DELETE ON message_folders BEGIN
+	UPDATE folder_threads SET msgs = msgs - 1,
+		unread = unread - coalesce((SELECT m.unread FROM messages m WHERE m.id = old.message_id), 0)
+	WHERE folder_id = old.folder_id AND thread_key = (SELECT m.thread_key FROM messages m WHERE m.id = old.message_id);
+	DELETE FROM folder_threads WHERE folder_id = old.folder_id
+		AND thread_key = (SELECT m.thread_key FROM messages m WHERE m.id = old.message_id) AND msgs <= 0;
+END;
+DROP TRIGGER IF EXISTS folder_threads_rethread;
+CREATE TRIGGER folder_threads_rethread AFTER UPDATE OF thread_id ON messages WHEN old.thread_id != new.thread_id BEGIN
+	UPDATE folder_threads SET msgs = msgs - 1, unread = unread - old.unread
+	WHERE thread_key = (CASE WHEN old.thread_id = '' THEN old.id ELSE old.thread_id END)
+		AND folder_id IN (SELECT folder_id FROM message_folders WHERE message_id = new.id);
+	DELETE FROM folder_threads WHERE msgs <= 0 AND thread_key = (CASE WHEN old.thread_id = '' THEN old.id ELSE old.thread_id END)
+		AND folder_id IN (SELECT folder_id FROM message_folders WHERE message_id = new.id);
+	INSERT INTO folder_threads(folder_id, thread_key, msgs, unread)
+		SELECT mf.folder_id, new.thread_key, 1, new.unread FROM message_folders mf WHERE mf.message_id = new.id
+		ON CONFLICT(folder_id, thread_key) DO UPDATE SET msgs = msgs + 1, unread = unread + excluded.unread;
+END;
+-- (Defensive: conversation counts count rows, so no emptied counter may stay.)
+DELETE FROM folder_threads WHERE msgs <= 0;
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

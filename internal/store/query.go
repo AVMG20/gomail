@@ -133,7 +133,11 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 		ps := ParseSearch(q.Search)
 		s.addSearchFilters(w, ps)
 		if expr := ps.FTSQuery(); expr != "" {
-			w.add(`m.rid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)`, expr)
+			// "+" keeps the planner from fetching every match by rowid (each
+			// a row read, past cached bodies for folder_kinds): it walks a
+			// covering list index in date order and checks the matches
+			// instead, which bounds common words to one index scan.
+			w.add(`+m.rid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)`, expr)
 		}
 	}
 	return w, nil

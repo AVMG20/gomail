@@ -617,3 +617,30 @@ func TestMergeCancelDoneParent(t *testing.T) {
 		t.Fatal("first parent not propagated")
 	}
 }
+
+// TestQuietSyncSkipsMessagesChanged: a periodic sync that changes no mail
+// doesn't make the UI re-fetch its list.
+func TestQuietSyncSkipsMessagesChanged(t *testing.T) {
+	te := newTestEnv(t)
+	ctx := context.Background()
+	if err := te.e.SyncNow(ctx, demo.GmailAccountID); err != nil {
+		t.Fatal(err)
+	}
+	before := te.rec.count(models.EventMessagesChanged)
+	if err := te.e.SyncNow(ctx, demo.GmailAccountID); err != nil {
+		t.Fatal(err)
+	}
+	if n := te.rec.count(models.EventMessagesChanged) - before; n != 0 {
+		t.Fatalf("quiet sync emitted messages:changed %d times", n)
+	}
+	if te.rec.count(models.EventSyncFinished) < 2 {
+		t.Fatal("no sync:finished")
+	}
+	te.provs[demo.GmailAccountID].Deliver("Hello there", "friend@example.com")
+	if err := te.e.SyncNow(ctx, demo.GmailAccountID); err != nil {
+		t.Fatal(err)
+	}
+	if te.rec.count(models.EventMessagesChanged) == before {
+		t.Fatal("sync with new mail emitted no messages:changed")
+	}
+}

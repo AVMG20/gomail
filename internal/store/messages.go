@@ -80,6 +80,9 @@ func addrsJSON(a []models.Address) string {
 type ApplyResult struct {
 	// New lists local ids of messages that did not exist before.
 	New []string
+	// Changed reports whether the round changed any mail (rows, folders,
+	// labels), as opposed to only advancing the sync state.
+	Changed bool
 
 	newWords []string
 }
@@ -100,6 +103,14 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs map[string]string, keep map[string]bool) (ApplyResult, error) {
 	var res ApplyResult
 	err := s.tx(context.Background(), func(tx *sql.Tx) error {
+		// Row changes so far on this connection (unchanged upserts skip
+		// their update, so they don't count).
+		changes := func() int64 {
+			var n int64
+			_ = tx.QueryRow(`SELECT total_changes()`).Scan(&n)
+			return n
+		}
+		start := changes()
 		// Folder remote id -> local id (skipping "starred", which is
 		// computed from the flag).
 		folderIDs := map[string]string{}
@@ -148,7 +159,19 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 				unsub_mailto = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_mailto ELSE unsub_mailto END,
 				unsub_one_click = CASE WHEN excluded.unsub_url != '' OR excluded.unsub_mailto != '' THEN excluded.unsub_one_click ELSE unsub_one_click END,
 				folder_kinds = excluded.folder_kinds,
-				updated_at = excluded.updated_at`)
+				updated_at = excluded.updated_at
+			-- Most of a sync round is unchanged mail: skip rewriting those
+			-- rows (and their index entries).
+			WHERE thread_id IS NOT excluded.thread_id OR from_name IS NOT excluded.from_name OR from_email IS NOT excluded.from_email
+				OR to_json IS NOT excluded.to_json OR cc_json IS NOT excluded.cc_json OR bcc_json IS NOT excluded.bcc_json
+				OR reply_to_json IS NOT excluded.reply_to_json OR subject IS NOT excluded.subject OR snippet IS NOT excluded.snippet
+				OR date IS NOT excluded.date OR unread IS NOT excluded.unread OR starred IS NOT excluded.starred
+				OR has_attachments IS NOT excluded.has_attachments OR folder_kinds IS NOT excluded.folder_kinds
+				OR (excluded.message_id_hdr != '' AND message_id_hdr IS NOT excluded.message_id_hdr)
+				OR (excluded.in_reply_to != '' AND in_reply_to IS NOT excluded.in_reply_to)
+				OR (excluded.refs != '' AND refs IS NOT excluded.refs)
+				OR ((excluded.unsub_url != '' OR excluded.unsub_mailto != '') AND (unsub_url IS NOT excluded.unsub_url
+					OR unsub_mailto IS NOT excluded.unsub_mailto OR unsub_one_click IS NOT excluded.unsub_one_click))`)
 		if err != nil {
 			return err
 		}
@@ -344,11 +367,15 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 		// A full listing of a folder (from a date on) also tells which
 		// cached messages left it while we couldn't follow changes (e.g.
 		// expired history after a long time offline).
+		res.Changed = changes() > start
+		// (reconcileComplete also saves cursors: count only what it moved.)
 		left, err := reconcileComplete(tx, accountID, r, folderIDs, kinds, keep)
 		if err != nil {
 			return err
 		}
+		res.Changed = res.Changed || len(left) > 0
 		touched = append(touched, left...)
+		before := changes()
 		for _, chunk := range chunks(touched, 400) {
 			if err := keepOrphanMarks(tx, chunk); err != nil {
 				return err
@@ -369,16 +396,21 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 			}
 			res.New = kept
 		}
+		res.Changed = res.Changed || changes() > before
 		if err := saveSyncState(tx, accountID, r.State); err != nil {
 			return err
 		}
 		// Label marks restored from a backup, waiting for these messages.
-		if _, err := applyPendingLabels(tx, accountID, now); err != nil {
+		if n, err := applyPendingLabels(tx, accountID, now); err != nil {
 			return err
+		} else if n > 0 {
+			res.Changed = true
 		}
+		before = changes()
 		if err := refreshJunk(tx, touched, now); err != nil {
 			return err
 		}
+		res.Changed = res.Changed || changes() > before
 		if err := recountStarred(tx, accountID); err != nil {
 			return err
 		}
@@ -1202,8 +1234,11 @@ func (s *Store) ViewLabelCounts(q models.ListQuery) ([]models.LabelCount, error)
 		w.add(`ml.trashed = 0`)
 	}
 	w.add(`1` + s.labelCond()) // labelCond starts with " AND"
+	// CROSS JOIN keeps messages outer: the box's messages come from a
+	// covering list index; label-first read every labeled message's row
+	// (past its cached body) to test the box.
 	rows, err := s.db.Query(`SELECT ml.label_id, count(*), coalesce(sum(ml.unread), 0)
-		FROM message_labels ml JOIN messages m ON m.id = ml.message_id`+w.sql()+` GROUP BY ml.label_id ORDER BY ml.label_id`, w.args...)
+		FROM messages m CROSS JOIN message_labels ml ON ml.message_id = m.id`+w.sql()+` GROUP BY ml.label_id ORDER BY ml.label_id`, w.args...)
 	if err != nil {
 		return nil, err
 	}
