@@ -38,9 +38,28 @@ export const useUiStore = defineStore('ui', () => {
   /** Palette "New event": the calendar view opens the editor once it is mounted. */
   const newEventPending = ref(false)
 
+  /** Settings → Accounts: the account (and field) to focus when it opens (rail menu Rename / Change color). */
+  const focusAccount = ref<{ id: string; field: 'name' | 'color' | 'remove' } | null>(null)
+
   function openSettings(tab: SettingsTab = 'general') {
     settingsTab.value = tab
     settingsOpen.value = true
+  }
+
+  // ---- keyboard guard after a compose window steps away
+  let guardUntil = 0
+  let tickUntil = 0
+  /** A compose window just closed or minimised: single-key shortcuts must not act on the
+   *  open mail by accident (the same key press, or Backspace/Delete right after). */
+  function guardKeys(ms = 1500) {
+    const now = Date.now()
+    guardUntil = now + ms
+    tickUntil = now + 100
+  }
+  function keyGuarded(key: string): boolean {
+    const now = Date.now()
+    if (now < tickUntil) return true
+    return now < guardUntil && (key === 'Backspace' || key === 'Delete' || key === '#')
   }
 
   function anyDialogOpen(): boolean {
@@ -49,6 +68,6 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     settingsOpen, settingsTab, paletteOpen, shortcutsOpen, addAccountOpen, labelPopoverOpen, folderSidebarOpen, narrow, focusSearchTick,
-    welcomeTick, mainView, newEventPending, openSettings, anyDialogOpen,
+    welcomeTick, mainView, newEventPending, openSettings, anyDialogOpen, focusAccount, guardKeys, keyGuarded,
   }
 })

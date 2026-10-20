@@ -93,11 +93,20 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 	} else if q.FolderKind != "" {
 		addKindFilter(w, []string{q.FolderKind})
 	}
-	if len(q.Labels) > 0 {
-		w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (`+placeholders(len(q.Labels))+`)`+s.labelCond()+`)`, anySlice(q.Labels)...)
+	// The label filter: any of the chosen labels, or "No label" (q.Unlabeled), OR-combined
+	// like the filter popover. OnlyUnlabeled (bulk AI labeling) always restricts.
+	hasLabel := `EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (` + placeholders(len(q.Labels)) + `)` + s.labelCond() + `)`
+	noLabel := `NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id` + s.labelCond() + `)`
+	switch {
+	case len(q.Labels) > 0 && q.Unlabeled:
+		w.add(`(`+hasLabel+` OR `+noLabel+`)`, anySlice(q.Labels)...)
+	case len(q.Labels) > 0:
+		w.add(hasLabel, anySlice(q.Labels)...)
+	case q.Unlabeled:
+		w.add(noLabel)
 	}
-	if q.Unlabeled || opt.OnlyUnlabeled {
-		w.add(`NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id` + s.labelCond() + `)`)
+	if opt.OnlyUnlabeled {
+		w.add(noLabel)
 	}
 	if q.UnreadOnly {
 		w.add(`m.unread = 1`)

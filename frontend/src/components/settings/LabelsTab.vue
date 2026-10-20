@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { ArrowDownIcon, ArrowUpIcon, DownloadIcon, PlusIcon, SparklesIcon, Trash2Icon, UploadIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { api } from '@/lib/api'
@@ -8,6 +8,10 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { LABEL_COLORS } from '@/lib/color'
 import { buildLabelExport, MAX_IMPORT_BYTES, mergeLabelImport } from '@/lib/labelsIO'
@@ -32,12 +36,51 @@ function patch(id: string, p: Partial<Label>) {
 }
 function add() {
   const id = `lbl_${Date.now().toString(36)}`
-  const color = LABEL_COLORS[userLabels.value.length % LABEL_COLORS.length]
+  // A color no label uses yet, when there is one.
+  const used = new Set(settings.labels.map((l) => l.color.toLowerCase()))
+  const color = LABEL_COLORS.find((c) => !used.has(c.toLowerCase())) ?? LABEL_COLORS[userLabels.value.length % LABEL_COLORS.length]
   justAdded.value = id
   setLabels([...settings.labels, { id, name: 'New label', description: '', color, source: 'user' }])
+  void nextTick(() => {
+    const el = document.querySelector<HTMLInputElement>(`[data-label-name="${id}"]`)
+    el?.focus()
+    el?.select()
+  })
 }
-function remove(id: string) {
-  setLabels(settings.labels.filter((l) => l.id !== id))
+
+/** Names must not be empty, and two labels with the same name would be indistinguishable. */
+function onNameBlur(l: Label) {
+  const name = l.name.trim()
+  if (!name) return patch(l.id, { name: 'Untitled label' })
+  const taken = settings.labels.some((x) => x.id !== l.id && x.name.trim().toLowerCase() === name.toLowerCase())
+  if (taken) {
+    let n = 2
+    while (settings.labels.some((x) => x.name.trim().toLowerCase() === `${name} ${n}`.toLowerCase())) n++
+    patch(l.id, { name: `${name} ${n}` })
+    toast(`You already have a label called “${name}”`, { description: `This one was renamed to “${name} ${n}”.` })
+  } else if (name !== l.name) patch(l.id, { name })
+}
+
+// Deleting a label removes it from every message: confirm, with how many it affects.
+const confirmDelete = ref(false)
+const deleting = ref<{ label: Label; count: number | null } | null>(null)
+let deleteId = ''
+async function askRemove(l: Label) {
+  deleteId = l.id
+  deleting.value = { label: l, count: null }
+  confirmDelete.value = true
+  try {
+    const counts = await api.getLabelCounts('')
+    if (deleting.value?.label.id === l.id) deleting.value = { label: l, count: counts.find((c) => c.labelId === l.id)?.total ?? 0 }
+  } catch {
+    /* the dialog works without a count */
+  }
+}
+function remove() {
+  // Read the id kept aside: the dialog's own close clears the reactive state first.
+  const id = deleteId
+  deleteId = ''
+  if (id) setLabels(settings.labels.filter((l) => l.id !== id))
 }
 function move(id: string, delta: number) {
   const list = [...settings.labels]
@@ -126,14 +169,14 @@ function labelAll() {
         </Popover>
         <div class="min-w-0 flex-1 space-y-1.5">
           <div class="flex items-center gap-2">
-            <Input :model-value="l.name" class="h-8 max-w-56 text-[13px] font-medium" aria-label="Label name" :autofocus="justAdded === l.id" @update:model-value="(v) => patch(l.id, { name: String(v) })" />
+            <Input :model-value="l.name" class="h-8 max-w-56 text-[13px] font-medium" aria-label="Label name" :data-label-name="l.id" @update:model-value="(v) => patch(l.id, { name: String(v) })" @blur="onNameBlur(l)" />
           </div>
           <Textarea :model-value="l.description" rows="1" :aria-label="`Description for ${l.name}`" placeholder="When should this label apply? e.g. “Invoices, receipts and bank statements”" class="min-h-8 resize-none py-1.5 text-xs" @update:model-value="(v) => patch(l.id, { description: String(v) })" />
         </div>
         <div class="flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           <Button variant="ghost" size="icon-xs" aria-label="Move up" :disabled="i === 0" @click="move(l.id, -1)"><ArrowUpIcon /></Button>
           <Button variant="ghost" size="icon-xs" aria-label="Move down" :disabled="i === userLabels.length - 1" @click="move(l.id, 1)"><ArrowDownIcon /></Button>
-          <Button variant="ghost" size="icon-xs" class="hover:text-destructive" aria-label="Delete label" @click="remove(l.id)"><Trash2Icon /></Button>
+          <Button variant="ghost" size="icon-xs" class="hover:text-destructive" aria-label="Delete label" @click="askRemove(l)"><Trash2Icon /></Button>
         </div>
       </div>
       <div class="flex flex-wrap items-center gap-2 py-3">
@@ -170,5 +213,22 @@ function labelAll() {
       </div>
       <p v-if="s.importProviderLabels && !providerLabels.length" class="text-muted-foreground py-3 text-xs">No labels imported yet.</p>
     </SettingSection>
+
+    <AlertDialog v-model:open="confirmDelete">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete the label “{{ deleting?.label.name }}”?</AlertDialogTitle>
+          <AlertDialogDescription>
+            <template v-if="deleting?.count">It’s removed from {{ deleting.count.toLocaleString() }} message{{ deleting.count === 1 ? '' : 's' }}. </template>
+            <template v-else-if="deleting?.count === 0">No messages have this label. </template>
+            This can’t be undone. Labels in Gmail or Outlook aren’t changed.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction class="bg-destructive text-white hover:bg-destructive/90" @click="remove">Delete label</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>

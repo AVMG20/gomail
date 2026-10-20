@@ -8,6 +8,7 @@ import { uid } from '@/lib/platform'
 import type { Address, ComposeMode, Message } from '@/lib/types'
 import { useAccountsStore } from './accounts'
 import { useMailStore } from './mail'
+import { useUiStore } from './ui'
 
 export interface DraftAttachment {
   id: string
@@ -45,6 +46,8 @@ export interface Draft {
   interrupted?: boolean
   /** Forward: the original's files, which the server attaches itself (shown read-only). */
   forwarded?: { filename: string; size: number }[]
+  /** Reply/forward as prefilled (quoted text, recipients): closing it unchanged saves nothing. */
+  pristine?: string
   /** Restored after a restart: the files' bytes are still being read back from IndexedDB. */
   filesPending?: boolean
   /** Restored after a restart: files whose bytes couldn't be read back (they must be re-added). */
@@ -52,6 +55,8 @@ export interface Draft {
 }
 
 const DRAFTS_KEY = 'gomail.drafts.v1'
+/** The backend refuses more than this in attachments (core.maxAttachmentBytes). */
+export const MAX_ATTACH_BYTES = 25 * 1024 * 1024
 
 function loadDrafts(): Draft[] {
   try {
@@ -72,8 +77,14 @@ function loadDrafts(): Draft[] {
   }
 }
 
-/** Recipients, subject, attachments or typed body text (the auto-inserted signature doesn't count). */
-export function draftHasContent(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' | 'html' | 'attachments'>): boolean {
+function contentSig(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' | 'html' | 'attachments'>): string {
+  return JSON.stringify([d.to, d.cc, d.bcc, d.subject, d.html, d.attachments?.length ?? 0])
+}
+
+/** Recipients, subject, attachments or typed body text (the auto-inserted signature doesn't count).
+ *  A reply or forward the user hasn't changed has nothing of their own in it. */
+export function draftHasContent(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' | 'html' | 'attachments'> & { pristine?: string }): boolean {
+  if (d.pristine !== undefined && d.pristine === contentSig(d)) return false
   return !!(d.to?.length || d.cc?.length || d.bcc?.length || d.subject?.trim() || d.attachments?.length || htmlHasText(d.html ?? '', true))
 }
 
@@ -249,10 +260,12 @@ export const useComposeStore = defineStore('compose', () => {
     const html = `<p></p>${signatureBlock(sig)}<p></p>${header}<blockquote>${await quotedBody(m)}</blockquote>`
     // Forwards carry the original's files (attached by the backend), minus images embedded by Content-ID.
     const forwarded = mode === 'forward' ? (m.attachments ?? []).filter((a) => !(a.inline && a.contentId)).map((a) => ({ filename: a.filename, size: a.size })) : undefined
-    return create({
+    const d = create({
       mode, accountId: m.accountId, to, cc, showCc: cc.length > 0,
       subject: prefixSubject(mode === 'forward' ? 'Fwd' : 'Re', m.subject), html, replyToId: m.id, forwarded,
     })
+    d.pristine = contentSig(d)
+    return d
   }
 
   /** Continue editing a draft from the Drafts folder. Its files are loaded first: the next
@@ -283,6 +296,29 @@ export const useComposeStore = defineStore('compose', () => {
     drafts.value = drafts.value.filter((d) => d.id !== id)
     storedFiles.delete(id)
     void deleteDraftFiles(id)
+    afterStepAway()
+  }
+
+  /** Minimise a compose window (Esc, the minimise button). */
+  function minimize(id: string) {
+    const d = drafts.value.find((x) => x.id === id)
+    if (!d || d.minimized) return
+    d.minimized = true
+    afterStepAway(id)
+  }
+
+  /** A compose window closed or was minimised: focus must not fall to the page body, where
+   *  single-key shortcuts act on the open mail (Backspace would trash it). Focus goes to the
+   *  minimised tab (no shortcuts there) or the message list, and shortcuts pause briefly. */
+  function afterStepAway(id?: string) {
+    if (typeof document === 'undefined') return
+    useUiStore().guardKeys()
+    setTimeout(() => {
+      const active = document.activeElement
+      if (active && active !== document.body && document.contains(active)) return
+      const tab = id ? document.querySelector<HTMLElement>(`[data-dock-tab="${id}"]`) : null
+      ;(tab ?? document.querySelector<HTMLElement>('[role="listbox"]'))?.focus({ preventScroll: true })
+    }, 0)
   }
 
   /** After a restart: read the drafts' attachment bytes back. Files that can't be found are
@@ -355,8 +391,10 @@ export const useComposeStore = defineStore('compose', () => {
       void useMailStore().softRefresh()
       return true
     } catch (e) {
-      toast.error('Couldn’t save the draft', { description: errorMessage(e) })
-      return false
+      // Keep the window open: offering "Discard?" here would lose the message.
+      toast.error('Couldn’t save the draft', { description: `${errorMessage(e)} The message is still open, so nothing is lost.` })
+      d.minimized = false
+      return true
     }
   }
 
@@ -434,6 +472,11 @@ export const useComposeStore = defineStore('compose', () => {
       toast.error(`Check ${invalid.length === 1 ? 'this address' : 'these addresses'}: ${invalid.map((a) => a.email).join(', ')}`)
       return
     }
+    const bytes = d.attachments.reduce((n, a) => n + (a.size || 0), 0)
+    if (bytes > MAX_ATTACH_BYTES) {
+      toast.error('Attachments are larger than 25 MB', { description: 'Remove some files or share them with a link instead.' })
+      return
+    }
     // Never send without files the user attached.
     if (d.filesPending) {
       toast('Attachments are still loading', { description: 'Try again in a moment.' })
@@ -492,5 +535,5 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  return { drafts, compose, composeWith, respond, editDraft, close, discard, saveAndClose, focus, send, undoSend, resolveMissing, restoreFiles }
+  return { drafts, compose, composeWith, respond, editDraft, close, minimize, discard, saveAndClose, focus, send, undoSend, resolveMissing, restoreFiles }
 })

@@ -55,14 +55,15 @@ function onKey(e: KeyboardEvent) {
     sendNow()
   } else if (e.key === 'Escape') {
     e.stopPropagation()
-    d.value.minimized = true
+    e.preventDefault()
+    compose.minimize(d.value.id)
   }
 }
 
 async function onFiles(e: Event) {
   const files = Array.from((e.target as HTMLInputElement).files ?? [])
   for (const f of files) {
-    if (totalSize.value + f.size > LIMIT) toast.warning(`Attachments now exceed 25 MB`, { description: 'Most providers reject messages larger than 25 MB.' })
+    if (totalSize.value + f.size > LIMIT) toast.warning('Attachments now exceed 25 MB', { description: 'The message can’t be sent like this: remove a file or share it with a link.' })
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const r = new FileReader()
       r.onload = () => resolve(String(r.result))
@@ -181,7 +182,7 @@ watch(() => d.value.accountId, (id, prev) => {
     <!-- Title bar -->
     <div class="bg-muted/60 border-border flex h-10 shrink-0 cursor-default items-center gap-1 border-b pr-1.5 pl-4" @dblclick="d.expanded = !d.expanded">
       <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{{ title }}</span>
-      <Tip label="Minimize"><Button variant="ghost" size="icon-xs" aria-label="Minimize" @click="d.minimized = true"><MinusIcon /></Button></Tip>
+      <Tip label="Minimize"><Button variant="ghost" size="icon-xs" aria-label="Minimize" @click="compose.minimize(d.id)"><MinusIcon /></Button></Tip>
       <Tip :label="d.expanded ? 'Exit full size' : 'Full size'">
         <Button variant="ghost" size="icon-xs" :aria-label="d.expanded ? 'Exit full size' : 'Full size'" @click="d.expanded = !d.expanded">
           <Minimize2Icon v-if="d.expanded" /><Maximize2Icon v-else />

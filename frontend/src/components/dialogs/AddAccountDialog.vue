@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { LoaderIcon, SettingsIcon, ShieldCheckIcon, TriangleAlertIcon } from '@lucide/vue'
+import { ExternalLinkIcon, LoaderIcon, SettingsIcon, ShieldCheckIcon, TriangleAlertIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -14,7 +14,9 @@ const ui = useUiStore()
 const accounts = useAccountsStore()
 const mail = useMailStore()
 
+const SETUP_GUIDE = 'https://github.com/AVMG20/gomail/blob/main/docs/BACKEND.md'
 const pending = ref<'' | 'gmail' | 'outlook'>('')
+const failedProvider = ref<'gmail' | 'outlook'>('gmail')
 const error = ref('')
 const needsConfig = ref(false)
 
@@ -29,6 +31,7 @@ async function connect(provider: 'gmail' | 'outlook') {
   pending.value = provider
   error.value = ''
   needsConfig.value = false
+  failedProvider.value = provider
   try {
     const acc = await api.addAccount(provider)
     await accounts.load()
@@ -39,7 +42,7 @@ async function connect(provider: 'gmail' | 'outlook') {
     const msg = errorMessage(e)
     if (/cancel/i.test(msg)) return
     error.value = msg
-    needsConfig.value = /client.?id|not configured|oauth/i.test(msg)
+    needsConfig.value = /one-time setup|client.?id|not configured|oauth/i.test(msg)
   } finally {
     pending.value = ''
   }
@@ -86,12 +89,22 @@ function openOAuthSettings() {
           <span class="flex-1"><span class="block text-sm font-medium">Connect Outlook</span><span class="text-muted-foreground text-xs">Microsoft 365, Outlook.com, Hotmail</span></span>
         </button>
 
-        <div v-if="error" class="bg-destructive/5 border-destructive/20 mt-1 rounded-lg border px-3 py-2.5 text-xs">
-          <p class="text-destructive flex items-start gap-2 font-medium"><TriangleAlertIcon class="mt-px size-3.5 shrink-0" /> {{ error }}</p>
-          <div v-if="needsConfig" class="text-muted-foreground mt-2 pl-5.5">
-            <p>To connect this provider, add your OAuth client ID first.</p>
-            <Button variant="outline" size="xs" class="mt-2" @click="openOAuthSettings"><SettingsIcon /> Open Settings → Accounts</Button>
+        <!-- No sign-in client yet: explain the one-time setup in plain words. -->
+        <div v-if="error && needsConfig" class="bg-muted/60 mt-1 rounded-lg px-3.5 py-3 text-xs leading-relaxed">
+          <p class="text-foreground text-[13px] font-medium">Signing in with {{ failedProvider === 'gmail' ? 'Google' : 'Microsoft' }} needs a one-time setup</p>
+          <ol class="text-muted-foreground mt-1.5 list-decimal space-y-0.5 pl-4">
+            <li>Create a free sign-in client in the {{ failedProvider === 'gmail' ? 'Google Cloud Console' : 'Microsoft Entra admin center' }} (about 5 minutes).</li>
+            <li>Paste its client ID in Settings → Accounts.</li>
+            <li>Come back here and connect.</li>
+          </ol>
+          <p class="text-muted-foreground mt-1.5">Official gomail release builds come with this already set up.</p>
+          <div class="mt-2.5 flex flex-wrap gap-2">
+            <Button size="xs" @click="api.openExternal(SETUP_GUIDE)"><ExternalLinkIcon /> Open setup guide</Button>
+            <Button variant="outline" size="xs" @click="openOAuthSettings"><SettingsIcon /> Settings → Accounts</Button>
           </div>
+        </div>
+        <div v-else-if="error" class="bg-destructive/5 border-destructive/20 mt-1 rounded-lg border px-3 py-2.5 text-xs">
+          <p class="text-destructive flex items-start gap-2 font-medium"><TriangleAlertIcon class="mt-px size-3.5 shrink-0" /> {{ error }}</p>
         </div>
         <p class="text-muted-foreground mt-1 flex items-center gap-1.5 text-[11px]"><ShieldCheckIcon class="size-3.5" /> Tokens are stored in your system keychain.</p>
       </div>

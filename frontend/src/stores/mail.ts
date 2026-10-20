@@ -24,8 +24,19 @@ const PAGE = 60
 const MAX_PAGE = 200
 /** softRefresh re-fetches at most this many loaded rows. */
 const REFRESH_MAX = 1000
-/** The backend's cap on messages per bulk action (syncer.MaxBulk). */
-export const MAX_BULK = 5000
+/** The backend resolves at most this many ids for "select all" (core.MaxResolveIDs). */
+export const MAX_RESOLVE = 100_000
+/** Ids per backend action call: the backend takes 5000 messages per action (syncer.MaxBulk),
+ *  and a conversation id can stand for several messages. */
+export const ACTION_CHUNK = 1000
+
+/** Run a backend action over ids in chunks, so "select all N" acts on all N. */
+export async function inChunks(ids: string[], fn: (chunk: string[]) => Promise<unknown>): Promise<void> {
+  for (let i = 0; i < ids.length; i += ACTION_CHUNK) await fn(ids.slice(i, i + ACTION_CHUNK))
+}
+
+/** An auto-advanced message (after archive/delete) counts as read after this dwell. */
+const AUTO_ADVANCE_DWELL_MS = 2500
 const FILTERS_KEY = 'gomail.labelFilters.v1'
 const MAILBOX_KEY = 'gomail.mailbox.v1'
 const LAST_BY_ACCOUNT_KEY = 'gomail.lastMailbox.v1'
@@ -372,14 +383,18 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   /** Open a message; marks it read per Settings → General (immediately / after 2 s / manually). */
-  function open(id: string | null) {
+  /** Open a message. `auto`: opened for the user after archiving/deleting the previous one;
+   *  it only counts as read once they stay on it for a moment (triaging with e/# must not mark
+   *  everything it passes as read). */
+  function open(id: string | null, opts: { auto?: boolean } = {}) {
     openId.value = id
     if (readTimer) clearTimeout(readTimer)
     readTimer = null
     if (!id) return
     const mode = settings.settings?.markReadMode ?? 'immediate'
-    if (mode === 'immediate') markOpenedRead(id)
-    else if (mode === 'delay') readTimer = setTimeout(() => openId.value === id && markOpenedRead(id), 2000)
+    if (mode === 'manual') return
+    if (mode === 'immediate' && !opts.auto) markOpenedRead(id)
+    else readTimer = setTimeout(() => openId.value === id && markOpenedRead(id), opts.auto ? AUTO_ADVANCE_DWELL_MS : 2000)
   }
 
   function move(delta: number) {
@@ -405,9 +420,11 @@ export const useMailStore = defineStore('mail', () => {
       const a = indexById.value.get(anchorId.value)!
       const b = indexById.value.get(id) ?? a
       const [lo, hi] = a < b ? [a, b] : [b, a]
-      const on = !selection.value.has(id) || true
+      // The range takes the clicked row's new state: shift-click a selected row to deselect a range.
+      const on = !selection.value.has(id)
       for (let i = lo; i <= hi; i++) {
         if (on) next.add(messages.value[i].id)
+        else next.delete(messages.value[i].id)
       }
     } else if (next.has(id)) next.delete(id)
     else next.add(id)
@@ -420,12 +437,11 @@ export const useMailStore = defineStore('mail', () => {
     selectAllQuery.value = false
   }
 
-  /** All ids in the current view (for "mark all as read" fallbacks), at most MAX_BULK. */
+  /** All ids in the current view (select all, "mark all as read"). */
   async function targetIdsForQuery(): Promise<string[]> {
-    const ids = await api.resolveQueryIds({ ...query.value, cursor: '' }, MAX_BULK)
-    if (ids.length >= MAX_BULK) {
-      // The backend acts on at most MAX_BULK messages at once: say so instead of silently stopping there.
-      toast.warning(`Only the newest ${MAX_BULK.toLocaleString()} messages are included`, { description: 'Repeat the action for the rest.' })
+    const ids = await api.resolveQueryIds({ ...query.value, cursor: '' }, MAX_RESOLVE)
+    if (ids.length >= MAX_RESOLVE) {
+      toast.warning(`Only the newest ${MAX_RESOLVE.toLocaleString()} messages are included`, { description: 'Repeat the action for the rest.' })
     }
     return ids
   }
@@ -472,7 +488,7 @@ export const useMailStore = defineStore('mail', () => {
       const idx = indexById.value.get(openId.value) ?? -1
       const after = list.slice(idx + 1).find((m) => !set.has(m.id)) ?? list.slice(0, idx).reverse().find((m) => !set.has(m.id))
       // Through open() so the next message is marked read per Settings, like opening it by hand.
-      queueMicrotask(() => open(after?.id ?? null))
+      queueMicrotask(() => open(after?.id ?? null, { auto: true }))
       openId.value = after?.id ?? null
     }
     messages.value = list.filter((m) => !set.has(m.id))
@@ -505,10 +521,12 @@ export const useMailStore = defineStore('mail', () => {
     return (own.find((f) => !['archive', 'trash', 'spam', 'starred'].includes(f!.kind)) ?? own[0])?.id ?? accounts.folderOf(m.accountId, 'inbox')?.id
   }
 
-  /** Undo of archive/trash: put the messages back where they were, then refresh. */
-  function undoMove(items: MessageSummary[]) {
+  /** Undo of archive/trash/move: put the messages back where they were, then refresh.
+   *  `others`: ids beyond the loaded rows ("select all"); they go back to the folder shown. */
+  function undoMove(items: MessageSummary[], others: string[] = []) {
     const key = mailboxKey(mailbox.value)
     const origins = new Map(items.map((m) => [m.id, originFolder(m)] as const))
+    const shownFolder = mailbox.value.folderId
     return async () => {
       // Rows only come back if the same list is still shown.
       if (mailboxKey(mailbox.value) === key) restoreLocal(items)
@@ -518,7 +536,8 @@ export const useMailStore = defineStore('mail', () => {
         if (!f) continue
         groups.set(f, [...(groups.get(f) ?? []), m.conversationId || m.id])
       }
-      await Promise.all([...groups].map(([f, ids]) => api.moveToFolder(ids, f))).catch((e) => toast.error('Undo failed', { description: errorMessage(e) }))
+      if (shownFolder && others.length) groups.set(shownFolder, [...(groups.get(shownFolder) ?? []), ...others])
+      await Promise.all([...groups].map(([f, ids]) => inChunks(ids, (c) => api.moveToFolder(c, f)))).catch((e) => toast.error('Undo failed', { description: errorMessage(e) }))
       void softRefresh()
     }
   }
@@ -531,11 +550,11 @@ export const useMailStore = defineStore('mail', () => {
     if (!ids.length) return
     const backendIds = actionIds(ids) // before the rows leave the list
     const items = snapshot(ids)
-    const undo = undoMove(items)
+    const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
     const removes = mailbox.value.kind !== 'archive'
     if (removes) removeLocal(ids)
     try {
-      await api.archive(backendIds)
+      await inChunks(backendIds, api.archive)
       announce(`${plural(ids.length, 'conversation')} archived`)
       toast(`${ids.length === 1 ? 'Conversation' : plural(ids.length, 'conversation')} archived`, {
         action: { label: 'Undo', onClick: undo },
@@ -555,10 +574,10 @@ export const useMailStore = defineStore('mail', () => {
     }
     const backendIds = actionIds(ids) // before the rows leave the list
     const items = snapshot(ids)
-    const undo = undoMove(items)
+    const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
     removeLocal(ids)
     try {
-      await api.trash(backendIds)
+      await inChunks(backendIds, api.trash)
       announce(`${plural(ids.length, 'conversation')} moved to Trash`)
       toast(`${ids.length === 1 ? 'Moved' : plural(ids.length, 'message') + ' moved'} to Trash`, {
         action: { label: 'Undo', onClick: undo },
@@ -570,12 +589,30 @@ export const useMailStore = defineStore('mail', () => {
     accounts.refreshCounts()
   }
 
+  /** Move to a folder of the messages' account, with Undo. */
+  async function moveToFolder(ids: string[], folderId: string) {
+    if (!ids.length) return
+    const backendIds = actionIds(ids)
+    const items = snapshot(ids)
+    const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
+    const name = accounts.folderMap.get(folderId)?.name ?? 'folder'
+    removeLocal(ids)
+    try {
+      await inChunks(backendIds, (c) => api.moveToFolder(c, folderId))
+      toast(`Moved to ${name}`, { action: { label: 'Undo', onClick: undo } })
+    } catch (e) {
+      toast.error('Move failed', { description: errorMessage(e) })
+      void softRefresh()
+    }
+    accounts.refreshCounts()
+  }
+
   async function setRead(ids: string[], read: boolean) {
     if (!ids.length) return
     const before = snapshot(ids).map((m) => [m.id, m.unread] as const)
     patchLocal(ids, { unread: !read })
     try {
-      await api.markRead(actionIds(ids), read)
+      await inChunks(actionIds(ids), (c) => api.markRead(c, read))
       if (ids.length > 1 || !openId.value || ids[0] !== openId.value) announce(`${plural(ids.length, 'message')} marked as ${read ? 'read' : 'unread'}`)
     } catch (e) {
       for (const [id, unread] of before) patchLocal([id], { unread })
@@ -589,7 +626,7 @@ export const useMailStore = defineStore('mail', () => {
     const before = snapshot(ids).map((m) => [m.id, m.starred] as const)
     patchLocal(ids, { starred })
     try {
-      await api.setStarred(actionIds(ids), starred)
+      await inChunks(actionIds(ids), (c) => api.setStarred(c, starred))
       announce(`${plural(ids.length, 'message')} ${starred ? 'starred' : 'unstarred'}`)
       if (mailbox.value.kind === 'starred' && !starred) removeLocal(ids)
     } catch (e) {
@@ -605,7 +642,7 @@ export const useMailStore = defineStore('mail', () => {
       labelDetails: [...(m.labelDetails ?? []).filter((d) => d.labelId !== labelId), { labelId, source: 'manual', confidence: 1 }],
     }))
     try {
-      await api.addLabel(actionIds(ids), labelId)
+      await inChunks(actionIds(ids), (c) => api.addLabel(c, labelId))
       if (!quiet && ids.length > 1) toast(`Label “${settings.labelMap.get(labelId)?.name ?? labelId}” added to ${plural(ids.length, 'message')}`)
     } catch (e) {
       toast.error('Could not add label', { description: errorMessage(e) })
@@ -621,7 +658,7 @@ export const useMailStore = defineStore('mail', () => {
       labelDetails: (m.labelDetails ?? []).filter((d) => d.labelId !== labelId),
     }))
     try {
-      await api.removeLabel(actionIds(ids), labelId)
+      await inChunks(actionIds(ids), (c) => api.removeLabel(c, labelId))
       if (!quiet && ids.length > 1) toast(`Label removed from ${plural(ids.length, 'message')}`)
     } catch (e) {
       toast.error('Could not remove label', { description: errorMessage(e) })
@@ -676,7 +713,7 @@ export const useMailStore = defineStore('mail', () => {
     labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleUnlabeledFilter, clearLabelFilter,
-    actionIds, open, move, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
+    actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     archive, trash, setRead, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
   }
 })

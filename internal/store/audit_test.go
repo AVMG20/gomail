@@ -249,3 +249,37 @@ func TestMigrateFromV8(t *testing.T) {
 		t.Fatalf("label_rejections missing: %v", err)
 	}
 }
+
+// "No label" combined with labels means either (like the filter popover).
+func TestUnlabeledOrLabels(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	ms := []mail.Message{threadMsg("A", "T1", 1, "Ann", "INBOX"), threadMsg("B", "T2", 2, "Bob", "INBOX"), threadMsg("C", "T3", 3, "Cid", "INBOX")}
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: ms}, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.AddLabels([]string{MessageID("a1", "A")}, "work")
+	_ = s.AddLabels([]string{MessageID("a1", "C")}, "personal")
+	inbox, _ := s.FolderByKind("a1", models.FolderInbox)
+	got := func(q models.ListQuery) string {
+		q.FolderID = inbox.ID
+		p, err := s.ListMessages(q, ListOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, m := range p.Messages {
+			ids = append(ids, m.RemoteID)
+		}
+		return fmt.Sprint(ids, p.Total)
+	}
+	if g := got(models.ListQuery{Labels: []string{"work"}, Unlabeled: true}); g != "[B A] 2" {
+		t.Fatalf("work or unlabeled: %s", g)
+	}
+	if g := got(models.ListQuery{Unlabeled: true}); g != "[B] 1" {
+		t.Fatalf("unlabeled: %s", g)
+	}
+	if g := got(models.ListQuery{Labels: []string{"work", "personal"}}); g != "[C A] 2" {
+		t.Fatalf("labels: %s", g)
+	}
+}

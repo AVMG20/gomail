@@ -80,6 +80,11 @@ export function useShortcuts() {
     // Focus inside the compose window, an open menu or a popover owns the keyboard.
     const inWidget = !!(e.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="menubar"], [data-no-shortcuts]')
     if (typing || inWidget || ui.anyDialogOpen()) return
+    if (ui.keyGuarded(key)) {
+      // Right after a compose window closed: never trash/act on the open mail by accident.
+      e.preventDefault()
+      return
+    }
 
     // The calendar owns mod+B (its own sidebar) and has nothing to select-all.
     if (ui.mainView === 'calendar' && mod && (key.toLowerCase() === 'b' || key.toLowerCase() === 'a')) return

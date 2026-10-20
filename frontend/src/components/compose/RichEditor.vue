@@ -87,8 +87,15 @@ function applyLink() {
   if (!url) return removeLink()
   if (!/^(https?:|mailto:|tel:)/i.test(url)) url = url.includes('@') && !url.includes('/') ? `mailto:${url}` : `https://${url}`
   const { empty } = ed.state.selection
-  if (empty && !ed.isActive('link')) ed.chain().focus().insertContent({ type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] }).run()
-  else ed.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+  if (empty && !ed.isActive('link')) {
+    // Keep the link apart from the word before it, and don't let typing continue the link.
+    const { from } = ed.state.selection
+    const before = from > 1 ? ed.state.doc.textBetween(from - 1, from) : ''
+    const parts: object[] = []
+    if (before && !/\s/.test(before)) parts.push({ type: 'text', text: ' ' })
+    parts.push({ type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] }, { type: 'text', text: ' ' })
+    ed.chain().focus().insertContent(parts).unsetMark('link').run()
+  } else ed.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
   linkOpen.value = false
 }
 function removeLink() {
@@ -142,6 +149,20 @@ function selectAll() {
 }
 
 const improving = ref(false)
+
+/** A click on the empty area around the text (not in it) puts the caret at the end of the
+ *  user's own text, before the signature and quoted message, not after them. */
+function onAreaClick(e: MouseEvent) {
+  const ed = editor.value
+  if (!ed) return
+  const target = e.target as Element | null
+  const pm = target?.closest?.('.ProseMirror')
+  if (pm && pm !== target) return // a click in the text itself: ProseMirror placed the caret
+  if (ed.state.selection.from !== ed.state.selection.to) return
+  const own = ownTextRange(ed.state.doc)
+  if (own && own.to > 0) ed.chain().focus(own.to - 1).run()
+  else ed.chain().focus('end').run()
+}
 
 /** The text before the signature / quoted message ("On … wrote:" included), or null when there is none. */
 function ownTextRange(doc: PMNode): { from: number; to: number } | null {
@@ -247,7 +268,7 @@ defineExpose({ editor, improveGrammar, applySignature })
   <div class="flex min-h-0 flex-1 flex-col">
     <ContextMenu>
       <ContextMenuTrigger as-child>
-        <div class="compose-editor thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3" style="--default-contextmenu: hide" @mousedown.capture="onMouseDown" @contextmenu.capture="onContextMenu" @click="editor?.chain().focus().run()">
+        <div class="compose-editor thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3" style="--default-contextmenu: hide" @mousedown.capture="onMouseDown" @contextmenu.capture="onContextMenu" @click="onAreaClick">
           <EditorContent :editor="editor" class="h-full" />
         </div>
       </ContextMenuTrigger>

@@ -18,7 +18,7 @@ import { applyCompletion } from '@/lib/searchQuery'
 import type { Message, MessagePage, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useComposeStore } from '@/stores/compose'
-import { MAX_BULK, useMailStore } from '@/stores/mail'
+import { ACTION_CHUNK, useMailStore } from '@/stores/mail'
 import RecipientField from '@/components/compose/RecipientField.vue'
 
 function deferred<T>() {
@@ -221,13 +221,17 @@ describe('mail list', () => {
     expect(mail.nextCursor).toBe('300')
   })
 
-  it('warns when a select-all action hits the bulk cap', async () => {
+  it('select all acts on every message, in chunks the backend accepts', async () => {
     const mail = inboxSetup()
-    vi.spyOn(api, 'resolveQueryIds').mockResolvedValue(Array.from({ length: MAX_BULK }, (_, i) => `m${i}`))
+    const all = Array.from({ length: 7539 }, (_, i) => `m${i}`)
+    vi.spyOn(api, 'resolveQueryIds').mockResolvedValue(all)
+    const archive = vi.spyOn(api, 'archive').mockResolvedValue(undefined)
+    vi.spyOn(mail, 'softRefresh').mockResolvedValue(undefined as never)
     mail.selectAllQuery = true
     const ids = await mail.targetIds()
-    expect(ids).toHaveLength(MAX_BULK)
-    expect(toasts.some((t) => t.kind === 'warning')).toBe(true)
+    await mail.archive(ids)
+    expect(archive.mock.calls.flatMap((c) => c[0])).toHaveLength(7539)
+    expect(Math.max(...archive.mock.calls.map((c) => c[0].length))).toBeLessThanOrEqual(ACTION_CHUNK)
   })
 })
 

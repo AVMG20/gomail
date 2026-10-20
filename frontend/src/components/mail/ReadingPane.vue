@@ -188,18 +188,7 @@ const moveTargets = computed(() => {
 
 async function moveTo(folderId: string) {
   const m = current.value
-  if (!m) return
-  const name = accounts.folderMap.get(folderId)?.name ?? 'folder'
-  const backendIds = mail.actionIds([m.id])
-  mail.removeLocal([m.id])
-  try {
-    await api.moveToFolder(backendIds, folderId)
-    toast(`Moved to ${name}`)
-  } catch (e) {
-    toast.error('Move failed', { description: errorMessage(e) })
-    void mail.softRefresh()
-  }
-  accounts.refreshCounts()
+  if (m) await mail.moveToFolder([m.id], folderId)
 }
 
 const isDraft = computed(() => !!newest.value?.isDraft || newest.value?.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts'))

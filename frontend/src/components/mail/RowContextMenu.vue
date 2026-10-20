@@ -15,8 +15,6 @@ import { useComposeStore } from '@/stores/compose'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useAccountsStore } from '@/stores/accounts'
-import { api, errorMessage } from '@/lib/api'
-import { toast } from 'vue-sonner'
 import { FOLDER_ICONS } from './folderIcons'
 
 const props = defineProps<{ messageId: string }>()
@@ -49,27 +47,18 @@ const moveTargets = computed(() => {
   if (!m) return []
   return (accounts.folders[m.accountId] ?? []).filter((f) => !['starred', 'drafts', 'sent'].includes(f.kind) && !m.folderIds.includes(f.id))
 })
-async function moveTo(folderId: string) {
-  const ids = ctxIds.value
-  mail.selectAllQuery = false // acts on the loaded selection only
-  const backendIds = mail.actionIds(ids)
-  const name = accounts.folderMap.get(folderId)?.name ?? 'folder'
-  mail.removeLocal(ids)
-  try {
-    await api.moveToFolder(backendIds, folderId)
-    toast(`Moved to ${name}`)
-  } catch (e) {
-    toast.error('Move failed', { description: errorMessage(e) })
-    void mail.softRefresh()
-  }
-  accounts.refreshCounts()
+function moveTo(folderId: string) {
+  void run((ids) => mail.moveToFolder(ids, folderId))
 }
 
+// Like the bulk bar: the toggles follow the whole selection, not just the clicked row.
+const anyUnread = computed(() => ctxIds.value.some((id) => mail.byId.get(id)?.unread))
+const allStarred = computed(() => ctxIds.value.every((id) => mail.byId.get(id)?.starred))
+const labelState = (labelId: string) => ctxIds.value.every((id) => mail.byId.get(id)?.labels.includes(labelId))
+
 function toggleCtxLabel(labelId: string) {
-  const m = ctxMsg.value
-  if (!m) return
-  if (m.labels.includes(labelId)) void mail.removeLabel(ctxIds.value, labelId)
-  else void mail.addLabel(ctxIds.value, labelId)
+  const remove = labelState(labelId)
+  void run((ids) => (remove ? mail.removeLabel(ids, labelId) : mail.addLabel(ids, labelId)))
 }
 </script>
 
@@ -83,10 +72,10 @@ function toggleCtxLabel(labelId: string) {
       <ContextMenuSeparator />
       <ContextMenuItem @click="run(mail.archive)"><ArchiveIcon /> Archive <ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuItem @click="run(mail.trash)"><Trash2Icon /> Delete <ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
-      <ContextMenuItem @click="run((ids) => mail.setRead(ids, ctxMsg!.unread))">
-        <component :is="ctxMsg.unread ? MailOpenIcon : MailIcon" /> {{ ctxMsg.unread ? 'Mark as read' : 'Mark as unread' }} <ContextMenuShortcut>U</ContextMenuShortcut>
+      <ContextMenuItem @click="((read) => run((ids) => mail.setRead(ids, read)))(anyUnread)">
+        <component :is="anyUnread ? MailOpenIcon : MailIcon" /> {{ anyUnread ? 'Mark as read' : 'Mark as unread' }} <ContextMenuShortcut>U</ContextMenuShortcut>
       </ContextMenuItem>
-      <ContextMenuItem @click="run((ids) => mail.setStarred(ids, !ctxMsg!.starred))"><StarIcon /> {{ ctxMsg.starred ? 'Unstar' : 'Star' }} <ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="((star) => run((ids) => mail.setStarred(ids, star)))(!allStarred)"><StarIcon /> {{ allStarred ? 'Unstar' : 'Star' }} <ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuSub>
         <ContextMenuSubTrigger class="gap-2"><TagIcon class="size-4" /> Labels</ContextMenuSubTrigger>
@@ -94,7 +83,7 @@ function toggleCtxLabel(labelId: string) {
           <ContextMenuCheckboxItem
             v-for="l in settings.labels"
             :key="l.id"
-            :model-value="ctxMsg.labels.includes(l.id)"
+            :model-value="labelState(l.id)"
             @select="(e: Event) => { e.preventDefault(); toggleCtxLabel(l.id) }"
           >
             <span class="size-2.5 rounded-full" :style="{ background: l.color }" /> {{ l.name }}

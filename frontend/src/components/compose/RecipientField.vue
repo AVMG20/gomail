@@ -55,18 +55,27 @@ const suggestions = computed(() => {
 })
 watch(suggestions, () => (active.value = 0))
 
-function add(a: Address) {
-  if (!model.value.some((x) => x.email.toLowerCase() === a.email.toLowerCase())) model.value = [...model.value, a]
+/** Add chips in one update: the model only reflects a change after the parent re-renders,
+ *  so adding one by one would keep just the last address. */
+function addAll(list: Address[]) {
+  const next = [...model.value]
+  for (const a of list) {
+    if (!next.some((x) => x.email.toLowerCase() === a.email.toLowerCase())) next.push(a)
+  }
+  if (next.length !== model.value.length) model.value = next
   text.value = ''
   active.value = 0
+}
+
+function add(a: Address) {
+  addAll([a])
 }
 
 function commit(): boolean {
   const raw = splitAddressList(text.value)
   if (!raw.length) return false
   // Invalid entries become flagged chips (sending refuses them) instead of being dropped.
-  for (const r of raw) add(parseAddress(r) ?? { name: '', email: r })
-  text.value = ''
+  addAll(raw.map((r) => parseAddress(r) ?? { name: '', email: r }))
   return true
 }
 
@@ -78,11 +87,18 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault()
     active.value = (active.value - 1 + suggestions.value.length) % suggestions.value.length
   } else if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',' || e.key === ';') {
-    if (suggestions.value.length && e.key !== ',' && e.key !== ';') {
-      e.preventDefault()
-      add(suggestions.value[active.value])
+    // A complete address that differs from the top suggestion is taken as typed (unless the
+    // user arrowed to a suggestion).
+    const typed = parseAddress(text.value.trim())
+    const pick = suggestions.value[active.value]
+    const takeSuggestion = pick && e.key !== ',' && e.key !== ';' && !(typed && active.value === 0 && typed.email.toLowerCase() !== pick.email.toLowerCase())
+    // Tab picks/commits and still moves on to the next field.
+    if (takeSuggestion) {
+      if (e.key !== 'Tab') e.preventDefault()
+      add(pick)
     } else if (text.value.trim()) {
-      if (commit() || e.key !== 'Tab') e.preventDefault()
+      commit()
+      if (e.key !== 'Tab') e.preventDefault()
     }
   } else if (e.key === 'Backspace' && !text.value && model.value.length) {
     model.value = model.value.slice(0, -1)

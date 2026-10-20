@@ -80,7 +80,7 @@ const searchTick = ref(0)
 const onSearchUpdated = () => searchTick.value++
 window.addEventListener('gomail:search-updated', onSearchUpdated)
 onBeforeUnmount(() => window.removeEventListener('gomail:search-updated', onSearchUpdated))
-watch([query, scopeAccount, () => mail.labelFilter.labels.join(','), searchTick], () => {
+watch([query, scopeAccount, searchTick], () => {
   if (timer) clearTimeout(timer)
   const q = query.value.trim()
   if (!q || /^\S+:$/.test(q)) {
@@ -93,7 +93,8 @@ watch([query, scopeAccount, () => mail.labelFilter.labels.join(','), searchTick]
   timer = setTimeout(async () => {
     const t = ++token
     try {
-      const res = await api.searchMessages({ query: q, accountId: scopeAccount.value, labels: mail.labelFilter.labels, limit: 20 })
+      // Searches all mail: the list's label filter doesn't apply here (use label: to narrow).
+      const res = await api.searchMessages({ query: q, accountId: scopeAccount.value, labels: [], limit: 20 })
       if (t === token) results.value = res
     } catch {
       if (t === token) results.value = []
@@ -246,8 +247,6 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     e.stopPropagation()
     showAll()
-  } else if (e.key === 'Backspace' && !query.value && mail.labelFilter.labels.length) {
-    mail.toggleLabelFilter(mail.labelFilter.labels[mail.labelFilter.labels.length - 1])
   }
 }
 
@@ -260,7 +259,6 @@ const order = computed(() => {
   return weakMail || actionHit || !results.value.length ? ['actions', 'labels', 'mailboxes', 'mail'] : ['labels', 'mail', 'mailboxes', 'actions']
 })
 
-const activeLabels = computed(() => mail.labelFilter.labels.map((id) => settings.labelMap.get(id)).filter((l): l is Label => !!l))
 const nothing = computed(() => q.value && !searching.value && !results.value.length && !labelItems.value.length && !mailboxItems.value.length && !actions.value.length && !completions.value.length)
 const accountOf = (id: string) => accounts.accountMap.get(id)
 const tipKeys = shortcutLabel('mod+enter')
@@ -296,7 +294,6 @@ const tipKeys = shortcutLabel('mod+enter')
           >
             <span class="size-2 rounded-full" :style="{ background: currentAccount.color }" /> {{ currentAccount.displayName || currentAccount.email }}
           </button>
-          <LabelPill v-for="l in activeLabels" :key="l.id" :label="l" size="sm" removable @remove="mail.toggleLabelFilter(l.id)" />
         </div>
 
         <CmdList class="max-h-[min(460px,60vh)]">
@@ -388,7 +385,7 @@ const tipKeys = shortcutLabel('mod+enter')
             </p>
           </div>
           <div v-if="!q && !recent.length" class="text-muted-foreground px-3 pt-1 pb-2 text-xs">
-            Tip: search across every account. Use <code class="bg-muted rounded px-1">from:</code>, <code class="bg-muted rounded px-1">label:</code> and <code class="bg-muted rounded px-1">is:unread</code> to narrow down.
+            Tip: search across every account. Use <code class="bg-muted rounded px-1">from:</code>, <code class="bg-muted rounded px-1">label:</code> and <code class="bg-muted rounded px-1">is:unread</code> to narrow down; several <code class="bg-muted rounded px-1">label:</code> terms find mail that has all of them.
           </div>
         </CmdList>
 

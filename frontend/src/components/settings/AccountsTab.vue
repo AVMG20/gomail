@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, ref } from 'vue'
+import { defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import { PlusIcon, RefreshCwIcon, Trash2Icon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -26,6 +26,29 @@ const settings = useSettingsStore()
 const mail = useMailStore()
 const ui = useUiStore()
 const removing = ref<Account | null>(null)
+// The account being removed, kept apart from the dialog's open state: the dialog's own
+// close (which clears `removing`) runs before the confirm button's click handler.
+let removeTarget: Account | null = null
+function askRemove(a: Account) {
+  removeTarget = a
+  removing.value = a
+}
+
+// Rail menu "Rename… / Change color… / Remove account…" land on that account.
+watch(() => ui.focusAccount, async (f) => {
+  if (!f) return
+  ui.focusAccount = null
+  await nextTick()
+  const a = accounts.accountMap.get(f.id)
+  if (!a) return
+  if (f.field === 'remove') return askRemove(a)
+  const el = document.querySelector<HTMLElement>(`[data-account-${f.field}="${f.id}"]`)
+  el?.scrollIntoView({ block: 'nearest' })
+  if (f.field === 'name') {
+    ;(el as HTMLInputElement | null)?.focus()
+    ;(el as HTMLInputElement | null)?.select()
+  } else el?.click()
+}, { immediate: true })
 const editingSig = ref<string | null>(null)
 const SignatureEditor = defineAsyncComponent(() => import('./SignatureEditor.vue'))
 let sigTimer: ReturnType<typeof setTimeout> | null = null
@@ -51,9 +74,10 @@ async function save(a: Account, patch: Partial<Pick<Account, 'displayName' | 'co
 }
 
 async function remove() {
-  const a = removing.value
-  if (!a) return
+  const a = removeTarget
+  removeTarget = null
   removing.value = null
+  if (!a) return
   try {
     await api.removeAccount(a.id)
     await accounts.load()
@@ -72,7 +96,7 @@ async function remove() {
       <div class="flex items-center gap-3 py-3">
         <AccountAvatar :account="a" :size="36" />
         <div class="min-w-0 flex-1">
-          <Input :model-value="a.displayName" class="h-8 max-w-64 text-[13px] font-medium" aria-label="Account name" @change="(e: Event) => save(a, { displayName: (e.target as HTMLInputElement).value.trim() || a.email })" />
+          <Input :model-value="a.displayName" class="h-8 max-w-64 text-[13px] font-medium" aria-label="Account name" :data-account-name="a.id" @change="(e: Event) => save(a, { displayName: (e.target as HTMLInputElement).value.trim() || a.email })" />
           <div class="text-muted-foreground mt-1 truncate pl-0.5 text-xs">
             {{ a.email }} · {{ a.provider === 'gmail' ? 'Gmail' : 'Outlook' }} · <span :class="a.syncError && 'text-destructive'">{{ a.syncError ? a.syncError : `synced ${relativeTime(a.lastSyncAt)}` }}</span>
             · <button type="button" class="hover:text-foreground underline-offset-2 hover:underline" @click="editingSig = editingSig === a.id ? null : a.id">{{ a.signature ? 'Edit signature' : 'Add signature' }}</button>
@@ -80,7 +104,7 @@ async function remove() {
         </div>
         <Popover>
           <PopoverTrigger as-child>
-            <button type="button" class="border-border flex size-8 items-center justify-center rounded-md border" aria-label="Account color">
+            <button type="button" class="border-border flex size-8 items-center justify-center rounded-md border" aria-label="Account color" :data-account-color="a.id">
               <span class="size-4 rounded-full" :style="{ background: a.color }" />
             </button>
           </PopoverTrigger>
@@ -91,7 +115,7 @@ async function remove() {
           </PopoverContent>
         </Popover>
         <Button variant="ghost" size="icon-sm" aria-label="Sync now" @click="accounts.sync(a.id)"><RefreshCwIcon :class="accounts.syncing.has(a.id) && 'animate-spin'" /></Button>
-        <Button variant="ghost" size="icon-sm" class="hover:text-destructive" aria-label="Remove account" @click="removing = a"><Trash2Icon /></Button>
+        <Button variant="ghost" size="icon-sm" class="hover:text-destructive" aria-label="Remove account" @click="askRemove(a)"><Trash2Icon /></Button>
       </div>
       <div v-if="editingSig === a.id" class="-mt-1 pb-3 pl-12">
         <SignatureEditor autofocus :model-value="a.signature ?? ''" @update:model-value="(v: string) => saveSig(a.id, v)" />

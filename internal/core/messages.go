@@ -61,10 +61,15 @@ func (s *Service) SearchMessages(q models.SearchQuery) ([]models.SearchResult, e
 	return res, err
 }
 
-// ResolveQueryIDs returns ids of messages matching q (max capped at 5000).
+// MaxResolveIDs caps ResolveQueryIDs. "Select all N" resolves every id once;
+// the UI then runs the action in chunks (each action takes syncer.MaxBulk).
+const MaxResolveIDs = 100_000
+
+// ResolveQueryIDs returns ids of messages matching q (max capped at
+// MaxResolveIDs).
 func (s *Service) ResolveQueryIDs(q models.ListQuery, max int) ([]string, error) {
-	if max <= 0 || max > syncer.MaxBulk {
-		max = syncer.MaxBulk
+	if max <= 0 || max > MaxResolveIDs {
+		max = MaxResolveIDs
 	}
 	return s.store.ResolveIDs(q, store.FilterOptions{}, max)
 }

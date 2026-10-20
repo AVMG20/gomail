@@ -8,6 +8,10 @@ import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import type { AIUsage } from '@/lib/types'
 import { formatUSD } from '@/lib/format'
@@ -57,9 +61,11 @@ async function saveKey() {
     savingKey.value = false
   }
 }
+const confirmRemoveKey = ref(false)
 async function removeKey() {
   await settings.setOpenRouterKey('')
   testOk.value = null
+  toast('OpenRouter key removed', { description: 'AI labeling and grammar help are off until you add a key again.' })
 }
 async function test() {
   testing.value = true
@@ -90,7 +96,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       <SettingRow title="API key" stacked>
         <template #description>
           <span v-if="s.openRouterKeySet" class="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><CheckCircle2Icon class="size-3.5" /> A key is set. It is stored in your system keychain and never shown again.</span>
-          <span v-else>Get a key at openrouter.ai/keys.</span>
+          <span v-else>Get a key at <button type="button" class="text-foreground underline-offset-2 hover:underline" @click="api.openExternal('https://openrouter.ai/keys')">openrouter.ai/keys</button>.</span>
         </template>
         <div class="flex items-center gap-2">
           <div class="relative max-w-sm flex-1">
@@ -102,7 +108,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
             <LoaderIcon v-if="testing" class="animate-spin" /><CheckCircle2Icon v-else-if="testOk" class="text-emerald-500" />
             Test
           </Button>
-          <Button v-if="s.openRouterKeySet" variant="ghost" size="sm" class="text-muted-foreground" @click="removeKey">Remove</Button>
+          <Button v-if="s.openRouterKeySet" variant="ghost" size="sm" class="text-muted-foreground" @click="confirmRemoveKey = true">Remove</Button>
         </div>
       </SettingRow>
     </SettingSection>
@@ -118,17 +124,18 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       <SettingRow title="Daily budget" description="Auto-labeling pauses for the day when AI spend reaches this. 0 = no limit.">
         <div class="flex items-center gap-1.5">
           <span class="text-muted-foreground text-sm">$</span>
-          <Input type="number" min="0" step="0.25" class="h-8 w-24 text-right tabular-nums" :model-value="s.aiDailyBudgetUsd ?? 1" aria-label="Daily AI budget in US dollars" @update:model-value="onBudget" />
+          <Input type="number" min="0" step="0.25" class="h-8 w-24 text-right tabular-nums" placeholder="0" :model-value="s.aiDailyBudgetUsd ?? 1" aria-label="Daily AI budget in US dollars" @update:model-value="onBudget" />
         </div>
       </SettingRow>
     </SettingSection>
 
-    <SettingSection title="Labeling (Jev)" description="Jev is a decision model that picks labels from the ones you define in Settings → Labels.">
-      <SettingRow title="Classifier model" stacked>
-        <ModelPicker v-model="classifierModel" :recommended="JEV_MODELS" recommended-kind="decision" recommended-heading="Recommended for labeling" class="max-w-md" />
+    <SettingSection title="AI labeling" description="Sorts your mail into the labels from Settings → Labels, using a Jev decision model on OpenRouter.">
+      <p v-if="!s.openRouterKeySet" class="text-muted-foreground py-2 text-xs">Add an OpenRouter key above to use AI labeling.</p>
+      <SettingRow title="Labeling model" stacked>
+        <ModelPicker v-model="classifierModel" kind="decision" :recommended="JEV_MODELS" recommended-kind="decision" recommended-heading="Recommended for labeling" class="max-w-md" />
       </SettingRow>
-      <SettingRow title="Add label at" stacked>
-        <template #description>Labels scoring below this confidence are left unlabeled.</template>
+      <SettingRow title="How sure before adding a label" stacked>
+        <template #description>Higher means fewer, more certain labels.</template>
         <div class="flex max-w-md items-center gap-3">
           <Slider :model-value="[s.classifyThreshold]" :min="0.05" :max="0.95" :step="0.05" class="flex-1" @update:model-value="(v) => v && settings.update({ classifyThreshold: v[0] })" />
           <span class="w-10 text-right text-xs tabular-nums">{{ pct(s.classifyThreshold) }}</span>
@@ -137,8 +144,8 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       <SettingRow title="Let AI correct Gmail/Outlook labels" description="Jev may remove imported labels it is confident don’t apply. Labels you set yourself are never removed.">
         <Switch :model-value="s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => settings.update({ aiCorrectsProviderLabels: v })" />
       </SettingRow>
-      <SettingRow v-if="s.aiCorrectsProviderLabels" title="Remove label below" stacked>
-        <template #description>Imported labels scoring below this are removed.</template>
+      <SettingRow v-if="s.aiCorrectsProviderLabels" title="Remove an imported label when AI is this unsure" stacked>
+        <template #description>An imported label scoring below this is removed.</template>
         <div class="flex max-w-md items-center gap-3">
           <Slider :model-value="[s.classifyRemoveThreshold]" :min="0" :max="0.5" :step="0.05" class="flex-1" @update:model-value="(v) => v && settings.update({ classifyRemoveThreshold: v[0] })" />
           <span class="w-10 text-right text-xs tabular-nums">{{ pct(s.classifyRemoveThreshold) }}</span>
@@ -154,10 +161,10 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
             <button type="button" class="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1" :disabled="!settings.defaults.classify" @click="settings.update({ classifyInstructions: settings.defaults.classify })"><RotateCcwIcon class="size-3" /> Reset to default</button>
           </span>
         </template>
-        <Textarea :model-value="s.classifyInstructions || settings.defaults.classify" rows="3" class="text-xs" @update:model-value="(v) => settings.update({ classifyInstructions: String(v) }, 600)" />
+        <Textarea :model-value="s.classifyInstructions || settings.defaults.classify" rows="3" class="text-xs" placeholder="Empty: the built-in instructions are used" @update:model-value="(v) => settings.update({ classifyInstructions: String(v) }, 600)" />
       </SettingRow>
       <div class="flex items-center gap-3 py-3.5">
-        <Button variant="outline" size="sm" :disabled="!s.openRouterKeySet || (!!ai.job && !ai.job.finished)" @click="labelCurrent"><SparklesIcon class="text-violet-500" /> Label current folder…</Button>
+        <Button variant="outline" size="sm" :disabled="!s.openRouterKeySet || (!!ai.job && !ai.job.finished)" :title="!s.openRouterKeySet ? 'Add an OpenRouter key first' : ai.job && !ai.job.finished ? 'A labeling run is in progress' : undefined" @click="labelCurrent"><SparklesIcon class="text-violet-500" /> Label current folder…</Button>
         <span v-if="ai.job" class="text-muted-foreground text-xs tabular-nums">
           {{ ai.job.finished ? 'Done' : 'Running' }} · {{ ai.job.done }}/{{ ai.job.total || '…' }} · {{ formatUSD(ai.job.cost) }}
         </span>
@@ -179,5 +186,18 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       </SettingRow>
       <Badge v-if="!s.openRouterKeySet" variant="secondary" class="my-3">Add an API key above to enable grammar help</Badge>
     </SettingSection>
+
+    <AlertDialog v-model:open="confirmRemoveKey">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove your OpenRouter key?</AlertDialogTitle>
+          <AlertDialogDescription>AI labeling, automatic labeling and grammar help stop working until you add a key again. Labels already applied stay.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction class="bg-destructive text-white hover:bg-destructive/90" @click="removeKey">Remove key</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>

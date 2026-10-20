@@ -139,8 +139,9 @@ func Config(provider string, c Credentials, redirectURL string) (*oauth2.Config,
 	switch provider {
 	case models.ProviderGmail:
 		if c.GoogleClientID == "" {
-			return nil, fmt.Errorf("%w: Gmail sign-in needs a Google OAuth client. Create a \"Desktop app\" OAuth client in the Google Cloud Console (with the Gmail API enabled) and enter its Client ID and Client secret in Settings, or set %s and %s. See docs/BACKEND.md for step-by-step instructions",
-				ErrNotConfigured, EnvGoogleClientID, EnvGoogleClientSecret)
+			// Plain language: the user sees this in the Add account dialog.
+			return nil, fmt.Errorf("%w: Signing in with Gmail needs a one-time setup on this computer: create a free \"Desktop app\" sign-in client in the Google Cloud Console and paste its client ID in Settings → Accounts. The setup guide walks you through it in a few minutes",
+				ErrNotConfigured)
 		}
 		return &oauth2.Config{
 			ClientID: c.GoogleClientID, ClientSecret: c.GoogleClientSecret,
@@ -148,8 +149,8 @@ func Config(provider string, c Credentials, redirectURL string) (*oauth2.Config,
 		}, nil
 	case models.ProviderOutlook:
 		if c.MicrosoftClientID == "" {
-			return nil, fmt.Errorf("%w: Outlook sign-in needs a Microsoft app registration. Register a public client (\"Mobile and desktop applications\" platform, redirect URI http://localhost) in the Azure portal and enter its Application (client) ID in Settings, or set %s. See docs/BACKEND.md for step-by-step instructions",
-				ErrNotConfigured, EnvMicrosoftClientID)
+			return nil, fmt.Errorf("%w: Signing in with Outlook needs a one-time setup on this computer: register a free app in the Microsoft Entra admin center and paste its application (client) ID in Settings → Accounts. The setup guide walks you through it in a few minutes",
+				ErrNotConfigured)
 		}
 		tenant := c.MicrosoftTenant
 		if tenant == "" {

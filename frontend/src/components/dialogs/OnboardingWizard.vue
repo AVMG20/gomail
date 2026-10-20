@@ -36,12 +36,17 @@ const key = ref('')
 const savingKey = ref(false)
 async function saveKey() {
   savingKey.value = true
+  const hadKey = !!settings.settings?.openRouterKeySet
+  let saved = false
   try {
     await settings.setOpenRouterKey(key.value.trim())
+    saved = true
     await api.testOpenRouter()
     key.value = ''
     toast.success('OpenRouter connected')
   } catch (e) {
+    // A key that doesn't work isn't kept (it would look "connected" everywhere).
+    if (saved && !hadKey) await settings.setOpenRouterKey('').catch(() => {})
     toast.error('That key didn’t work', { description: errorMessage(e) })
   } finally {
     savingKey.value = false
@@ -51,17 +56,24 @@ async function saveKey() {
 // ---- step 3: starter labels
 interface Tpl { name: string; description: string; color: string; on: boolean }
 const existing = computed(() => new Set(settings.labels.map((l) => l.name.trim().toLowerCase())))
-const templates = ref<Tpl[]>([
+// Suggestions on top of the labels gomail starts with (Important, Personal, Work, …): only
+// ones the user doesn't have yet are offered.
+const allTemplates: Tpl[] = [
+  { name: 'Travel', description: 'Flights, hotels, bookings and itineraries.', color: '#f97316', on: true },
+  { name: 'Receipts', description: 'Order confirmations, receipts and shipping updates.', color: '#14b8a6', on: true },
+  { name: 'Family', description: 'Family members, school and household matters.', color: '#f43f5e', on: false },
+  { name: 'Shopping', description: 'Online orders, deliveries and returns.', color: '#a855f7', on: false },
+  { name: 'Events', description: 'Invitations, tickets and event reminders.', color: '#0ea5e9', on: false },
   { name: 'Work', description: 'Colleagues, projects, meetings and anything job related.', color: '#3b82f6', on: true },
   { name: 'Personal', description: 'Friends and family, personal conversations and invites.', color: '#ec4899', on: true },
   { name: 'Finance', description: 'Invoices, bank statements, payments and taxes.', color: '#22c55e', on: true },
-  { name: 'Travel', description: 'Flights, hotels, bookings and itineraries.', color: '#f97316', on: false },
-  { name: 'Newsletters', description: 'Newsletters, digests and product announcements.', color: '#8b5cf6', on: false },
-  { name: 'Receipts', description: 'Order confirmations, receipts and shipping updates.', color: '#14b8a6', on: false },
-])
+]
+const templates = ref<(Tpl & { key: string })[]>(allTemplates.map((t) => ({ ...t, key: t.name.toLowerCase() })))
+const offered = computed(() => templates.value.filter((t) => !existing.value.has(t.key)))
+const existingNames = computed(() => settings.labels.filter((l) => !l.source || l.source === 'user').map((l) => l.name))
 
 function finish() {
-  const picked = templates.value.filter((t) => t.on && t.name.trim() && !existing.value.has(t.name.trim().toLowerCase()))
+  const picked = offered.value.filter((t) => t.on && t.name.trim() && !existing.value.has(t.name.trim().toLowerCase()))
   if (picked.length && settings.settings) {
     const add: Label[] = picked.map((t, i) => ({ id: `lbl_${Date.now().toString(36)}${i}`, name: t.name.trim(), description: t.description, color: t.color, source: 'user' }))
     void settings.update({ labels: [...settings.labels, ...add] }, 0)
@@ -83,7 +95,8 @@ function openDocs(anchor = '') {
 
 <template>
   <component :is="embedded ? 'div' : Dialog" v-bind="embedded ? { class: 'bg-background flex h-full flex-1 items-center justify-center overflow-y-auto p-8' } : { open, 'onUpdate:open': (v: boolean) => !v && close() }">
-    <component :is="embedded ? 'div' : DialogContent" :class="embedded ? 'w-full max-w-lg' : 'gap-0 p-0 sm:max-w-[560px]'">
+    <!-- A stray click outside doesn't end the guide for good; Skip setup / Esc do. -->
+    <component :is="embedded ? 'div' : DialogContent" :class="embedded ? 'w-full max-w-lg' : 'gap-0 p-0 sm:max-w-[560px]'" v-bind="embedded ? {} : { onInteractOutside: (e: Event) => e.preventDefault() }">
       <div :class="embedded ? '' : 'p-6 pb-4'">
         <div class="mb-5 flex items-center gap-3">
           <img src="/appicon.svg" alt="" width="40" height="40" class="size-10" />
@@ -120,11 +133,10 @@ function openDocs(anchor = '') {
             <Button variant="outline" class="h-11 justify-start gap-3" @click="ui.addAccountOpen = true"><ProviderIcon provider="outlook" class="size-5" /> Connect Outlook</Button>
           </div>
           <div v-if="oauthMissing" class="bg-muted/60 text-muted-foreground rounded-lg p-3 text-xs leading-relaxed">
-            No OAuth client is configured yet, so connecting needs one first (gomail uses your own, for privacy).
-            <button type="button" class="text-foreground inline-flex items-center gap-1 font-medium hover:underline" @click="ui.openSettings('accounts')">Add it in Settings → Accounts</button>
-            or
-            <button type="button" class="text-foreground inline-flex items-center gap-1 font-medium hover:underline" @click="openDocs('#demo-mode')">try demo mode <ExternalLinkIcon class="size-3" /></button>
-            (run with <code class="bg-background rounded px-1">GOMAIL_DEMO=1</code>).
+            This build needs a one-time sign-in setup before it can connect Gmail or Outlook (official release builds include it).
+            <button type="button" class="text-foreground inline-flex items-center gap-1 font-medium hover:underline" @click="openDocs()">Open setup guide <ExternalLinkIcon class="size-3" /></button>
+            ·
+            <button type="button" class="text-foreground inline-flex items-center gap-1 font-medium hover:underline" @click="ui.openSettings('accounts')">Settings → Accounts</button>
           </div>
         </section>
 
@@ -147,10 +159,12 @@ function openDocs(anchor = '') {
 
         <!-- 3. Labels -->
         <section v-else class="space-y-3">
-          <h2 class="flex items-center gap-2 text-sm font-semibold"><TagIcon class="size-4" /> Pick some starter labels</h2>
-          <p class="text-muted-foreground text-xs">Edit the names now or later. Descriptions guide the AI.</p>
+          <h2 class="flex items-center gap-2 text-sm font-semibold"><TagIcon class="size-4" /> Add more labels</h2>
+          <p class="text-muted-foreground text-xs">
+            <template v-if="existingNames.length">You already have {{ existingNames.join(', ') }}. </template>Pick any extras; you can rename them now or later.
+          </p>
           <ul class="thin-scroll grid max-h-64 gap-1.5 overflow-y-auto pr-1">
-            <li v-for="t in templates" :key="t.color" :class="['flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5 transition-colors', existing.has(t.name.trim().toLowerCase()) ? 'border-border opacity-60' : t.on ? 'border-primary/40 bg-primary/5' : 'border-border']">
+            <li v-for="t in offered" :key="t.key" :class="['flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5 transition-colors', existing.has(t.name.trim().toLowerCase()) ? 'border-border opacity-60' : t.on ? 'border-primary/40 bg-primary/5' : 'border-border']">
               <button type="button" role="checkbox" :disabled="existing.has(t.name.trim().toLowerCase())" :aria-checked="t.on && !existing.has(t.name.trim().toLowerCase())" :aria-label="`Use label ${t.name}`" :class="['flex size-4 shrink-0 items-center justify-center rounded border', t.on && !existing.has(t.name.trim().toLowerCase()) ? 'border-transparent text-white' : 'border-input']" :style="t.on && !existing.has(t.name.trim().toLowerCase()) ? { background: t.color } : {}" @click="t.on = !t.on">
                 <CheckIcon v-if="t.on && !existing.has(t.name.trim().toLowerCase())" class="size-3" />
               </button>
@@ -166,7 +180,7 @@ function openDocs(anchor = '') {
         <Button variant="ghost" size="sm" class="text-muted-foreground" @click="close">Skip setup</Button>
         <div class="flex-1" />
         <Button v-if="step > 0" variant="ghost" size="sm" @click="step--">Back</Button>
-        <Button v-if="step < steps.length - 1" size="sm" @click="step++">{{ step === 1 && !settings.aiReady ? 'Skip for now' : 'Next' }}</Button>
+        <Button v-if="step < steps.length - 1" size="sm" @click="step++">Next</Button>
         <Button v-else size="sm" @click="finish">Finish</Button>
       </div>
     </component>
