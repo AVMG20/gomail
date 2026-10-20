@@ -44,7 +44,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
-            gh release create "$TAG" --repo "${{ github.repository }}" --verify-tag --title "$TAG" --generate-notes
+            gh release create "$TAG" --repo "${{ github.repository }}" --verify-tag --title "$TAG" --generate-notes \
+              $([[ "$TAG" == *-* ]] && echo --prerelease) # v1.2.0-beta.1: not offered as an update
 
   build:
     name: Build (${{ matrix.name }})

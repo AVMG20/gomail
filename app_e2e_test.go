@@ -238,11 +238,11 @@ func TestEndToEndFakeProviders(t *testing.T) {
 	eventually(t, "graph flag", func() bool { gm, _ := e.graph.Message(g1); return gm.Flagged })
 
 	// A provider label is written back (Gmail label / Outlook category).
-	if err := m.AddLabel([]string{rep.ID}, "travel"); err != nil {
+	if _, err := m.AddLabel([]string{rep.ID}, "travel"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "outlook category", func() bool { gm, _ := e.graph.Message(g1); return containsString(gm.Categories, "Travel") })
-	if err := m.AddLabel([]string{inv.ID}, "travel"); err != nil {
+	if _, err := m.AddLabel([]string{inv.ID}, "travel"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "gmail label", func() bool { gm, _ := e.gmail.Message(inv.RemoteID); return containsString(gm.LabelIDs, travel) })

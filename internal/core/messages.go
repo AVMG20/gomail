@@ -339,6 +339,10 @@ func (s *Service) changeLabel(ids []string, labelID string, add, act bool) (int,
 	}
 	var changed []string
 	moves := labelMoves{}
+	var stays junkStays
+	if act && l.ID == config.JunkLabelID {
+		stays = s.junkStaysFor(ids)
+	}
 	for lid, gids := range groups {
 		ml := byID[lid]
 		if add {
@@ -356,7 +360,7 @@ func (s *Service) changeLabel(ids []string, labelID string, add, act bool) (int,
 		if act {
 			for _, id := range gids {
 				if inBox[id] {
-					moves.add(id, ml, thenKind(ml, false), "You labeled it “"+ml.Name+"”")
+					moves.add(id, ml, thenKind(ml, false), "You labeled it “"+ml.Name+"”", stays)
 				}
 			}
 		}

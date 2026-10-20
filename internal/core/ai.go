@@ -427,14 +427,12 @@ func (s *Service) ClassifyQuery(q models.ListQuery, onlyUnlabeled, includeAllFol
 	s.goBG(func() {
 		defer cancel()
 		results, final := s.runClassification(ctx, j.id, ids, false)
-		// Moves can take a while on a big job: Cancel still stops them
-		// (ctx), but the job no longer blocks a new one.
+		s.moveAILabeled(ctx, results) // still the current job: Cancel stops the moves too
 		s.jobs.mu.Lock()
 		if s.jobs.current == j {
 			s.jobs.current = nil
 		}
 		s.jobs.mu.Unlock()
-		s.moveAILabeled(ctx, results)
 		slog.Info("labeling job finished", "job", j.id, "done", final.Done, "labeled", final.Labeled, "failed", final.Failed, "cost", final.Cost)
 		s.emit(models.EventClassifyFinished, final)
 	})
@@ -581,13 +579,21 @@ func (s *Service) moveAILabeled(ctx context.Context, results []models.Classifica
 		labels[l.ID] = l
 	}
 	moves := labelMoves{}
+	var ids []string
+	for _, r := range results {
+		if r.Skipped || r.Error != "" || !slices.Contains(r.Added, config.JunkLabelID) {
+			continue
+		}
+		ids = append(ids, r.MessageID)
+	}
+	stays := s.junkStaysFor(ids)
 	for _, r := range results {
 		if r.Skipped || r.Error != "" {
 			continue
 		}
 		for _, id := range r.Added {
 			if l, ok := labels[id]; ok {
-				moves.add(r.MessageID, l, thenKind(l, true), labelWhy(l, true))
+				moves.add(r.MessageID, l, thenKind(l, true), labelWhy(l, true), stays)
 			}
 		}
 	}

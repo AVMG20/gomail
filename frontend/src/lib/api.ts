@@ -521,7 +521,7 @@ export const api = {
       const legacy = r as unknown as { label?: string; confidence?: number }
       const added = r.added ?? (legacy.label ? [legacy.label] : [])
       const scores = r.scores ?? (legacy.label ? { [legacy.label]: legacy.confidence ?? 0 } : {})
-      return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0, error: r.error ?? '', skipped: !!r.skipped }
+      return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0, error: r.error ?? '', skipped: !!r.skipped, moved: r.moved ?? '' }
     }),
   /** Returns how many messages the label's "When added" moved (older backends: nothing). */
   addLabel: async (ids: string[], labelId: string) => (await call<number | void>('AddLabel', ids, labelId)) ?? 0,

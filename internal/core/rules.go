@@ -111,7 +111,7 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 		for _, id := range added {
 			changed[id] = true
 			if !slices.Contains(act.junk, id) { // a Junk rule already moves it
-				moves.add(id, l, thenKind(l, false), labelWhy(l, false))
+				moves.add(id, l, thenKind(l, false), labelWhy(l, false), nil)
 			}
 		}
 		if l.Source == config.LabelSourceProvider {

@@ -703,8 +703,8 @@ func (e *Engine) DeleteFolder(folderID string) error {
 	if f.Kind != models.FolderCustom {
 		return errors.New("only your own folders can be deleted")
 	}
-	// A sync already running may have listed the folder before it went:
-	// sync again after it.
+	// A sync running during the delete may have listed the folder before
+	// it went: sync again after it.
 	resync := e.Syncing(f.AccountID)
 	defer func() {
 		e.wg.Add(1)
@@ -728,6 +728,7 @@ func (e *Engine) DeleteFolder(folderID string) error {
 		err = p.DeleteFolder(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind})
 		cancel()
 	}
+	resync = resync || e.Syncing(f.AccountID)
 	if err != nil {
 		return fmt.Errorf("couldn't delete %s: %s", f.Name, HumanError(a, err))
 	}

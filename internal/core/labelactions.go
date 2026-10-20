@@ -24,20 +24,36 @@ import (
 // "sorted for you" review).
 type labelMoves map[string]labelMove
 
-type labelMove struct {
-	kind, why string
-	junk      bool // from the built-in Junk label (see Settings.JunkStaysPut)
-}
+// junkStays reports for a message id whether its mailbox keeps
+// Junk-labeled mail in place (Settings.JunkStaysPut).
+type junkStays func(id string) bool
+
+type labelMove struct{ kind, why string }
 
 // moveRank orders the destinations when labels disagree: the strongest wins.
 var moveRank = map[string]int{models.FolderArchive: 1, models.FolderSpam: 2, models.FolderTrash: 3}
 
-func (m labelMoves) add(id string, l models.Label, kind, why string) {
-	junk := l.ID == config.JunkLabelID
-	cur := m[id]
-	if kind != "" && (moveRank[kind] > moveRank[cur.kind] || (moveRank[kind] == moveRank[cur.kind] && cur.junk && !junk)) {
-		m[id] = labelMove{kind, why, junk}
+func (m labelMoves) add(id string, l models.Label, kind, why string, stays junkStays) {
+	if l.ID == config.JunkLabelID && stays != nil && stays(id) {
+		return
 	}
+	if kind != "" && moveRank[kind] > moveRank[m[id].kind] {
+		m[id] = labelMove{kind, why}
+	}
+}
+
+// junkStaysFor looks up the mailboxes of ids for labelMoves.add (nil when
+// every mailbox moves Junk-labeled mail).
+func (s *Service) junkStaysFor(ids []string) junkStays {
+	keep := s.Settings().JunkStaysPut
+	if len(keep) == 0 {
+		return nil
+	}
+	places, err := s.store.FolderKinds(ids)
+	if err != nil {
+		return nil
+	}
+	return func(id string) bool { return slices.Contains(keep, places[id].AccountID) }
 }
 
 // labelWhy says why a label moved mail, for the review.
@@ -89,14 +105,19 @@ func (s *Service) applyLabelMoves(ctx context.Context, moves labelMoves, what st
 		slog.Warn(what+": lookup failed", "err", err)
 		return nil
 	}
-	junkStays := s.Settings().JunkStaysPut
 	byKind := map[string][]string{}
 	var readFirst []string // Junk and Trash moves
 	for _, id := range ids {
 		p, ok := places[id]
 		in, kind := p.Kinds, moves[id].kind
-		if !ok || (moves[id].junk && slices.Contains(junkStays, p.AccountID)) || slices.Contains(in, kind) || slices.Contains(in, models.FolderSent) || slices.Contains(in, models.FolderDrafts) ||
-			slices.Contains(in, models.FolderTrash) || (kind == models.FolderArchive && !slices.Contains(in, models.FolderInbox)) {
+		// Archive: whether it is in the inbox decides (Gmail's All Mail,
+		// kind archive, holds the inbox's mail too).
+		there := slices.Contains(in, kind)
+		if kind == models.FolderArchive {
+			there = !slices.Contains(in, models.FolderInbox)
+		}
+		if !ok || there || slices.Contains(in, models.FolderSent) ||
+			slices.Contains(in, models.FolderDrafts) || slices.Contains(in, models.FolderTrash) {
 			continue
 		}
 		byKind[kind] = append(byKind[kind], id)
@@ -162,17 +183,24 @@ func (s *Service) ApplyLabelAction(labelID string) (int, error) {
 		return 0, err
 	}
 	kind := thenKind(l, false)
-	if kind == "" || l.ID == config.JunkLabelID || len(l.AccountIDs) != 1 {
+	if kind == "" || l.ID == config.JunkLabelID {
 		return 0, errors.New("this label doesn’t move mail")
 	}
+	if len(l.AccountIDs) != 1 {
+		return 0, errors.New("this label belongs to no single mailbox")
+	}
+	skip := []string{models.FolderSent, models.FolderDrafts, models.FolderTrash}
+	if kind != models.FolderArchive {
+		skip = append(skip, kind)
+	}
 	ids, err := s.store.ResolveIDs(models.ListQuery{AccountID: l.AccountIDs[0], Labels: []string{l.ID}},
-		store.FilterOptions{ExcludeFolderKinds: []string{models.FolderSent, models.FolderDrafts, models.FolderTrash, kind}}, provider.MaxFolderOp)
+		store.FilterOptions{ExcludeFolderKinds: skip}, provider.MaxFolderOp)
 	if err != nil {
 		return 0, err
 	}
 	moves := labelMoves{}
 	for _, id := range ids {
-		moves.add(id, l, kind, "Labeled “"+l.Name+"”")
+		moves.add(id, l, kind, "Labeled “"+l.Name+"”", nil)
 	}
 	moved := movedIDs(s.applyLabelMoves(s.ctx, moves, "label action"))
 	s.messagesChanged(moved)

@@ -665,8 +665,6 @@ func refreshJunk(tx *sql.Tx, ids []string, now int64) error {
 	return nil
 }
 
-// Summaries returns summaries for the given ids (missing ids are skipped),
-// in no particular order.
 // AllLabelIDs returns every label on a message, hidden imported labels
 // included (SetHideProviderLabels).
 func (s *Store) AllLabelIDs(id string) ([]string, error) {
@@ -686,6 +684,8 @@ func (s *Store) AllLabelIDs(id string) ([]string, error) {
 	return out, rows.Err()
 }
 
+// Summaries returns summaries for the given ids (missing ids are skipped),
+// in no particular order.
 func (s *Store) Summaries(ids []string) ([]models.MessageSummary, error) {
 	out := make([]models.MessageSummary, 0, len(ids))
 	for _, chunk := range chunks(ids, 500) {
@@ -1326,7 +1326,6 @@ type ClassifyInput struct {
 	AIScores       map[string]float64 // scores of the last AI run
 }
 
-// ClassifyInputs loads classifier inputs for the given ids.
 // MessagePlace is the mailbox of a message and the kinds of the folders
 // it is in.
 type MessagePlace struct {
@@ -1366,6 +1365,7 @@ func (s *Store) FolderKinds(ids []string) (map[string]MessagePlace, error) {
 	return out, nil
 }
 
+// ClassifyInputs loads classifier inputs for the given ids.
 func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 	var out []ClassifyInput
 	for _, chunk := range chunks(ids, 500) {

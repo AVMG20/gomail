@@ -421,3 +421,27 @@ func TestApplyLabelAction(t *testing.T) {
 		t.Fatalf("second run moved %d", n)
 	}
 }
+
+// Archive is decided by "in the inbox": Gmail's All Mail (kind archive)
+// also holds the inbox's mail, which must still be archived.
+func TestApplyArchiveActionOnGmail(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	acct := demo.GmailAccountID
+	saveRules(t, s, nil, models.Label{ID: "news", Name: "News", Color: "#f97316", Source: "user", AccountIDs: []string{acct}, Then: "archive"})
+	e.demos[acct].Deliver("Weekly digest", "news@example.com")
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := labelsOf(t, e, acct, "Weekly digest")
+	if _, err := s.AddLabel([]string{m.ID}, "news"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.ApplyLabelAction("news"); err != nil || n != 1 {
+		t.Fatalf("archived %d (%v), want 1", n, err)
+	}
+	inbox, _ := s.store.FolderByKind(acct, models.FolderInbox)
+	if m, _ := labelsOf(t, e, acct, "Weekly digest"); has(m.FolderIDs, inbox.ID) {
+		t.Fatalf("still in the inbox: %v", m.FolderIDs)
+	}
+}

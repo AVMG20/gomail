@@ -36,8 +36,12 @@ export const useAiStore = defineStore('ai', () => {
     if (!settings.aiReady) return needsSetup()
     labeling.value = new Set([...labeling.value, ...ids])
     try {
-      // Where the mail was, for Undo of a label's "When added" move (read before Jev runs).
-      const wasIn = new Map(ids.map((id) => [id, mail.byId.get(id)?.folderIds ?? []]))
+      // Where the mail was and whether it was unread, for Undo of a label's "When added" move (read
+      // before Jev runs). Jev answers per message: a conversation row "c:<id>" is its latest message <id>.
+      const wasIn = new Map(ids.map((id) => {
+        const m = mail.byId.get(id)
+        return [id.startsWith('c:') ? id.slice(2) : id, { folderIds: m?.folderIds ?? [], unread: !!m?.unread, accountId: m?.accountId }]
+      }))
       const results = await api.classifyMessages(ids)
       const nextScores = { ...scores.value }
       const before = new Map(ids.map((id) => [id, mail.byId.get(id)?.labels ?? []]))
@@ -80,11 +84,12 @@ export const useAiStore = defineStore('ai', () => {
                 for (const l of r.added) if (!prev.includes(l)) await api.removeLabel([r.messageId], l)
                 for (const l of r.removed) await api.restoreLabel([r.messageId], l)
                 // Back where it was: the folder it left (the inbox when it was there).
-                if (!r.moved) continue
-                const from = (wasIn.get(r.messageId) ?? []).map((id) => accounts.folderMap.get(id)).filter((f) => !!f && f.kind !== r.moved)
-                const accountId = mail.byId.get(r.messageId)?.accountId ?? (ids.length === 1 ? mail.byId.get(ids[0])?.accountId : undefined)
-                const back = from.find((f) => f!.kind === 'inbox') ?? from[0] ?? (accountId ? accounts.folderOf(accountId, 'inbox') : undefined)
+                const was = wasIn.get(r.messageId)
+                if (!r.moved || !was) continue
+                const from = was.folderIds.map((id) => accounts.folderMap.get(id)).filter((f) => !!f && f.kind !== r.moved)
+                const back = from.find((f) => f!.kind === 'inbox') ?? from[0] ?? (was.accountId ? accounts.folderOf(was.accountId, 'inbox') : undefined)
                 if (back) await api.moveToFolder([r.messageId], back.id)
+                if (was.unread) await api.markRead([r.messageId], false)
               }
               accounts.refreshCounts()
               void mail.softRefresh()
