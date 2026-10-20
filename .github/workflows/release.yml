@@ -1,14 +1,17 @@
 name: Release
 
 # Builds the desktop app for Linux, macOS and Windows and attaches the
-# packages to the GitHub release. Publish a release (e.g. tag v1.0.0) to run
-# it, or start it manually for an existing release tag.
+# packages to the GitHub release. Push a version tag (git tag v1.0.0 && git
+# push origin v1.0.0: the release is created with generated notes) or
+# publish a release to run it, or start it manually for an existing tag.
 #
 # Optional repository secrets bake default OAuth client IDs into the build so
 # end users don't have to create their own:
 #   GOMAIL_GOOGLE_CLIENT_ID, GOMAIL_GOOGLE_CLIENT_SECRET, GOMAIL_MICROSOFT_CLIENT_ID
 
 on:
+  push:
+    tags: ['v*']
   release:
     types: [published]
   workflow_dispatch:
@@ -22,11 +25,32 @@ permissions:
 
 env:
   WAILS_VERSION: v3.0.0-beta.33
-  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+
+# Publishing a release in the UI for a new tag also pushes the tag: the
+# later run takes over.
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
+  release:
+    name: Create release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create the release if it doesn't exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "${{ github.repository }}" --verify-tag --title "$TAG" --generate-notes
+
   build:
     name: Build (${{ matrix.name }})
+    needs: release
+    # Also when the release job was skipped (release published, or started by hand).
+    if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
