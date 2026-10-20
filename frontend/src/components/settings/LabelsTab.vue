@@ -50,15 +50,9 @@ function add() {
 
 /** Names must not be empty, and two labels with the same name would be indistinguishable. */
 function onNameBlur(l: Label) {
-  const name = l.name.trim()
-  if (!name) return patch(l.id, { name: 'Untitled label' })
-  const taken = settings.labels.some((x) => x.id !== l.id && x.name.trim().toLowerCase() === name.toLowerCase())
-  if (taken) {
-    let n = 2
-    while (settings.labels.some((x) => x.name.trim().toLowerCase() === `${name} ${n}`.toLowerCase())) n++
-    patch(l.id, { name: `${name} ${n}` })
-    toast(`You already have a label called “${name}”`, { description: `This one was renamed to “${name} ${n}”.` })
-  } else if (name !== l.name) patch(l.id, { name })
+  const typed = l.name.trim()
+  const r = settings.renameLabel(l.id, l.name)
+  if (r.deduped) toast(`You already have a label called “${typed}”`, { description: `This one was renamed to “${r.name}”.` })
 }
 
 // Deleting a label removes it from every message: confirm, with how many it affects.

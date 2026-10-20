@@ -148,7 +148,26 @@ export const useSettingsStore = defineStore('settings', () => {
     },
   )
 
+  // ---- label edits shared by Settings → Labels and the sidebar's right-click menu
+  function patchLabel(id: string, p: Partial<Label>) {
+    void update({ labels: labels.value.map((l) => (l.id === id ? { ...l, ...p } : l)) }, 500)
+  }
+  /** Names must not be empty, and two labels with the same name would be indistinguishable:
+   *  a taken name gets a number. Returns the name used and whether it had to change. */
+  function renameLabel(id: string, raw: string): { name: string; deduped: boolean } {
+    const name = raw.trim() || 'Untitled label'
+    const taken = (n: string) => labels.value.some((x) => x.id !== id && x.name.trim().toLowerCase() === n.toLowerCase())
+    let final = name
+    for (let n = 2; taken(final); n++) final = `${name} ${n}`
+    if (final !== labels.value.find((l) => l.id === id)?.name) patchLabel(id, { name: final })
+    return { name: final, deduped: final !== name }
+  }
+  function removeLabel(id: string) {
+    void update({ labels: labels.value.filter((l) => l.id !== id) }, 500)
+  }
+
   return {
+    patchLabel, renameLabel, removeLabel,
     settings, saving, models, modelsLoading, modelsError, defaults, appInfo, updateInfo, checkingUpdate, checkForUpdate,
     labels, labelMap, aiReady, grammarReady,
     load, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,

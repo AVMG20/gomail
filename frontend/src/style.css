@@ -292,7 +292,7 @@ mark {
 /* Window chrome. macOS hides the native title bar; a full-width strip (App.vue) holds the
    traffic lights, and it plus the pane headers drag the window (interactive controls opt out). */
 :root { --titlebar: 0px; }
-html[data-chrome='mac'] { --titlebar: 28px; }
+html[data-chrome='mac'] { --titlebar: 34px; }
 html[data-chrome='mac'] .titlebar { display: flex; }
 html[data-chrome='mac'] [data-drag] { --wails-draggable: drag; }
 html[data-chrome='mac'] [data-drag] :is(button, a, input, textarea, select, label, summary, [role='button'], [role='tab'], [role='checkbox'], [role='menuitem'], [role='combobox'], [role='listbox'], [role='option'], [contenteditable='true'], [data-no-drag]) {

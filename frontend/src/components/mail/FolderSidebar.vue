@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, h, ref } from 'vue'
 import {
-  CircleArrowUpIcon, WifiOffIcon, ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon, EyeOffIcon,
+  CircleArrowUpIcon, WifiOffIcon, ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon,
 } from '@lucide/vue'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api } from '@/lib/api'
@@ -14,6 +14,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { FOLDER_ICONS } from './folderIcons'
 import AccountMenuTrigger from './AccountMenuTrigger.vue'
+import SidebarLabel from './SidebarLabel.vue'
 
 // The dropdown chunk loads lazily; a static copy of the trigger shows meanwhile.
 const AccountMenu = defineAsyncComponent({
@@ -193,25 +194,7 @@ function formatCount(n: number) {
         </div>
         <CollapsibleContent>
           <ul class="space-y-px">
-            <li v-for="{ label, count } in labelRows" :key="label.id">
-              <button
-                type="button"
-                :class="[
-                  'flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  mail.labelFilter.labels.includes(label.id) ? 'bg-sidebar-accent text-foreground font-medium' : 'text-sidebar-foreground/85 hover:bg-sidebar-accent/60',
-                ]"
-                :aria-pressed="mail.labelFilter.labels.includes(label.id)"
-                @click="mail.toggleLabelFilter(label.id)"
-              >
-                <span class="flex size-4 shrink-0 items-center justify-center">
-                  <span class="size-2.5 rounded-full" :style="{ background: label.color, boxShadow: mail.labelFilter.labels.includes(label.id) ? `0 0 0 3px color-mix(in oklab, ${label.color} 25%, transparent)` : undefined }" />
-                </span>
-                <span :class="['flex-1 truncate text-left', mail.labelFilter.hidden.includes(label.id) && 'text-muted-foreground line-through']">{{ label.name }}</span>
-                <EyeOffIcon v-if="mail.labelFilter.hidden.includes(label.id)" class="text-muted-foreground size-3.5" aria-label="Hidden from the list" />
-                <!-- Unread, like the folders above (the label filter popover shows totals). -->
-                <span v-if="count?.unread" class="text-foreground/80 text-xs font-medium tabular-nums" :aria-label="`${count.unread} unread`">{{ formatCount(count.unread) }}</span>
-              </button>
-            </li>
+            <SidebarLabel v-for="{ label, count } in labelRows" :key="label.id" :label="label" :count="count" />
             <li v-if="!labelRows.length">
               <button type="button" class="text-muted-foreground hover:text-foreground flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px]" @click="ui.openSettings('labels')">
                 <TagIcon class="size-4" /> Create a label
