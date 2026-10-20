@@ -11,3 +11,4 @@ build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 *.syso
 .task/
 .claude/worktrees/
+/gomail
