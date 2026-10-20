@@ -60,76 +60,115 @@ func (e *Engine) changed(accounts ...string) {
 
 // localChanges tracks optimistic local changes whose push to the provider
 // is in flight or finished recently, so a sync whose snapshot predates the
-// push doesn't undo them.
+// push doesn't undo them. Changes are tracked per kind: a sync keeps only
+// the local state that changed (a read change mustn't pin the folders of a
+// message the server moved meanwhile).
 type localChanges struct {
 	mu       sync.Mutex
-	inflight map[string]int       // local message id -> pushes in flight
-	settled  map[string]time.Time // local message id -> when the last push finished
+	inflight map[changeKey]int       // pushes in flight
+	settled  map[changeKey]time.Time // when the last push finished
 }
 
-func (l *localChanges) begin(ids []string) func() {
+type changeKey struct{ kind, id string }
+
+// Kinds of local change.
+const (
+	changeRead    = "read"
+	changeStar    = "star"
+	changeFolders = "folders"
+)
+
+func (l *localChanges) begin(kind string, ids []string) func() {
 	l.mu.Lock()
 	if l.inflight == nil {
-		l.inflight, l.settled = map[string]int{}, map[string]time.Time{}
+		l.inflight, l.settled = map[changeKey]int{}, map[changeKey]time.Time{}
 	}
 	for _, id := range ids {
-		l.inflight[id]++
+		l.inflight[changeKey{kind, id}]++
 	}
 	l.mu.Unlock()
+	var once sync.Once
 	return func() {
-		now := time.Now()
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		for _, id := range ids {
-			if l.inflight[id]--; l.inflight[id] <= 0 {
-				delete(l.inflight, id)
+		once.Do(func() {
+			now := time.Now()
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			for _, id := range ids {
+				k := changeKey{kind, id}
+				if l.inflight[k]--; l.inflight[k] <= 0 {
+					delete(l.inflight, k)
+				}
+				l.settled[k] = now
 			}
-			l.settled[id] = now
-		}
+		})
 	}
 }
 
-// fresh reports whether id changed locally after since (or still is).
-func (l *localChanges) fresh(id string, since time.Time) bool {
+// fresh reports whether id had a change of kind after since (or still has
+// one in flight).
+func (l *localChanges) fresh(id, kind string, since time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.inflight[id] > 0 || !l.settled[id].Before(since)
+	k := changeKey{kind, id}
+	return l.inflight[k] > 0 || !l.settled[k].Before(since)
+}
+
+// freshIDs lists the ids with a change of kind after since or in flight.
+func (l *localChanges) freshIDs(kind string, since time.Time) map[string]bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := map[string]bool{}
+	for k, n := range l.inflight {
+		if k.kind == kind && n > 0 {
+			out[k.id] = true
+		}
+	}
+	for k, t := range l.settled {
+		if k.kind == kind && !t.Before(since) {
+			out[k.id] = true
+		}
+	}
+	return out
 }
 
 func (l *localChanges) prune(before time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for id, t := range l.settled {
+	for k, t := range l.settled {
 		if t.Before(before) {
-			delete(l.settled, id)
+			delete(l.settled, k)
 		}
 	}
 }
 
-// keepLocalChanges gives synced messages that changed locally after the
-// sync started (or whose push is still running) their local read, star and
-// folder state: the provider's snapshot may predate the change.
-func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups []mail.Message, started time.Time) {
+// keepLocalChanges gives fetched messages that changed locally after the
+// fetch started (or whose push is still running) their local read, star
+// and folder state, each only if that is what changed: the provider's
+// snapshot may predate the change. It returns the local ids of messages
+// whose folders changed locally; the round must not take them out of
+// folders either (Removed, complete listings).
+func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups []mail.Message, started time.Time) map[string]bool {
 	e.local.prune(started.Add(-10 * time.Minute))
+	moved := e.local.freshIDs(changeFolders, started)
 	var ids []string
 	idx := map[string]int{}
 	for i, m := range ups {
 		id := store.MessageID(accountID, m.RemoteID)
-		if e.local.fresh(id, started) {
+		if moved[id] || e.local.fresh(id, changeRead, started) || e.local.fresh(id, changeStar, started) {
 			ids = append(ids, id)
 			idx[id] = i
 		}
 	}
 	if len(ids) == 0 {
-		return
+		return moved
 	}
 	sums, err := e.cfg.Store.Summaries(ids)
 	if err != nil {
-		return
+		return moved
 	}
 	local, err := e.cfg.Store.Folders(accountID)
 	if err != nil {
-		return
+		return moved
 	}
 	remoteOf := map[string]string{}
 	for _, f := range local {
@@ -148,7 +187,15 @@ func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups [
 	}
 	for _, sm := range sums {
 		m := &ups[idx[sm.ID]]
-		m.Unread, m.Starred = sm.Unread, sm.Starred
+		if e.local.fresh(sm.ID, changeRead, started) {
+			m.Unread = sm.Unread
+		}
+		if e.local.fresh(sm.ID, changeStar, started) {
+			m.Starred = sm.Starred
+		}
+		if !moved[sm.ID] {
+			continue
+		}
 		var fr []string
 		for _, fid := range sm.FolderIDs {
 			if r, ok := remoteOf[fid]; ok && known[r] {
@@ -159,11 +206,12 @@ func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups [
 			m.FolderRemoteIDs = fr
 		}
 	}
+	return moved
 }
 
 // perAccount runs push for each account concurrently; failed accounts are
 // reverted with revert. It returns a combined human-readable error.
-func (e *Engine) perAccount(groups map[string][]models.MessageSummary, what string,
+func (e *Engine) perAccount(groups map[string][]models.MessageSummary, kind, what string,
 	push func(ctx context.Context, accountID string, ms []models.MessageSummary) error,
 	revert func(accountID string, ms []models.MessageSummary)) error {
 	var mu sync.Mutex
@@ -171,7 +219,7 @@ func (e *Engine) perAccount(groups map[string][]models.MessageSummary, what stri
 	var wg sync.WaitGroup
 	for acct, ms := range groups {
 		wg.Add(1)
-		done := e.local.begin(localIDs(ms))
+		done := e.local.begin(kind, localIDs(ms))
 		go func(acct string, ms []models.MessageSummary) {
 			defer wg.Done()
 			defer done()
@@ -257,7 +305,7 @@ func (e *Engine) MarkRead(ids []string, read bool) error {
 		return err
 	}
 	unlock := e.lockApply(keys(groups)...)
-	done := e.local.begin(ids)
+	done := e.local.begin(changeRead, ids)
 	defer done()
 	changed, err := e.cfg.Store.SetUnread(ids, !read)
 	unlock()
@@ -273,7 +321,7 @@ func (e *Engine) MarkRead(ids []string, read bool) error {
 	if !read {
 		what = "mark messages as unread"
 	}
-	return e.perAccount(groups, what, func(ctx context.Context, acct string, ms []models.MessageSummary) error {
+	return e.perAccount(groups, changeRead, what, func(ctx context.Context, acct string, ms []models.MessageSummary) error {
 		p, err := e.cfg.Provider(acct)
 		if err != nil {
 			return err
@@ -291,7 +339,7 @@ func (e *Engine) SetStarred(ids []string, starred bool) error {
 		return err
 	}
 	unlock := e.lockApply(keys(groups)...)
-	done := e.local.begin(ids)
+	done := e.local.begin(changeStar, ids)
 	defer done()
 	changed, err := e.cfg.Store.SetStarred(ids, starred)
 	unlock()
@@ -303,7 +351,7 @@ func (e *Engine) SetStarred(ids []string, starred bool) error {
 		return nil
 	}
 	e.changed(keys(groups)...)
-	return e.perAccount(groups, "update the star", func(ctx context.Context, acct string, ms []models.MessageSummary) error {
+	return e.perAccount(groups, changeStar, "update the star", func(ctx context.Context, acct string, ms []models.MessageSummary) error {
 		p, err := e.cfg.Provider(acct)
 		if err != nil {
 			return err
@@ -393,7 +441,7 @@ func (e *Engine) move(ids []string, targetFor func(acct string) (models.Folder, 
 	// Mark the change before writing it, so fetched mail being stored right
 	// now can't overwrite it with older server state.
 	unlock := e.lockApply(keys(groups)...)
-	done := e.local.begin(ids)
+	done := e.local.begin(changeFolders, ids)
 	defer done()
 	err = e.cfg.Store.SetMessageFolders(newSets)
 	unlock()
@@ -401,7 +449,7 @@ func (e *Engine) move(ids []string, targetFor func(acct string) (models.Folder, 
 		return err
 	}
 	e.changed(keys(groups)...)
-	return e.perAccount(groups, "move messages", func(ctx context.Context, acct string, ms []models.MessageSummary) error {
+	return e.perAccount(groups, changeFolders, "move messages", func(ctx context.Context, acct string, ms []models.MessageSummary) error {
 		p, err := e.cfg.Provider(acct)
 		if err != nil {
 			return err
@@ -455,7 +503,13 @@ func (e *Engine) MarkFolderRead(folderID string) error {
 	if err != nil {
 		return err
 	}
+	// Like MarkRead: a sync that fetched before the server caught up must
+	// not mark these messages unread again.
+	unlock := e.lockApply(f.AccountID)
+	done := e.local.begin(changeRead, ids)
+	defer done()
 	changed, err := e.cfg.Store.SetUnread(ids, false)
+	unlock()
 	if err != nil {
 		return err
 	}
@@ -468,7 +522,9 @@ func (e *Engine) MarkFolderRead(folderID string) error {
 		cancel()
 	}
 	if err != nil {
+		unlock := e.lockApply(f.AccountID)
 		_, _ = e.cfg.Store.SetUnread(changed, true)
+		unlock()
 		_ = e.cfg.Store.SetFolderCounts(f.ID, f.Unread, f.Total)
 		e.changed(f.AccountID)
 		a, _ := e.cfg.Store.Account(f.AccountID)
@@ -506,7 +562,12 @@ func (e *Engine) EmptyFolder(folderID string) error {
 		}
 		next[id] = keep
 	}
-	if err := e.cfg.Store.SetMessageFolders(next); err != nil {
+	unlock := e.lockApply(f.AccountID)
+	done := e.local.begin(changeFolders, ids)
+	defer done()
+	err = e.cfg.Store.SetMessageFolders(next)
+	unlock()
+	if err != nil {
 		return err
 	}
 	_ = e.cfg.Store.SetFolderCounts(f.ID, 0, 0)
@@ -518,7 +579,9 @@ func (e *Engine) EmptyFolder(folderID string) error {
 		cancel()
 	}
 	if err != nil {
+		unlock := e.lockApply(f.AccountID)
 		_ = e.cfg.Store.SetMessageFolders(old)
+		unlock()
 		_ = e.cfg.Store.SetFolderCounts(f.ID, f.Unread, f.Total)
 		e.changed(f.AccountID)
 		a, _ := e.cfg.Store.Account(f.AccountID)

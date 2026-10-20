@@ -63,6 +63,8 @@ type flaky struct {
 	fail   map[string]error
 	calls  map[string]int
 	labels []string
+	// markFolderReadHook, if set, runs before MarkFolderRead (tests block it).
+	markFolderReadHook func()
 }
 
 func (f *flaky) err(op string) error {
@@ -123,6 +125,9 @@ func (f *flaky) ListOlder(ctx context.Context, folder mail.Folder, before time.T
 func (f *flaky) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
 	if err := f.err("folderread"); err != nil {
 		return err
+	}
+	if f.markFolderReadHook != nil {
+		f.markFolderReadHook()
 	}
 	return f.Provider.MarkFolderRead(ctx, folder)
 }

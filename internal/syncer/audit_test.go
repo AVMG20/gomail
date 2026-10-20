@@ -54,7 +54,7 @@ func TestSyncKeepsFreshLocalChanges(t *testing.T) {
 		return []mail.Message{{RemoteID: m.RemoteID, Unread: true, FolderRemoteIDs: []string{"INBOX"}}}
 	}
 	started := time.Now()
-	done := te.e.local.begin([]string{m.ID}) // push in flight
+	done := te.e.local.begin(changeRead, []string{m.ID}) // push in flight
 	ups := snapshot()
 	te.e.keepLocalChanges(demo.GmailAccountID, folders, ups, started)
 	if ups[0].Unread {

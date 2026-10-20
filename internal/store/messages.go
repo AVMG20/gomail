@@ -89,6 +89,14 @@ type ApplyResult struct {
 // labelIDs maps lower-cased provider label names to local label ids; names
 // missing from it are ignored.
 func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[string]string) (ApplyResult, error) {
+	return s.ApplySyncKeeping(accountID, r, labelIDs, nil)
+}
+
+// ApplySyncKeeping is ApplySync, except that the messages in keep (local
+// ids) keep their folder memberships against the round's folder removals
+// and complete listings: they were moved locally after the round was
+// fetched. Their upserts' folders still apply.
+func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs map[string]string, keep map[string]bool) (ApplyResult, error) {
 	var res ApplyResult
 	err := s.tx(context.Background(), func(tx *sql.Tx) error {
 		// Folder remote id -> local id (skipping "starred", which is
@@ -310,6 +318,9 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 			}
 			for _, rid := range rids {
 				mid := MessageID(accountID, rid)
+				if keep[mid] {
+					continue
+				}
 				if _, err := tx.Exec(`DELETE FROM message_folders WHERE folder_id = ? AND message_id = ?`, fid, mid); err != nil {
 					return err
 				}
@@ -332,7 +343,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 		// A full listing of a folder (from a date on) also tells which
 		// cached messages left it while we couldn't follow changes (e.g.
 		// expired history after a long time offline).
-		left, err := reconcileComplete(tx, accountID, r, folderIDs, kinds)
+		left, err := reconcileComplete(tx, accountID, r, folderIDs, kinds, keep)
 		if err != nil {
 			return err
 		}
@@ -388,7 +399,7 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 // reconcileComplete drops folder memberships that a complete listing
 // (r.Complete) no longer reports, and seeds the older-mail cursors. It
 // returns the ids of the messages it changed.
-func reconcileComplete(tx *sql.Tx, accountID string, r mail.SyncResult, folderIDs map[string]string, kinds *kindsUpdater) ([]string, error) {
+func reconcileComplete(tx *sql.Tx, accountID string, r mail.SyncResult, folderIDs map[string]string, kinds *kindsUpdater, keep map[string]bool) ([]string, error) {
 	if len(r.Complete) == 0 {
 		return nil, nil
 	}
@@ -413,7 +424,7 @@ func reconcileComplete(tx *sql.Tx, accountID string, r mail.SyncResult, folderID
 			return nil, err
 		}
 		for _, id := range ids {
-			if listed[id] {
+			if listed[id] || keep[id] {
 				continue
 			}
 			if _, err := tx.Exec(`DELETE FROM message_folders WHERE folder_id = ? AND message_id = ?`, fid, id); err != nil {
