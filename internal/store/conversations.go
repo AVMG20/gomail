@@ -42,7 +42,7 @@ func latestInThread(w *where) {
 	args := append([]any(nil), w.args...)
 	// INDEXED BY keeps the planner on the thread index (another index on
 	// e.g. unread would make this quadratic).
-	w.add(`NOT EXISTS (SELECT 1 FROM messages n INDEXED BY messages_thread_key WHERE `+strings.Join(inner, " AND ")+`)`, args...)
+	w.add(`NOT EXISTS (SELECT 1 FROM messages n INDEXED BY messages_thread_list WHERE `+strings.Join(inner, " AND ")+`)`, args...)
 }
 
 // ListMessages returns one page of message summaries (or conversations),
@@ -60,22 +60,8 @@ func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.Messag
 	if err != nil {
 		return page, err
 	}
-	// In conversation view the total is the number of distinct threads
-	// with a matching message (cheaper than counting latest-per-thread rows).
-	countExpr := `count(*)`
-	if opt.Conversations {
-		countExpr = `count(DISTINCT m.account_id || char(0) || m.thread_key || char(0) || ((m.folder_kinds & 32) != 0))`
-	}
-	fast, ok, err := s.fastConversationCount(q, opt)
-	switch {
-	case err != nil:
+	if page.Total, err = s.listTotal(q, opt, w); err != nil {
 		return page, err
-	case ok:
-		page.Total = fast
-	default:
-		if page.Total, err = s.cachedCount(`SELECT `+countExpr+` FROM messages m`+w.sql(), w.args); err != nil {
-			return page, err
-		}
 	}
 	if opt.Conversations {
 		latestInThread(w)
@@ -123,6 +109,25 @@ func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.Messag
 		page.HasMoreRemote, page.OlderBeyondDepth = s.hasMoreRemote(q, opt.OlderCutoff)
 	}
 	return page, nil
+}
+
+// convCountExpr counts conversations: distinct (account, thread, trashed).
+// It spells out thread_key (a virtual column) so the list indexes, which
+// hold thread_id, cover the count.
+const convCountExpr = `count(DISTINCT m.account_id || char(0) || CASE WHEN m.thread_id = '' THEN m.id ELSE m.thread_id END || char(0) || ((m.folder_kinds & 32) != 0))`
+
+// listTotal is the total of a list view: messages, or in conversation view
+// the number of distinct threads with a matching message (cheaper than
+// counting latest-per-thread rows).
+func (s *Store) listTotal(q models.ListQuery, opt ListOptions, w *where) (int, error) {
+	if n, ok, err := s.fastConversationCount(q, opt); err != nil || ok {
+		return n, err
+	}
+	expr := `count(*)`
+	if opt.Conversations {
+		expr = convCountExpr
+	}
+	return s.cachedCount(`SELECT `+expr+` FROM messages m`+w.sql(), w.args)
 }
 
 func displayName(a models.Address) string {

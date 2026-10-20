@@ -430,7 +430,7 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 	e.cfg.Emit.Emit(models.EventSyncStarted, models.SyncEvent{AccountID: accountID})
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 
-	newIDs, initial, err := e.doSync(ctx, acct)
+	newIDs, initial, changed, err := e.doSync(ctx, acct)
 
 	e.mu.Lock()
 	st.syncing = false
@@ -466,7 +466,11 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 	if err == nil && len(newIDs) > 0 && e.cfg.BeforeAnnounce != nil {
 		e.cfg.BeforeAnnounce(accountID, newIDs)
 	}
-	e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
+	// A round that changed no mail (the usual periodic sync) doesn't make
+	// every window re-fetch its list; accounts:changed still refreshes counts.
+	if changed {
+		e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
+	}
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 	e.cfg.Emit.Emit(models.EventSyncFinished, models.SyncEvent{AccountID: accountID, NewMessages: len(newIDs), Error: msg})
 	if err == nil && len(newIDs) > 0 {
@@ -503,14 +507,16 @@ func (e *Engine) progressReporter(accountID string) func(phase string, done, tot
 	}
 }
 
-func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, bool, error) {
+// doSync runs one sync round: the new message ids, whether it was the
+// initial sync, and whether any mail changed.
+func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, bool, bool, error) {
 	p, err := e.cfg.Provider(acct.ID)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	state, err := e.cfg.Store.SyncState(acct.ID)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	var report func(string, int, int)
 	if len(state) == 0 || acct.LastSyncAt == nil {
@@ -519,15 +525,15 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 	}
 	folders, labels, err := p.Folders(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if err := e.cfg.Store.ReplaceFolders(acct.ID, folders); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	started := time.Now()
 	res, err := p.Sync(ctx, provider.SyncRequest{State: state, Folders: folders, Limits: e.cfg.Limits, Progress: report})
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if report != nil {
 		report("saving", 0, len(res.Upserts))
@@ -535,12 +541,12 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 	labelIDs := e.labelIDs(acct.ID, labels, res.Upserts, true)
 	applied, err := e.applyFetched(acct.ID, folders, res, labelIDs, started)
 	if err != nil {
-		return nil, false, fmt.Errorf("saving synced mail: %w", err)
+		return nil, false, false, fmt.Errorf("saving synced mail: %w", err)
 	}
 	if report != nil {
 		report("saving", len(res.Upserts), len(res.Upserts))
 	}
-	return applied.New, res.Initial, nil
+	return applied.New, res.Initial, applied.Changed, nil
 }
 
 // applyFetched stores a sync round whose fetch started at started. Local

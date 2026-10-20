@@ -309,3 +309,67 @@ func TestFullResyncKeepsLabels(t *testing.T) {
 		t.Fatal(st)
 	}
 }
+
+// TestApplySyncChanged: a round that only repeats known mail reports no
+// change (the syncer then skips messages:changed); real changes do.
+func TestApplySyncChanged(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	ids := map[string]string{"work": "work"}
+	m := msg(1, "hello", "Ann", "INBOX", "ALL")
+	m.Labels = []string{"Work"}
+	apply := func(r mail.SyncResult) bool {
+		t.Helper()
+		res, err := s.ApplySync("a1", r, ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Changed
+	}
+	if !apply(mail.SyncResult{Upserts: []mail.Message{m}}) {
+		t.Fatal("new message: want changed")
+	}
+	if apply(mail.SyncResult{Upserts: []mail.Message{m}, State: map[string]string{"history": "2"}}) {
+		t.Fatal("same message again: want unchanged")
+	}
+	if apply(mail.SyncResult{}) {
+		t.Fatal("empty round: want unchanged")
+	}
+	m.Unread = !m.Unread
+	if !apply(mail.SyncResult{Upserts: []mail.Message{m}}) {
+		t.Fatal("flag change: want changed")
+	}
+	m.Labels = nil
+	if !apply(mail.SyncResult{Upserts: []mail.Message{m}}) {
+		t.Fatal("label removed: want changed")
+	}
+	m.FolderRemoteIDs = []string{"ALL"}
+	if !apply(mail.SyncResult{Upserts: []mail.Message{m}}) {
+		t.Fatal("left the inbox: want changed")
+	}
+	m.FolderRemoteIDs = []string{"SPAM"}
+	if !apply(mail.SyncResult{Upserts: []mail.Message{m}}) {
+		t.Fatal("moved to spam: want changed")
+	}
+	if apply(mail.SyncResult{Upserts: []mail.Message{m}}) {
+		t.Fatal("spam again: want unchanged")
+	}
+	// A removal the user's local move keeps back changes nothing.
+	keep := map[string]bool{MessageID("a1", m.RemoteID): true}
+	if res, err := s.ApplySyncKeeping("a1", mail.SyncResult{Removed: map[string][]string{"SPAM": {m.RemoteID}}}, ids, keep); err != nil || res.Changed {
+		t.Fatalf("kept removal: changed=%v err=%v", res.Changed, err)
+	}
+	// In no known folder any more: the orphan cleanup deletes it.
+	m.FolderRemoteIDs = nil
+	if !apply(mail.SyncResult{Upserts: []mail.Message{m}}) {
+		t.Fatal("orphaned: want changed")
+	}
+	m.FolderRemoteIDs = []string{"INBOX"}
+	apply(mail.SyncResult{Upserts: []mail.Message{m}})
+	if !apply(mail.SyncResult{Deleted: []string{m.RemoteID}}) {
+		t.Fatal("deleted: want changed")
+	}
+	if apply(mail.SyncResult{Deleted: []string{m.RemoteID}}) {
+		t.Fatal("deleted again: want unchanged")
+	}
+}
