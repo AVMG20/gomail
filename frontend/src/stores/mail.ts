@@ -482,8 +482,10 @@ export const useMailStore = defineStore('mail', () => {
   function toggleSelect(id: string, opts: { range?: boolean } = {}) {
     selectAllQuery.value = false
     const next = new Set(selection.value)
-    if (opts.range && anchorId.value && indexById.value.has(anchorId.value)) {
-      const a = indexById.value.get(anchorId.value)!
+    // Shift-click with nothing selected yet extends from the open message (like Apple Mail).
+    const anchor = anchorId.value && indexById.value.has(anchorId.value) ? anchorId.value : openId.value && indexById.value.has(openId.value) ? openId.value : null
+    if (opts.range && anchor) {
+      const a = indexById.value.get(anchor)!
       const b = indexById.value.get(id) ?? a
       const [lo, hi] = a < b ? [a, b] : [b, a]
       // The range takes the clicked row's new state: shift-click a selected row to deselect a range.
@@ -533,6 +535,41 @@ export const useMailStore = defineStore('mail', () => {
   async function targetIds(): Promise<string[]> {
     if (selectAllQuery.value) return targetIdsForQuery()
     return [...selection.value]
+  }
+
+  /** What a keyboard or palette action applies to: the selection (all N in this view when chosen),
+   *  else the open message. */
+  async function currentTargets(): Promise<string[]> {
+    if (selectAllQuery.value) return targetIdsForQuery()
+    if (selection.value.size) return [...selection.value]
+    return openId.value ? [openId.value] : []
+  }
+
+  /** Run a keyboard/palette action on currentTargets(). The selection is cleared first (its rows
+   *  are about to change or leave); `allInView` says it was "all N in this view". */
+  async function actOnTargets(fn: (ids: string[], allInView: boolean) => unknown) {
+    const allInView = selectAllQuery.value
+    const ids = await currentTargets()
+    if (!ids.length) return
+    if (selection.value.size || selectAllQuery.value) clearSelection()
+    await fn(ids, allInView)
+  }
+
+  /** Mark the targets read. "All in this view" goes through markAllRead, which also covers mail
+   *  that is only on the server (like the bulk bar). */
+  function markTargetsRead() {
+    if (selectAllQuery.value) {
+      clearSelection()
+      return markAllRead()
+    }
+    return actOnTargets((ids) => setRead(ids, true))
+  }
+
+  /** Star or unstar? Star unless every one is already starred. "All in this view" can't see the
+   *  rows that never loaded, so it stars, except in Starred itself. */
+  function shouldStar(ids: string[], allInView = false): boolean {
+    if (allInView) return mailbox.value.kind !== 'starred'
+    return !ids.length || !ids.every((id) => byId.value.get(id)?.starred)
   }
 
   /** Backend ids for actions: conversation ids ("c:…") act on the whole thread. */
@@ -636,7 +673,16 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   function plural(n: number, word: string) {
-    return `${n} ${word}${n === 1 ? '' : 's'}`
+    return `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`
+  }
+  /** Rows are conversations, or single messages with Settings → conversation view off. */
+  function rows(n: number) {
+    return plural(n, settings.settings?.conversationView === false ? 'message' : 'conversation')
+  }
+  /** "Conversation archived" / "3 conversations archived". */
+  function done(n: number, what: string) {
+    const s = n === 1 ? rows(1).replace(/^1 /, '') : rows(n)
+    return `${s[0].toUpperCase()}${s.slice(1)} ${what}`
   }
 
   async function archive(ids: string[]) {
@@ -648,8 +694,8 @@ export const useMailStore = defineStore('mail', () => {
     if (removes) removeLocal(ids)
     try {
       await inChunks(backendIds, api.archive)
-      announce(`${plural(ids.length, 'conversation')} archived`)
-      toast(`${ids.length === 1 ? 'Conversation' : plural(ids.length, 'conversation')} archived`, {
+      announce(`${rows(ids.length)} archived`)
+      toast(done(ids.length, 'archived'), {
         action: { label: 'Undo', onClick: undo },
       })
     } catch (e) {
@@ -672,8 +718,8 @@ export const useMailStore = defineStore('mail', () => {
     removeLocal(ids)
     try {
       await inChunks(backendIds, api.trash)
-      announce(`${plural(ids.length, 'conversation')} moved to Trash`)
-      toast(`${ids.length === 1 ? 'Moved' : plural(ids.length, 'message') + ' moved'} to Trash`, {
+      announce(`${rows(ids.length)} moved to Trash`)
+      toast(done(ids.length, 'moved to Trash'), {
         action: { label: 'Undo', onClick: undo },
       })
     } catch (e) {
@@ -697,8 +743,8 @@ export const useMailStore = defineStore('mail', () => {
     removeLocal(ids)
     try {
       await inChunks(backendIds, api.moveToJunk)
-      announce(`${plural(ids.length, 'conversation')} moved to Junk`)
-      toast(`${ids.length === 1 ? 'Moved' : plural(ids.length, 'message') + ' moved'} to Junk`, {
+      announce(`${rows(ids.length)} moved to Junk`)
+      toast(done(ids.length, 'moved to Junk'), {
         action: { label: 'Undo', onClick: undo },
       })
     } catch (e) {
@@ -709,33 +755,75 @@ export const useMailStore = defineStore('mail', () => {
     accounts.refreshCounts()
   }
 
+  /** "Not junk": back to the Inbox of each message's own account, with Undo. */
+  async function notJunk(ids: string[]) {
+    const groups = new Map<string, string[]>()
+    for (const id of ids) {
+      const acct = byId.value.get(id)?.accountId || resolvedAccount.get(id) || mailbox.value.accountId
+      const inbox = acct ? accounts.folderOf(acct, 'inbox')?.id : undefined
+      if (!inbox) continue
+      const list = groups.get(inbox)
+      if (list) list.push(id)
+      else groups.set(inbox, [id])
+    }
+    const moved = [...groups.values()].flat()
+    if (!moved.length) return
+    const backend = [...groups].map(([folder, list]) => [folder, actionIds(list)] as const) // before the rows leave the list
+    const items = snapshot(moved)
+    const undo = undoMove(items, moved.filter((id) => !byId.value.has(id)))
+    removeLocal(moved)
+    try {
+      for (const [folder, list] of backend) await inChunks(list, (c) => api.moveToFolder(c, folder))
+      announce(`${rows(moved.length)} moved to Inbox`)
+      toast(done(moved.length, 'moved to Inbox'), { action: { label: 'Undo', onClick: undo } })
+    } catch (e) {
+      restoreLocal(items)
+      toast.error('Move failed', { description: errorMessage(e) })
+      void softRefresh() // earlier chunks may have gone through
+    }
+    accounts.refreshCounts()
+  }
+
   /** Move to a folder of the messages' account, with Undo. */
   async function moveToFolder(ids: string[], folderId: string) {
-    if (!ids.length) return
+    const folder = accounts.folderMap.get(folderId)
+    // A folder belongs to one mailbox: mail of other accounts can't go there. Say so rather
+    // than moving part of the selection silently.
+    const skipped = folder ? ids.filter((id) => { const m = byId.value.get(id); return !!m && m.accountId !== folder.accountId }) : []
+    if (skipped.length) ids = ids.filter((id) => !skipped.includes(id))
+    if (!ids.length) {
+      if (skipped.length) toast(`“${folder!.name}” is a folder of another mailbox`, { description: 'Mail can only move to folders of its own account.' })
+      return
+    }
     const backendIds = actionIds(ids)
     const items = snapshot(ids)
     const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
-    const name = accounts.folderMap.get(folderId)?.name ?? 'folder'
+    const name = folder ? (folder.kind === 'spam' ? 'Junk' : folder.name) : 'folder'
     removeLocal(ids)
     try {
       await inChunks(backendIds, (c) => api.moveToFolder(c, folderId))
-      toast(`Moved to ${name}`, { action: { label: 'Undo', onClick: undo } })
+      announce(`${rows(ids.length)} moved to ${name}`)
+      toast(done(ids.length, `moved to ${name}`), {
+        description: skipped.length ? `${rows(skipped.length)} from another mailbox stayed where ${skipped.length === 1 ? 'it was' : 'they were'}.` : undefined,
+        action: { label: 'Undo', onClick: undo },
+      })
     } catch (e) {
+      restoreLocal(items)
       toast.error('Move failed', { description: errorMessage(e) })
-      void softRefresh()
+      void softRefresh() // earlier chunks may have gone through
     }
     accounts.refreshCounts()
   }
 
   async function setRead(ids: string[], read: boolean) {
     if (!ids.length) return
-    const rows = snapshot(ids)
-    const before = rows.map((m) => [m.id, m.unread] as const)
-    accounts.adjustUnread(rows.filter((m) => m.unread === read), read ? -1 : 1)
+    const snap = snapshot(ids)
+    const before = snap.map((m) => [m.id, m.unread] as const)
+    accounts.adjustUnread(snap.filter((m) => m.unread === read), read ? -1 : 1)
     patchLocal(ids, { unread: !read })
     try {
       await inChunks(actionIds(ids), (c) => api.markRead(c, read))
-      if (ids.length > 1 || !openId.value || ids[0] !== openId.value) announce(`${plural(ids.length, 'message')} marked as ${read ? 'read' : 'unread'}`)
+      if (ids.length > 1 || !openId.value || ids[0] !== openId.value) announce(`${rows(ids.length)} marked as ${read ? 'read' : 'unread'}`)
     } catch (e) {
       for (const [id, unread] of before) patchLocal([id], { unread })
       toast.error('Could not update', { description: errorMessage(e) })
@@ -775,7 +863,7 @@ export const useMailStore = defineStore('mail', () => {
     patchLocal(ids, { starred })
     try {
       await inChunks(actionIds(ids), (c) => api.setStarred(c, starred))
-      announce(`${plural(ids.length, 'message')} ${starred ? 'starred' : 'unstarred'}`)
+      announce(`${rows(ids.length)} ${starred ? 'starred' : 'unstarred'}`)
       if (mailbox.value.kind === 'starred' && !starred) removeLocal(ids)
     } catch (e) {
       for (const [id, was] of before) patchLocal([id], { starred: was })
@@ -787,7 +875,9 @@ export const useMailStore = defineStore('mail', () => {
     // Only mail of the label's mailboxes gets it (the backend refuses the rest); rows not loaded are
     // left to the backend.
     const label = settings.labelMap.get(labelId)
+    const before = ids.length
     if (label) ids = ids.filter((id) => { const m = byId.value.get(id); return !m || labelInAccount(label, m.accountId) })
+    const skipped = before - ids.length
     if (!ids.length) {
       if (label) toast(`“${label.name}” isn’t a label of this mailbox`, { description: 'Choose its mailboxes in Settings → Labels & rules.' })
       return
@@ -798,7 +888,10 @@ export const useMailStore = defineStore('mail', () => {
     }))
     try {
       await inChunks(actionIds(ids), (c) => api.addLabel(c, labelId))
-      if (!quiet && ids.length > 1) toast(`Label “${settings.labelMap.get(labelId)?.name ?? labelId}” added to ${plural(ids.length, 'message')}`)
+      const name = label?.name ?? labelId
+      // Part of the selection is in a mailbox without this label: say so, never skip it silently.
+      if (skipped) toast(`Label “${name}” added to ${rows(ids.length)}`, { description: `${rows(skipped)} in other mailboxes didn’t get it: “${name}” isn’t one of their labels.` })
+      else if (!quiet && ids.length > 1) toast(`Label “${name}” added to ${rows(ids.length)}`)
     } catch (e) {
       toast.error('Could not add label', { description: errorMessage(e) })
       void softRefresh()
@@ -814,7 +907,7 @@ export const useMailStore = defineStore('mail', () => {
     }))
     try {
       await inChunks(actionIds(ids), (c) => api.removeLabel(c, labelId))
-      if (!quiet && ids.length > 1) toast(`Label removed from ${plural(ids.length, 'message')}`)
+      if (!quiet && ids.length > 1) toast(`Label “${settings.labelMap.get(labelId)?.name ?? labelId}” removed from ${rows(ids.length)}`)
     } catch (e) {
       toast.error('Could not remove label', { description: errorMessage(e) })
       void softRefresh()
@@ -879,7 +972,7 @@ export const useMailStore = defineStore('mail', () => {
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
-    actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
-    archive, trash, junk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, suggestAddresses,
+    actionIds, currentTargets, actOnTargets, markTargetsRead, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
+    archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, suggestAddresses,
   }
 })

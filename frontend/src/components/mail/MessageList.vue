@@ -263,6 +263,13 @@ async function refresh() {
   void mail.softRefresh()
 }
 
+/** No results in this folder: run the same search over all mail of the account (or all accounts). */
+function searchAllMail() {
+  const q = mail.search
+  mail.setMailbox({ accountId: mail.mailbox.accountId, folderId: '', kind: 'all' })
+  mail.search = q
+}
+
 const emptyState = computed(() => {
   if (mail.search) return { icon: SearchXIcon, title: 'No results', text: `Nothing matches “${mail.search}”. Try fewer words or operators like from: or has:attachment.` }
   if (mail.hasLabelFilter) return { icon: TagIcon, title: 'No mail with these labels', text: 'Try another label, or clear the filter.' }
@@ -421,7 +428,13 @@ const emptyState = computed(() => {
             </div>
             <p class="text-sm font-medium">{{ emptyState.title }}</p>
             <p v-if="emptyState.text" class="text-muted-foreground max-w-xs text-xs leading-relaxed">{{ emptyState.text }}</p>
-            <Button v-if="mail.hasLabelFilter" variant="outline" size="sm" class="mt-2" @click="mail.clearLabelFilter()">Clear label filter</Button>
+            <!-- A way out of every filtered empty view -->
+            <div v-if="mail.search || mail.hasLabelFilter || mail.unreadOnly" class="mt-2 flex flex-wrap justify-center gap-2">
+              <Button v-if="mail.search && mail.mailbox.kind !== 'all'" variant="outline" size="sm" @click="searchAllMail">Search all mail</Button>
+              <Button v-if="mail.search" variant="outline" size="sm" @click="searchText = ''; mail.search = ''">Clear search</Button>
+              <Button v-if="mail.hasLabelFilter" variant="outline" size="sm" @click="mail.clearLabelFilter()">Clear label filter</Button>
+              <Button v-if="mail.unreadOnly" variant="outline" size="sm" @click="mail.unreadOnly = false">Show read mail too</Button>
+            </div>
           </div>
 
           <template v-else>

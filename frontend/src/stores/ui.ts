@@ -21,6 +21,8 @@ export const useUiStore = defineStore('ui', () => {
   const addAccountOpen = ref(false)
   /** Opens the label checklist popover in the reading pane (shortcut "l"). */
   const labelPopoverOpen = ref(false)
+  /** Opens the bulk bar's "Add label" menu (shortcut "l" while mail is selected). */
+  const bulkLabelOpen = ref(false)
   const folderSidebarOpen = ref(true)
   const narrow = useMediaQuery('(max-width: 1080px)')
   /** Focus the list search input (shortcut "/"). Incremented to trigger. */
@@ -70,7 +72,7 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   return {
-    settingsOpen, settingsTab, paletteOpen, shortcutsOpen, addAccountOpen, labelPopoverOpen, folderSidebarOpen, narrow, focusSearchTick,
+    settingsOpen, settingsTab, paletteOpen, shortcutsOpen, addAccountOpen, labelPopoverOpen, bulkLabelOpen, folderSidebarOpen, narrow, focusSearchTick,
     welcomeTick, mainView, newEventPending, openSettings, anyDialogOpen, focusAccount, guardKeys, keyGuarded,
   }
 })

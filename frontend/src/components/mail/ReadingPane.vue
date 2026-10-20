@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
+import { useElementSize } from '@vueuse/core'
 import {
   ArchiveIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MoreHorizontalIcon, ReplyAllIcon, SparklesIcon, StarIcon,
-  Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon, PencilIcon,
+  Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon, PencilIcon, OctagonAlertIcon, InboxIcon,
 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -42,6 +43,10 @@ const expanded = ref<Set<string>>(new Set())
 const remoteAllowed = computed(() => mail.remoteAllowed)
 const summary = ref<{ id: string; text: string; loading: boolean } | null>(null)
 const scroller = ref<HTMLElement | null>(null)
+/** A narrow pane can't fit every toolbar button: Reply all, Forward and Label with AI move into "More". */
+const toolbar = ref<HTMLElement | null>(null)
+const { width: toolbarWidth } = useElementSize(toolbar)
+const compactBar = computed(() => toolbarWidth.value > 0 && toolbarWidth.value < 500)
 
 let token = 0
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -191,7 +196,7 @@ function toggleExpanded(id: string) {
   expanded.value = next
 }
 
-function respond(mode: 'reply' | 'replyAll' | 'forward', m: Message | null = newest.value) {
+function respond(mode: 'reply' | 'replyAll' | 'forward', m: Message | null = replyTo.value) {
   if (m) compose.respond(mode, m)
 }
 
@@ -215,7 +220,7 @@ async function summarize() {
 const moveTargets = computed(() => {
   const m = current.value
   if (!m) return []
-  return (accounts.folders[m.accountId] ?? []).filter((f) => !['starred', 'drafts', 'sent'].includes(f.kind) && !m.folderIds.includes(f.id))
+  return (accounts.folders[m.accountId] ?? []).filter((f) => !['starred', 'drafts', 'sent', 'spam'].includes(f.kind) && !m.folderIds.includes(f.id))
 })
 
 async function moveTo(folderId: string) {
@@ -223,7 +228,7 @@ async function moveTo(folderId: string) {
   if (m) await mail.moveToFolder([m.id], folderId)
 }
 
-const isDraftMsg = (m: Message) => !!m.isDraft || m.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts')
+const isDraftMsg = compose.isDraftMessage
 const isDraft = computed(() => !!newest.value && isDraftMsg(newest.value))
 /** The thread minus drafts still being written: autosave stores them on the server, and a half-typed
  *  reply must not look like a sent message. Gmail gives each save a new id, so while a composer replies
@@ -236,9 +241,12 @@ const shownThread = computed(() => {
   const list = thread.value.filter((m) => !openIds.has(m.id) && !(replying && isDraftMsg(m)))
   return list.length ? list : thread.value
 })
-function editDraft() {
-  if (newest.value) void compose.editDraft(newest.value)
+function editDraft(m: Message | null = newest.value) {
+  if (m) void compose.editDraft(m)
 }
+/** What Reply / Forward answer: the newest message that isn't a draft (an autosaved reply ends the
+ *  thread), or with conversations off the message opened. */
+const replyTo = computed(() => (mail.openId ? compose.replyTargetFor(shownThread.value, mail.openId) ?? null : null))
 
 const labelingNow = computed(() => !!current.value && ai.labeling.has(current.value.id))
 </script>
@@ -259,26 +267,26 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
 
     <template v-else>
       <!-- Toolbar -->
-      <div data-drag class="border-border flex h-[52px] shrink-0 items-center gap-0.5 border-b px-3">
+      <div ref="toolbar" data-drag class="border-border flex h-[52px] shrink-0 items-center gap-0.5 border-b px-3">
         <template v-if="showBack">
           <Tip label="Back to list" shortcut="esc"><Button variant="ghost" size="icon-sm" aria-label="Back to list" @click="mail.open(null)"><ArrowLeftIcon /></Button></Tip>
           <div class="bg-border mx-1.5 h-5 w-px" />
         </template>
         <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="mail.archive(ids())"><ArchiveIcon /></Button></Tip>
         <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="mail.trash(ids())"><Trash2Icon /></Button></Tip>
-        <Tip :label="current?.unread ? 'Mark as read' : 'Mark as unread'" shortcut="u">
-          <Button variant="ghost" size="icon-sm" aria-label="Toggle read" @click="current && mail.setRead(ids(), current.unread)">
+        <Tip :label="current?.unread ? 'Mark as read' : 'Mark as unread'" :shortcut="current?.unread ? 'shift+i' : 'u'">
+          <Button variant="ghost" size="icon-sm" :aria-label="current?.unread ? 'Mark as read' : 'Mark as unread'" @click="current && mail.setRead(ids(), current.unread)">
             <MailOpenIcon v-if="current?.unread" /><MailIcon v-else />
           </Button>
         </Tip>
         <Tip :label="current?.starred ? 'Unstar' : 'Star'" shortcut="s">
-          <Button variant="ghost" size="icon-sm" aria-label="Star" @click="current && mail.setStarred(ids(), !current.starred)">
+          <Button variant="ghost" size="icon-sm" :aria-label="current?.starred ? 'Unstar' : 'Star'" @click="current && mail.setStarred(ids(), !current.starred)">
             <StarIcon :class="current?.starred && 'fill-amber-400 text-amber-400'" />
           </Button>
         </Tip>
         <div class="bg-border mx-1.5 h-5 w-px" />
         <LabelPopover v-if="current" :message="current" />
-        <Tip label="Label with AI">
+        <Tip v-if="!compactBar" label="Label with AI">
           <Button variant="ghost" size="icon-sm" aria-label="Label with AI" :disabled="labelingNow" @click="current && ai.labelMessages([current.id])">
             <LoaderIcon v-if="labelingNow" class="animate-spin" />
             <SparklesIcon v-else class="text-violet-500" />
@@ -287,15 +295,23 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
         <div class="flex-1" />
         <Button v-if="isDraft" size="sm" class="mr-1 gap-1.5" @click="editDraft"><PencilIcon /> Edit draft</Button>
         <Tip label="Reply" shortcut="r"><Button variant="ghost" size="icon-sm" aria-label="Reply" @click="respond('reply')"><CornerUpLeftIcon /></Button></Tip>
-        <Tip label="Reply all" shortcut="a"><Button variant="ghost" size="icon-sm" aria-label="Reply all" @click="respond('replyAll')"><ReplyAllIcon /></Button></Tip>
-        <Tip label="Forward" shortcut="f"><Button variant="ghost" size="icon-sm" aria-label="Forward" @click="respond('forward')"><ForwardIcon /></Button></Tip>
+        <Tip v-if="!compactBar" label="Reply all" shortcut="a"><Button variant="ghost" size="icon-sm" aria-label="Reply all" @click="respond('replyAll')"><ReplyAllIcon /></Button></Tip>
+        <Tip v-if="!compactBar" label="Forward" shortcut="f"><Button variant="ghost" size="icon-sm" aria-label="Forward" @click="respond('forward')"><ForwardIcon /></Button></Tip>
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
             <Button variant="ghost" size="icon-sm" aria-label="More actions"><MoreHorizontalIcon /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" class="w-56">
+            <template v-if="compactBar">
+              <DropdownMenuItem @click="respond('replyAll')"><ReplyAllIcon /> Reply all <DropdownMenuShortcut>A</DropdownMenuShortcut></DropdownMenuItem>
+              <DropdownMenuItem @click="respond('forward')"><ForwardIcon /> Forward <DropdownMenuShortcut>F</DropdownMenuShortcut></DropdownMenuItem>
+              <DropdownMenuItem :disabled="labelingNow" @click="current && ai.labelMessages([current.id])"><SparklesIcon class="text-violet-500" /> Label with AI</DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </template>
             <DropdownMenuItem v-if="settings.aiReady" @click="summarize"><TextQuoteIcon /> Summarize</DropdownMenuItem>
-            <DropdownMenuSub>
+            <DropdownMenuItem v-if="mail.mailbox.kind !== 'spam'" @click="mail.junk(ids())"><OctagonAlertIcon /> Move to Junk <DropdownMenuShortcut>!</DropdownMenuShortcut></DropdownMenuItem>
+            <DropdownMenuItem v-else @click="mail.notJunk(ids())"><InboxIcon /> Not junk <DropdownMenuShortcut>!</DropdownMenuShortcut></DropdownMenuItem>
+            <DropdownMenuSub v-if="moveTargets.length">
               <DropdownMenuSubTrigger class="gap-2"><FolderInputIcon class="size-4" /> Move to</DropdownMenuSubTrigger>
               <DropdownMenuSubContent class="w-48">
                 <DropdownMenuItem v-for="f in moveTargets" :key="f.id" @click="moveTo(f.id)">
@@ -355,21 +371,22 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
               :own-email="ownEmail"
               :allow-remote="allowRemoteFor(m)"
               @toggle="toggleExpanded(m.id)"
-              @reply="respond('reply', m)"
+              @respond="(mode) => respond(mode, m)"
+              @edit="editDraft(m)"
               @load-images="loadImages(m.threadId)"
               @trust-sender="trustSender(m)"
             />
           </div>
 
           <!-- Quick reply -->
-          <div class="px-6 pt-2 pb-8">
+          <div v-if="replyTo && !isDraftMsg(replyTo)" class="px-6 pt-2 pb-8">
             <button
               type="button"
               class="border-border text-muted-foreground hover:text-foreground hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg border px-4 py-3 text-left text-sm transition-colors"
               @click="respond('reply')"
             >
               <CornerUpLeftIcon class="size-4" />
-              Reply to {{ newest ? displayName(newest.from) : '' }}…
+              Reply to {{ displayName(replyTo.from) }}…
             </button>
           </div>
         </template>

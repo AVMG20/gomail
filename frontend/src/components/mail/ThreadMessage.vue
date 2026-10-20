@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ChevronDownIcon, CornerUpLeftIcon, PaperclipIcon } from '@lucide/vue'
+import { ChevronDownIcon, CornerUpLeftIcon, ForwardIcon, MoreVerticalIcon, PaperclipIcon, PencilIcon, ReplyAllIcon } from '@lucide/vue'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import SenderAvatar from '@/components/common/SenderAvatar.vue'
 import Tip from '@/components/common/Tip.vue'
 import { displayName, formatAddress, listDate, longDate, parseMailto } from '@/lib/format'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
-import { useAccountsStore } from '@/stores/accounts'
 import { useComposeStore } from '@/stores/compose'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -17,13 +17,12 @@ import AttachmentList from './AttachmentList.vue'
 import MessageBody from './MessageBody.vue'
 
 const props = defineProps<{ message: Message; expanded: boolean; ownEmail: string; allowRemote: boolean }>()
-const emit = defineEmits<{ toggle: []; reply: []; loadImages: []; trustSender: [] }>()
+const emit = defineEmits<{ toggle: []; respond: [mode: 'reply' | 'replyAll' | 'forward']; edit: []; loadImages: []; trustSender: [] }>()
 
 const showDetails = ref(false)
 const confirmUnsub = ref(false)
 const compose = useComposeStore()
-const accounts = useAccountsStore()
-const isDraft = computed(() => !!props.message.isDraft || props.message.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts'))
+const isDraft = computed(() => compose.isDraftMessage(props.message))
 
 async function unsubscribe() {
   const u = props.message.unsubscribe
@@ -100,11 +99,31 @@ const recipients = computed(() => {
         </div>
         <div class="flex shrink-0 items-center gap-1">
           <button type="button" class="text-muted-foreground text-xs" :title="longDate(message.date)" @click="emit('toggle')">{{ listDate(message.date) }}</button>
-          <Tip label="Reply" shortcut="r">
-            <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted ml-1 flex size-7 items-center justify-center rounded-md" aria-label="Reply" @click="emit('reply')">
-              <CornerUpLeftIcon class="size-4" />
+          <!-- A draft is continued, not answered. -->
+          <Tip v-if="isDraft" label="Edit draft">
+            <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted ml-1 flex size-7 items-center justify-center rounded-md" aria-label="Edit draft" @click="emit('edit')">
+              <PencilIcon class="size-4" />
             </button>
           </Tip>
+          <template v-else>
+            <Tip label="Reply to this message">
+              <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted ml-1 flex size-7 items-center justify-center rounded-md" aria-label="Reply to this message" @click="emit('respond', 'reply')">
+                <CornerUpLeftIcon class="size-4" />
+              </button>
+            </Tip>
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <button type="button" class="text-muted-foreground hover:text-foreground hover:bg-muted data-[state=open]:bg-muted flex size-7 items-center justify-center rounded-md" aria-label="More for this message">
+                  <MoreVerticalIcon class="size-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" class="w-44">
+                <DropdownMenuItem @click="emit('respond', 'reply')"><CornerUpLeftIcon /> Reply</DropdownMenuItem>
+                <DropdownMenuItem @click="emit('respond', 'replyAll')"><ReplyAllIcon /> Reply all</DropdownMenuItem>
+                <DropdownMenuItem @click="emit('respond', 'forward')"><ForwardIcon /> Forward</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </template>
         </div>
       </div>
       <div class="mt-4 pl-0">

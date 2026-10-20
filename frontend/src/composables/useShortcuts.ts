@@ -16,25 +16,12 @@ export function useShortcuts() {
   let gPending = false
   let gTimer: ReturnType<typeof setTimeout> | null = null
 
-  function targets(): string[] {
-    if (mail.selection.size) return [...mail.selection]
-    return mail.openId ? [mail.openId] : []
-  }
-
   async function respond(mode: 'reply' | 'replyAll' | 'forward') {
-    const id = mail.openId
-    if (!id) return
-    const thread = await mail.loadThread(id)
-    const m = thread[thread.length - 1]
-    if (m) compose.respond(mode, m)
+    if (mail.openId) await compose.respondToThread(mode, mail.openId)
   }
 
-  async function bulk(fn: (ids: string[]) => unknown) {
-    const ids = mail.selectAllQuery ? await mail.targetIds() : targets()
-    if (!ids.length) return
-    if (mail.selection.size || mail.selectAllQuery) mail.clearSelection()
-    await fn(ids)
-  }
+  /** Act on the selection (all N in this view when chosen), else the open message. */
+  const bulk = mail.actOnTargets
 
   function onKey(e: KeyboardEvent) {
     if (e.defaultPrevented) return
@@ -156,26 +143,29 @@ export function useShortcuts() {
         e.preventDefault()
         void bulk(mail.trash)
         break
-      case 's': {
-        const ids = targets()
-        const first = ids[0] ? mail.byId.get(ids[0]) : undefined
-        if (first) void bulk((x) => mail.setStarred(x, !first.starred))
+      case 's':
+        // Same rule as the bulk bar and the menus: star unless every one is starred already.
+        void bulk((x, all) => mail.setStarred(x, mail.shouldStar(x, all)))
         break
-      }
       case 'u':
         void bulk((x) => mail.setRead(x, false))
         break
       case 'I':
-        if (mail.selectAllQuery) {
-          mail.clearSelection()
-          void mail.markAllRead()
-        } else void bulk((x) => mail.setRead(x, true))
+        void mail.markTargetsRead()
+        break
+      case '!':
+        // Move to Junk (like Gmail); in Junk itself: Not junk (back to the Inbox).
+        void bulk(mail.mailbox.kind === 'spam' ? mail.notJunk : mail.junk)
         break
       case 'x':
         if (mail.openId) mail.toggleSelect(mail.openId)
         break
       case 'l':
-        if (mail.openId) {
+        // With mail selected, label the selection (not just the open message).
+        if (mail.selection.size || mail.selectAllQuery) {
+          e.preventDefault()
+          ui.bulkLabelOpen = true
+        } else if (mail.openId) {
           e.preventDefault()
           ui.labelPopoverOpen = true
         }

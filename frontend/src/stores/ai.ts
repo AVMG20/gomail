@@ -101,6 +101,19 @@ export const useAiStore = defineStore('ai', () => {
     bulkRequest.value = req
   }
 
+  /** "Label with AI" on the selection: a few messages run right away; more, or "all N in this
+   *  view", go through the bulk confirm (cost estimate, only-unlabeled). */
+  async function labelSelection() {
+    if (mail.selectAllQuery) {
+      requestBulk({ query: { ...mail.query, cursor: '' }, ids: [], title: `${mail.total.toLocaleString()} messages in ${mail.mailboxName}` })
+      return
+    }
+    const ids = [...mail.selection]
+    if (ids.length > 3) return requestBulk({ query: null, ids, title: `${ids.length} selected messages` })
+    mail.clearSelection()
+    await labelMessages(ids)
+  }
+
   async function startBulk(req: BulkRequest, onlyUnlabeled: boolean, includeTrashDrafts: boolean) {
     bulkRequest.value = null
     try {
@@ -179,5 +192,5 @@ export const useAiStore = defineStore('ai', () => {
     job.value = null
   }
 
-  return { scores, labeling, job, bulkRequest, labelMessages, requestBulk, startBulk, cancelJob, onProgress, onFinished, dismissJob }
+  return { scores, labeling, job, bulkRequest, labelMessages, labelSelection, requestBulk, startBulk, cancelJob, onProgress, onFinished, dismissJob }
 })

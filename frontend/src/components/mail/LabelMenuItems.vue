@@ -3,12 +3,13 @@
 // (a mixed selection offers the labels of any of them).
 import { computed } from 'vue'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import type { Label } from '@/lib/types'
 import { useSettingsStore } from '@/stores/settings'
 
-const props = defineProps<{ active?: string[]; accountIds?: string[] }>()
+const props = defineProps<{ active?: string[]; accountIds?: string[]; /** Offer exactly these instead. */ only?: Label[]; emptyText?: string }>()
 defineEmits<{ pick: [labelId: string] }>()
 const settings = useSettingsStore()
-const labels = computed(() => settings.labelsForAccounts(props.accountIds ?? []))
+const labels = computed(() => props.only ?? settings.labelsForAccounts(props.accountIds ?? []))
 </script>
 
 <template>
@@ -16,5 +17,5 @@ const labels = computed(() => settings.labelsForAccounts(props.accountIds ?? [])
     <span class="size-2.5 rounded-full" :style="{ background: l.color }" />
     <span class="flex-1 truncate">{{ l.name }}</span>
   </DropdownMenuItem>
-  <DropdownMenuItem v-if="!labels.length" disabled>No labels yet</DropdownMenuItem>
+  <DropdownMenuItem v-if="!labels.length" disabled>{{ emptyText ?? 'No labels yet' }}</DropdownMenuItem>
 </template>

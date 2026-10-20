@@ -32,7 +32,7 @@ const emit = defineEmits<{
 const who = computed(() => {
   const m = props.message
   if (props.sentView && m.to.length) return `To: ${m.to.map((a) => displayName(a)).join(', ')}`
-  // Conversations: "Priya, me, Jonas" like most mail apps.
+  // Conversations: "Sam, me, Alex" like most mail apps.
   const p = m.participants
   if (p && p.length > 1) return p.length > 3 ? `${p[0]} … ${p.slice(-2).join(', ')}` : p.join(', ')
   return displayName(m.from)
@@ -129,6 +129,7 @@ const date = computed(() => listDate(props.message.date))
         <span v-for="p in pills.slice(0, 3)" :key="p.label.id" class="size-2 rounded-full" :style="{ background: p.label.color }" />
       </span>
       <PaperclipIcon v-if="message.hasAttachments" class="text-muted-foreground size-3.5 shrink-0" />
+      <StarIcon v-if="message.starred" class="size-3.5 shrink-0 fill-amber-400 text-amber-400 group-hover/row:invisible" aria-label="Starred" />
       <span :class="['w-16 shrink-0 text-right text-xs tabular-nums group-hover/row:invisible', message.unread ? 'font-medium' : 'text-muted-foreground']">{{ date }}</span>
     </div>
 
@@ -148,7 +149,7 @@ const date = computed(() => listDate(props.message.date))
       <Tip label="Delete" shortcut="#">
         <span role="presentation" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 cursor-default items-center justify-center rounded" @click="emit('trash')"><Trash2Icon class="size-4" /></span>
       </Tip>
-      <Tip :label="message.unread ? 'Mark as read' : 'Mark as unread'" shortcut="u">
+      <Tip :label="message.unread ? 'Mark as read' : 'Mark as unread'" :shortcut="message.unread ? 'shift+i' : 'u'">
         <span role="presentation" class="hover:bg-muted text-muted-foreground hover:text-foreground flex size-7 cursor-default items-center justify-center rounded" @click="emit('read', message.unread)">
           <MailOpenIcon v-if="message.unread" class="size-4" />
           <MailIcon v-else class="size-4" />

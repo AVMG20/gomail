@@ -92,9 +92,45 @@ export function draftHasContent(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' |
   return !!(d.to?.length || d.cc?.length || d.bcc?.length || d.subject?.trim() || d.attachments?.length || htmlHasText(d.html ?? '', true))
 }
 
-function prefixSubject(prefix: string, subject: string) {
-  const re = new RegExp(`^(${prefix}|re|fwd?|aw|sv)\\s*:\\s*`, 'i')
-  return re.test(subject) && subject.toLowerCase().startsWith(prefix.toLowerCase()) ? subject : `${prefix}: ${subject.replace(re, '')}`
+/** The words people use for "see the attached file" (English, Dutch, German, French, Spanish). */
+const ATTACH_WORDS = /\b(attach(ed|ing|ment|ments)?|enclosed|bijlage[n]?|bijgevoegd|meegestuurd|anhang|angehängt|pièce[s]? jointe[s]?|ci-joint|adjunto|adjunta)\b/i
+
+/** The text the user wrote themselves: without the signature and the quoted message. */
+export function ownText(html: string): string {
+  if (!html || typeof DOMParser === 'undefined') return htmlToText(html ?? '')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  doc.querySelectorAll('[data-signature], blockquote').forEach((el) => el.remove())
+  // htmlToText keeps paragraphs apart ("…attached</p><p>Thanks" must not become one word).
+  return htmlToText(doc.body.innerHTML).replace(/\s+/g, ' ').trim()
+}
+
+/** Reasons to ask before sending: an empty subject, or text that mentions an attachment while
+ *  none is attached (forwarded files count). Empty when there is nothing to ask. */
+export function sendWarnings(d: Pick<Draft, 'subject' | 'html' | 'attachments' | 'forwarded'>): ('subject' | 'attachment')[] {
+  const out: ('subject' | 'attachment')[] = []
+  if (!d.subject.trim()) out.push('subject')
+  // Not the subject: a reply's "Re: Attached invoice" mentions the original's file.
+  if (!d.attachments.length && !d.forwarded?.length && ATTACH_WORDS.test(ownText(d.html))) out.push('attachment')
+  return out
+}
+
+/** The message a reply or forward answers: `prefer` (the message opened on its own, with
+ *  conversations off) when it is in the thread, else the newest one that isn't a draft (an
+ *  autosaved reply sits at the end of the thread; answering it would reply to yourself). */
+export function replyTarget(thread: Message[], isDraft: (m: Message) => boolean, prefer?: string): Message | undefined {
+  const own = prefer ? thread.find((m) => m.id === prefer) : undefined
+  if (own && !isDraft(own)) return own
+  for (let i = thread.length - 1; i >= 0; i--) if (!isDraft(thread[i])) return thread[i]
+  return thread[thread.length - 1]
+}
+
+/** "Re: …" / "Fwd: …". A subject that already has the prefix (or a localised one: AW, SV, Antw,
+ *  WG, Doorst) keeps it; another one stays too, so a reply to "Fwd: Plans" is "Re: Fwd: Plans". */
+export function prefixSubject(prefix: 'Re' | 'Fwd', subject: string): string {
+  const s = subject.trim() === '(no subject)' ? '' : subject.trim()
+  const same = prefix === 'Re' ? /^(re|aw|sv|antw)\s*:/i : /^(fwd?|wg|doorst)\s*:/i
+  if (same.test(s)) return s
+  return s ? `${prefix}: ${s}` : `${prefix}:`
 }
 
 async function quotedBody(m: Message): Promise<string> {
@@ -283,6 +319,25 @@ export const useComposeStore = defineStore('compose', () => {
     })
     d.pristine = contentSig(d)
     return d
+  }
+
+  /** A draft: flagged by the backend or kept in a Drafts folder. */
+  function isDraftMessage(m: Message): boolean {
+    const accounts = useAccountsStore()
+    return !!m.isDraft || (m.folderIds ?? []).some((f) => accounts.folderMap.get(f)?.kind === 'drafts')
+  }
+
+  /** What replying to list row / open message `id` answers (see replyTarget). In conversation
+   *  view that is the conversation's newest message; with conversations off, the message itself. */
+  function replyTargetFor(thread: Message[], id: string): Message | undefined {
+    const single = useSettingsStore().settings?.conversationView === false
+    return replyTarget(thread, isDraftMessage, single ? id : undefined)
+  }
+
+  /** Reply to / forward list row or open message `id` (r, a, f, the palette, the row menu). */
+  async function respondToThread(mode: Exclude<ComposeMode, 'new'>, id: string) {
+    const m = replyTargetFor(await useMailStore().loadThread(id), id)
+    if (m) return respond(mode, m)
   }
 
   /** Continue editing a draft from the Drafts folder. Its files are loaded first: the next
@@ -560,5 +615,5 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  return { drafts, compose, composeWith, respond, editDraft, close, minimize, discard, saveAndClose, focus, send, undoSend, resolveMissing, restoreFiles }
+  return { drafts, compose, composeWith, respond, respondToThread, replyTargetFor, isDraftMessage, editDraft, close, minimize, discard, saveAndClose, focus, send, undoSend, resolveMissing, restoreFiles }
 })

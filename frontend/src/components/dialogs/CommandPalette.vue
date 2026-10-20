@@ -4,7 +4,7 @@ import DOMPurify from 'dompurify'
 import {
   ArchiveIcon, CheckIcon, ClockIcon, CornerUpLeftIcon, KeyboardIcon, LayersIcon, MoonIcon, PencilIcon, PlusIcon,
   RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, TagIcon, LoaderIcon, ForwardIcon, CornerDownLeftIcon,
-  CalendarDaysIcon, CalendarPlusIcon, MailCheckIcon, MailIcon, MessagesSquareIcon, PanelLeftIcon, PanelRightIcon, ReplyAllIcon, StarIcon, Trash2Icon,
+  CalendarDaysIcon, CalendarPlusIcon, InboxIcon, MailCheckIcon, MailIcon, MailOpenIcon, MessagesSquareIcon, OctagonAlertIcon, XIcon, PanelLeftIcon, PanelRightIcon, ReplyAllIcon, StarIcon, Trash2Icon,
 } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import CmdRoot from '@/components/common/cmd/CmdRoot.vue'
@@ -175,16 +175,43 @@ const actions = computed<Action[]>(() => {
     list.push({ id: 'ai-all', title: 'Label all mail with AI…', icon: SparklesIcon, run: () => ai.requestBulk({ query: { accountId: '' }, ids: [], title: 'All mail in all accounts' }) })
     list.push({ id: 'ai-view', title: `Label ${mail.mailboxName} with AI…`, icon: SparklesIcon, run: () => folderAction('labelAi') })
   }
-  if (open) {
+  const inJunk = mail.mailbox.kind === 'spam'
+  if (mail.selection.size || mail.selectAllQuery) {
+    // Mail is selected: the actions apply to the selection, like their shortcuts and the bulk bar.
+    const n = `${mail.selectionCount.toLocaleString()} selected`
+    const ids = [...mail.selection]
+    const star = mail.shouldStar(ids, mail.selectAllQuery)
+    const unread = mail.selectAllQuery ? mail.viewUnreadCount > 0 : ids.some((id) => mail.byId.get(id)?.unread)
+    list.unshift(
+      { id: 'sel-archive', title: `Archive ${n}`, icon: ArchiveIcon, shortcut: 'e', run: () => mail.actOnTargets(mail.archive) },
+      { id: 'sel-delete', title: `Delete ${n}`, icon: Trash2Icon, shortcut: '#', run: () => mail.actOnTargets(mail.trash) },
+      unread
+        ? { id: 'sel-read', title: `Mark ${n} as read`, icon: MailOpenIcon, shortcut: 'shift+i', run: () => void mail.markTargetsRead() }
+        : { id: 'sel-unread', title: `Mark ${n} as unread`, icon: MailIcon, shortcut: 'u', run: () => mail.actOnTargets((x) => mail.setRead(x, false)) },
+      { id: 'sel-star', title: `${star ? 'Star' : 'Unstar'} ${n}`, icon: StarIcon, shortcut: 's', run: () => mail.actOnTargets((x) => mail.setStarred(x, star)) },
+      { id: 'sel-label', title: `Add a label to ${n}…`, icon: TagIcon, shortcut: 'l', run: () => setTimeout(() => (ui.bulkLabelOpen = true), 50) },
+      inJunk
+        ? { id: 'sel-notjunk', title: `Not junk: move ${n} to Inbox`, icon: InboxIcon, shortcut: '!', run: () => mail.actOnTargets(mail.notJunk) }
+        : { id: 'sel-junk', title: `Move ${n} to Junk`, icon: OctagonAlertIcon, shortcut: '!', run: () => mail.actOnTargets(mail.junk) },
+      { id: 'sel-clear', title: 'Clear selection', icon: XIcon, shortcut: 'esc', run: () => mail.clearSelection() },
+    )
+    if (settings.aiReady) list.splice(4, 0, { id: 'sel-ai', title: `Label ${n} with AI`, icon: SparklesIcon, run: () => void ai.labelSelection() })
+  } else if (open) {
+    const noun = settings.settings?.conversationView === false ? 'message' : 'conversation'
     list.unshift(
       { id: 'reply', title: 'Reply', icon: CornerUpLeftIcon, shortcut: 'r', run: () => replyTo(open, 'reply') },
       { id: 'forward', title: 'Forward', icon: ForwardIcon, shortcut: 'f', run: () => replyTo(open, 'forward') },
-      { id: 'archive', title: 'Archive conversation', icon: ArchiveIcon, shortcut: 'e', run: () => mail.archive([open.id]) },
+      { id: 'archive', title: `Archive ${noun}`, icon: ArchiveIcon, shortcut: 'e', run: () => mail.archive([open.id]) },
       { id: 'reply-all', title: 'Reply all', icon: ReplyAllIcon, shortcut: 'a', run: () => replyTo(open, 'replyAll') },
-      { id: 'delete', title: 'Delete conversation', icon: Trash2Icon, shortcut: '#', run: () => mail.trash([open.id]) },
+      { id: 'delete', title: `Delete ${noun}`, icon: Trash2Icon, shortcut: '#', run: () => mail.trash([open.id]) },
       { id: 'star', title: open.starred ? 'Unstar' : 'Star', icon: StarIcon, shortcut: 's', run: () => mail.setStarred([open.id], !open.starred) },
-      { id: 'unread', title: open.unread ? 'Mark as read' : 'Mark as unread', icon: MailIcon, shortcut: open.unread ? 'shift+i' : 'u', run: () => mail.setRead([open.id], open.unread) },
+      open.unread
+        ? { id: 'read', title: 'Mark as read', icon: MailOpenIcon, shortcut: 'shift+i', run: () => mail.setRead([open.id], true) }
+        : { id: 'unread', title: 'Mark as unread', icon: MailIcon, shortcut: 'u', run: () => mail.setRead([open.id], false) },
       { id: 'label', title: 'Labels…', icon: TagIcon, shortcut: 'l', run: () => setTimeout(() => (ui.labelPopoverOpen = true), 50) },
+      inJunk
+        ? { id: 'notjunk', title: 'Not junk: move to Inbox', icon: InboxIcon, shortcut: '!', run: () => mail.notJunk([open.id]) }
+        : { id: 'junk', title: `Move ${noun} to Junk`, icon: OctagonAlertIcon, shortcut: '!', run: () => mail.junk([open.id]) },
     )
     if (settings.aiReady) list.splice(3, 0, { id: 'ai-one', title: 'Label this mail with AI', icon: SparklesIcon, run: () => ai.labelMessages([open.id]) })
   }
@@ -198,10 +225,8 @@ function folderAction(what: 'markAllRead' | 'empty' | 'labelAi') {
   setTimeout(() => window.dispatchEvent(new CustomEvent('gomail:folder-action', { detail: what })), 50)
 }
 
-async function replyTo(m: MessageSummary, mode: 'reply' | 'replyAll' | 'forward') {
-  const thread = await mail.loadThread(m.id)
-  const full = thread.find((x) => x.id === m.id) ?? thread[thread.length - 1]
-  if (full) compose.respond(mode, full)
+function replyTo(m: MessageSummary, mode: 'reply' | 'replyAll' | 'forward') {
+  void compose.respondToThread(mode, m.id)
 }
 
 // ---- selection handlers
@@ -384,7 +409,7 @@ const tipKeys = shortcutLabel('mod+enter')
           <div v-if="nothing" class="px-6 py-10 text-center">
             <p class="text-sm font-medium">No results for “{{ q }}”</p>
             <p class="text-muted-foreground mx-auto mt-2 max-w-sm text-xs leading-relaxed">
-              Try <code class="bg-muted rounded px-1">from:priya</code>, <code class="bg-muted rounded px-1">label:finance</code>,
+              Try <code class="bg-muted rounded px-1">from:alex</code>, <code class="bg-muted rounded px-1">label:finance</code>,
               <code class="bg-muted rounded px-1">is:unread</code>, <code class="bg-muted rounded px-1">has:attachment</code> or a <code class="bg-muted rounded px-1">"quoted phrase"</code>.
             </p>
           </div>
