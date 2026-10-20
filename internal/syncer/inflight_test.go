@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -186,5 +187,41 @@ func TestStarChangeKeepsOnlyTheStar(t *testing.T) {
 	}
 	if sums[0].Starred != m.Starred || sums[0].Unread || !slices.Equal(sums[0].FolderIDs, []string{archive.ID}) {
 		t.Fatalf("got starred=%v unread=%v folders=%v", sums[0].Starred, sums[0].Unread, sums[0].FolderIDs)
+	}
+}
+
+// A failed move only puts back messages that are still where it put them:
+// a later move that succeeded meanwhile (Archive fails slowly, then Trash
+// works) must not be undone locally, or the message shows in the Inbox
+// while it is in the Trash on the server.
+func TestFailedMoveDoesNotUndoALaterMove(t *testing.T) {
+	te := newTestEnv(t)
+	if err := te.e.SyncNow(context.Background(), demo.GmailAccountID); err != nil {
+		t.Fatal(err)
+	}
+	m := te.inbox(t, demo.GmailAccountID, true)[0]
+	trash, _ := te.st.FolderByKind(demo.GmailAccountID, models.FolderTrash)
+	gate, entered := make(chan struct{}), make(chan struct{})
+	te.provs[demo.GmailAccountID].moveHook = func(target mail.Folder) error {
+		if target.Kind == models.FolderArchive {
+			close(entered)
+			<-gate
+			return errors.New("denied")
+		}
+		return nil
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- te.e.MoveToKind([]string{m.ID}, models.FolderArchive) }()
+	<-entered
+	if err := te.e.MoveToKind([]string{m.ID}, models.FolderTrash); err != nil {
+		t.Fatal(err)
+	}
+	close(gate)
+	if err := <-errc; err == nil {
+		t.Fatal("archive should have failed")
+	}
+	sums, _ := te.st.Summaries([]string{m.ID})
+	if len(sums) != 1 || !slices.Equal(sums[0].FolderIDs, []string{trash.ID}) {
+		t.Fatalf("folders %v, want the trash (%s) only", sums[0].FolderIDs, trash.ID)
 	}
 }

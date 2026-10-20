@@ -457,12 +457,43 @@ func (e *Engine) move(ids []string, targetFor func(acct string) (models.Folder, 
 		t := targets[acct]
 		return p.Move(ctx, remoteIDs(ms), mail.Folder{RemoteID: t.RemoteID, Name: t.Name, Kind: t.Kind})
 	}, func(acct string, ms []models.MessageSummary) {
-		old := map[string][]string{}
-		for _, m := range ms {
-			old[m.ID] = current[m.ID]
-		}
-		_ = e.cfg.Store.SetMessageFolders(old)
+		e.revertFolders(localIDs(ms), newSets, current)
 	})
+}
+
+// revertFolders puts messages back in their old folders after a failed
+// push, but only those still where the push put them (set): a later move,
+// which may have worked, wins.
+func (e *Engine) revertFolders(ids []string, set, old map[string][]string) {
+	now, err := e.cfg.Store.MessageFolders(ids)
+	if err != nil {
+		return
+	}
+	back := map[string][]string{}
+	for _, id := range ids {
+		if sameSet(now[id], set[id]) {
+			back[id] = old[id]
+		}
+	}
+	if len(back) > 0 {
+		_ = e.cfg.Store.SetMessageFolders(back)
+	}
+}
+
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]bool, len(a))
+	for _, x := range a {
+		set[x] = true
+	}
+	for _, x := range b {
+		if !set[x] {
+			return false
+		}
+	}
+	return true
 }
 
 // PushLabel adds/removes a provider label on the server for accounts whose
@@ -580,7 +611,7 @@ func (e *Engine) EmptyFolder(folderID string) error {
 	}
 	if err != nil {
 		unlock := e.lockApply(f.AccountID)
-		_ = e.cfg.Store.SetMessageFolders(old)
+		e.revertFolders(ids, next, old)
 		unlock()
 		_ = e.cfg.Store.SetFolderCounts(f.ID, f.Unread, f.Total)
 		e.changed(f.AccountID)

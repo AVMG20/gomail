@@ -65,6 +65,8 @@ type flaky struct {
 	labels []string
 	// markFolderReadHook, if set, runs before MarkFolderRead (tests block it).
 	markFolderReadHook func()
+	// moveHook, if set, runs before Move; an error fails the move.
+	moveHook func(target mail.Folder) error
 }
 
 func (f *flaky) err(op string) error {
@@ -104,6 +106,11 @@ func (f *flaky) SetStarred(ctx context.Context, ids []string, starred bool) erro
 func (f *flaky) Move(ctx context.Context, ids []string, target mail.Folder) error {
 	if err := f.err("move"); err != nil {
 		return err
+	}
+	if f.moveHook != nil {
+		if err := f.moveHook(target); err != nil {
+			return err
+		}
 	}
 	return f.Provider.Move(ctx, ids, target)
 }
