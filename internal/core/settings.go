@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 
@@ -34,6 +35,10 @@ func (s *Service) loadSettings() error {
 		_ = s.persist(st) // labels from before labels were per mailbox
 	}
 	s.settingsMu.Lock()
+	if s.labelsRev == 0 {
+		s.labelsRev = 1 // 0 in a save means "not read through GetSettings"
+	}
+	st.LabelsRev = 0
 	s.settings = st
 	s.settingsMu.Unlock()
 	s.store.SetLabels(st.Labels)
@@ -77,22 +82,50 @@ func (s *Service) Settings() models.Settings {
 // GetSettings returns the settings for the UI.
 func (s *Service) GetSettings() models.Settings {
 	st := s.Settings()
+	s.settingsMu.Lock()
+	st.LabelsRev = s.labelsRev
+	s.settingsMu.Unlock()
 	key, _ := s.openRouterKey()
 	st.OpenRouterKeySet = key != ""
 	return st
 }
 
 func (s *Service) persist(st models.Settings) error {
-	st.OpenRouterKeySet = false
+	st.OpenRouterKeySet, st.LabelsRev = false, 0
 	return s.store.SetSetting(settingsKey, st)
 }
 
 // SaveSettings validates and stores settings. Labels removed from the list
 // lose their assignments; removed provider labels are not re-imported.
+//
+// in.LabelsRev tells which label list the caller read (GetSettings): a
+// label the backend added after that (a sync imported it while the
+// settings window had its copy) can't have been deleted by the user and is
+// kept. Callers that didn't read the settings through GetSettings (0) are
+// trusted; the labels they add count as added by the backend.
 func (s *Service) SaveSettings(in models.Settings) error {
 	config.Normalize(&in)
 	s.settingsMu.Lock()
 	old := s.settings
+	readAt := in.LabelsRev
+	in.LabelsRev = 0
+	if readAt > 0 && readAt < s.labelsRev {
+		ids, names := map[string]bool{}, map[string]bool{}
+		for _, l := range in.Labels {
+			ids[l.ID] = true
+			names[strings.ToLower(strings.TrimSpace(l.Name))] = true
+		}
+		for _, l := range old.Labels {
+			if s.labelAdded[l.ID] > readAt && !ids[l.ID] && !names[strings.ToLower(l.Name)] {
+				in.Labels = append(in.Labels, l)
+			}
+		}
+		// Labels the backend dropped since (their mailbox was removed)
+		// don't come back from the stale copy.
+		in.Labels = slices.DeleteFunc(in.Labels, func(l models.Label) bool {
+			return s.labelDropped[l.ID] > readAt && !slices.ContainsFunc(old.Labels, func(o models.Label) bool { return o.ID == l.ID })
+		})
+	}
 	// Keep provider/system metadata the UI may not round-trip.
 	prev := map[string]models.Label{}
 	for _, l := range old.Labels {
@@ -117,6 +150,9 @@ func (s *Service) SaveSettings(in models.Settings) error {
 	if err := s.persist(in); err != nil {
 		s.settingsMu.Unlock()
 		return err
+	}
+	if readAt == 0 {
+		s.labelsChangedLocked(old.Labels, in.Labels)
 	}
 	s.settings = in
 	s.settingsMu.Unlock()
@@ -216,6 +252,7 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 	}
 	if changed {
 		if err := s.persist(st); err == nil {
+			s.labelsChangedLocked(s.settings.Labels, st.Labels)
 			s.settings = st
 		}
 	}
@@ -225,6 +262,33 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 		s.emit(models.EventLabelsChanged, models.AccountEvent{AccountID: accountID})
 	}
 	return out
+}
+
+// labelsChangedLocked records the labels of next that aren't in prev as
+// added by the backend, and those of prev missing from next as dropped by
+// it (settingsMu held; see SaveSettings).
+func (s *Service) labelsChangedLocked(prev, next []models.Label) {
+	if s.labelAdded == nil {
+		s.labelAdded, s.labelDropped = map[string]int64{}, map[string]int64{}
+	}
+	had := make(map[string]bool, len(prev))
+	for _, l := range prev {
+		had[l.ID] = true
+	}
+	has := make(map[string]bool, len(next))
+	for _, l := range next {
+		has[l.ID] = true
+		if !had[l.ID] {
+			s.labelsRev++
+			s.labelAdded[l.ID] = s.labelsRev
+		}
+	}
+	for _, l := range prev {
+		if !has[l.ID] {
+			s.labelsRev++
+			s.labelDropped[l.ID] = s.labelsRev
+		}
+	}
 }
 
 // ---- mailbox scope of labels ----
@@ -287,6 +351,7 @@ func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
 		slog.Warn("saving label mailboxes failed", "err", err)
 		return
 	}
+	s.labelsChangedLocked(s.settings.Labels, st.Labels)
 	s.settings = st
 	s.settingsMu.Unlock()
 	s.store.SetLabels(st.Labels)
@@ -327,10 +392,31 @@ func (s *Service) labelsGainAccount(accountID string) {
 
 // labelsLoseAccount runs when a mailbox is removed: labels forget it.
 // Provider labels of only that mailbox are dropped (their mail is gone);
-// user labels left without a mailbox belong to every remaining one.
+// user labels left without a mailbox belong to every remaining one. Rules,
+// quiet labels and the notification mute of that mailbox go too, and rules
+// of other mailboxes lose a label that was dropped.
 func (s *Service) labelsLoseAccount(accountID string) {
 	s.updateLabels(func(st *models.Settings) bool {
 		changed := false
+		rules := st.LabelRules[:0:0]
+		for _, r := range st.LabelRules {
+			if r.AccountID == accountID {
+				changed = true
+				continue
+			}
+			rules = append(rules, r)
+		}
+		st.LabelRules = rules
+		if _, ok := st.QuietLabels[accountID]; ok {
+			quiet := maps.Clone(st.QuietLabels)
+			delete(quiet, accountID)
+			st.QuietLabels = quiet
+			changed = true
+		}
+		if i := slices.Index(st.MutedMailboxes, accountID); i >= 0 {
+			st.MutedMailboxes = slices.Delete(st.MutedMailboxes, i, i+1)
+			changed = true
+		}
 		out := st.Labels[:0:0]
 		for _, l := range st.Labels {
 			if i := slices.Index(l.AccountIDs, accountID); i >= 0 {
@@ -343,7 +429,12 @@ func (s *Service) labelsLoseAccount(accountID string) {
 			out = append(out, l)
 		}
 		st.Labels = out
-		return s.scopeLabels(st.Labels) || changed
+		changed = s.scopeLabels(st.Labels) || changed
+		if changed {
+			// Rules and quiet lists drop the labels that went.
+			config.Normalize(st)
+		}
+		return changed
 	})
 }
 

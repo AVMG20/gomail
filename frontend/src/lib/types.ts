@@ -353,6 +353,8 @@ export interface Settings {
   microsoftClientId: string
   microsoftTenant: string
   openRouterKeySet: boolean
+  /** Revision of the label list this copy was read at; send it back unchanged (the backend keeps labels it added since). */
+  labelsRev?: number
   /** Chat model: used only for grammar improvement and summaries. */
   openRouterModel: string
   /** Jev decision model used for AI labeling. */
