@@ -184,8 +184,19 @@ func TestEndToEndFakeProviders(t *testing.T) {
 		t.Fatalf("graph immutable ids missing on %d requests (batches %d)", missing, batches)
 	}
 	trip := e.msg(ga.ID, "Trip planning")
-	if !containsString(trip.Labels, "travel") {
-		t.Fatalf("provider label not imported: %v", trip.Labels)
+	// Every mailbox has its own labels: Gmail's Travel is its own copy.
+	gmailTravel := ""
+	labels, err := m.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range labels.Labels {
+		if l.Name == "Travel" && containsString(l.AccountIDs, ga.ID) {
+			gmailTravel = l.ID
+		}
+	}
+	if gmailTravel == "" || !containsString(trip.Labels, gmailTravel) {
+		t.Fatalf("provider label not imported: %v (Gmail's Travel %q)", trip.Labels, gmailTravel)
 	}
 
 	// ---- bodies and attachments ----

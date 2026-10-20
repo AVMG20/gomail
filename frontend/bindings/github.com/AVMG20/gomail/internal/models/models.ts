@@ -361,6 +361,12 @@ export interface ClassificationResult {
      * unchanged since the last AI run: scores are the stored ones, no cost
      */
     "skipped": boolean;
+
+    /**
+     * Moved is the folder kind a label's "When added" moved the message
+     * to ("" = it stayed), so Undo can move it back.
+     */
+    "moved": string;
 }
 
 /**
@@ -690,8 +696,10 @@ export interface Label {
     "accountIds": string[] | null;
 
     /**
-     * Then is what happens to new mail that gets the label: "" (stays
-     * where it is), "archive", "junk" or "trash". Not used for Junk.
+     * Then is what happens to mail that a rule or Jev gives the label (and
+     * the user, with Settings.ManualLabelActions): "" (stays where it is),
+     * "archive", "junk" or "trash". Not used for Junk, which always moves
+     * mail to Junk.
      */
     "then": string;
 }
@@ -1405,6 +1413,18 @@ export interface Settings {
      * "" = built-in default (see GetDefaultPrompts)
      */
     "grammarSystemPrompt": string;
+
+    /**
+     * JunkStaysPut lists account ids where the built-in Junk label only
+     * labels mail; elsewhere (the default) it moves it to Junk, read.
+     */
+    "junkStaysPut": string[] | null;
+
+    /**
+     * ManualLabelActions: a label added by hand (not by Jev or a rule) also
+     * does what its "When added" says (default off: it only labels).
+     */
+    "manualLabelActions": boolean;
 
     /**
      * LabelRules label (or junk) new mail by simple conditions, without AI.

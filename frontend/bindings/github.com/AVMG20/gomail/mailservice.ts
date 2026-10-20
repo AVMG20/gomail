@@ -29,10 +29,19 @@ export function AddAccount(provider: string): $CancellablePromise<models$0.Accou
 }
 
 /**
- * AddLabel assigns a label manually.
+ * AddLabel assigns a label manually and returns how many messages its
+ * "When added" moved (only with the manual label actions setting).
  */
-export function AddLabel(ids: string[] | null, labelID: string): $CancellablePromise<void> {
+export function AddLabel(ids: string[] | null, labelID: string): $CancellablePromise<number> {
     return $Call.ByID(1419267913, ids, labelID);
+}
+
+/**
+ * ApplyLabelAction does a label's "When added" once for the mail that
+ * already has it, and returns how many messages moved.
+ */
+export function ApplyLabelAction(labelID: string): $CancellablePromise<number> {
+    return $Call.ByID(2291984786, labelID);
 }
 
 /**
@@ -110,6 +119,14 @@ export function DeleteDraft(id: string): $CancellablePromise<void> {
  */
 export function DeleteEvent(id: string, scope: string): $CancellablePromise<void> {
     return $Call.ByID(2693576607, id, scope);
+}
+
+/**
+ * DeleteFolder deletes one of the user's own folders on the server; its
+ * mail goes to Trash.
+ */
+export function DeleteFolder(folderID: string): $CancellablePromise<void> {
+    return $Call.ByID(1880840925, folderID);
 }
 
 /**
@@ -430,6 +447,13 @@ export function ResolveQueryIDs(q: models$0.ListQuery, max: number): $Cancellabl
  */
 export function RespondToEvent(id: string, response: string): $CancellablePromise<void> {
     return $Call.ByID(1980987154, id, response);
+}
+
+/**
+ * RestoreLabel puts a label back without its "When added" (Undo).
+ */
+export function RestoreLabel(ids: string[] | null, labelID: string): $CancellablePromise<void> {
+    return $Call.ByID(1697734110, ids, labelID);
 }
 
 /**
