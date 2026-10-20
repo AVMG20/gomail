@@ -108,10 +108,14 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 			slog.Warn("label rule failed", "label", labelID, "err", err)
 			continue
 		}
+		var stays junkStays
+		if l.ID == config.JunkLabelID {
+			stays = s.junkStaysFor(added)
+		}
 		for _, id := range added {
 			changed[id] = true
 			if !slices.Contains(act.junk, id) { // a Junk rule already moves it
-				moves.add(id, l, thenKind(l, false), labelWhy(l, false), nil)
+				moves.add(id, l, thenKind(l, false), labelWhy(l, false), stays)
 			}
 		}
 		if l.Source == config.LabelSourceProvider {

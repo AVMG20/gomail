@@ -481,3 +481,28 @@ func TestNewMailWithAJunkCategoryGoesToJunk(t *testing.T) {
 		t.Fatal("mail without the category went to Junk")
 	}
 }
+
+// "Always send to Junk" also gives the mail the Junk label (all mail in
+// Junk has it), now and for the sender's new mail.
+func TestJunkSenderGivesTheJunkLabel(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	acct := demo.OutlookAccountID
+	e.demos[acct].Deliver("Tracked 30m", "noreply@everhour.example")
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := labelsOf(t, e, acct, "Tracked 30m")
+	if _, err := s.JunkSender(acct, "noreply@everhour.example", "address", []string{m.ID}); err != nil {
+		t.Fatal(err)
+	}
+	e.demos[acct].Deliver("Tracked 1h", "noreply@everhour.example")
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	for _, subj := range []string{"Tracked 30m", "Tracked 1h"} {
+		if m, _ := labelsOf(t, e, acct, subj); !has(m.Labels, "junk") {
+			t.Fatalf("%q has no Junk label: %v", subj, m.Labels)
+		}
+	}
+}
