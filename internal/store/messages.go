@@ -350,6 +350,9 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 		}
 		touched = append(touched, left...)
 		for _, chunk := range chunks(touched, 400) {
+			if err := keepOrphanMarks(tx, chunk); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(`DELETE FROM messages WHERE id IN (`+placeholders(len(chunk))+`) AND NOT EXISTS
 				(SELECT 1 FROM message_folders mf WHERE mf.message_id = messages.id)`, anySlice(chunk)...); err != nil {
 				return err
@@ -395,6 +398,26 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 	}
 	res.newWords = nil
 	return res, err
+}
+
+// keepOrphanMarks saves the user's label decisions (manual labels,
+// rejections, overrides) of the given messages that are in no folder any
+// more as pending label marks, before orphan cleanup deletes them. A
+// message can leave every synced folder without being deleted (e.g. an
+// old message another Outlook client moved: folder deltas only cover
+// recent mail), and when it comes back the marks apply again.
+func keepOrphanMarks(tx *sql.Tx, ids []string) error {
+	_, err := tx.Exec(`INSERT OR REPLACE INTO pending_labels(provider, email, remote_id, label_id, kind, confidence)
+		WITH gone AS (SELECT m.id, m.remote_id, a.provider, a.email FROM messages m JOIN accounts a ON a.id = m.account_id
+			WHERE m.id IN (`+placeholders(len(ids))+`)
+			AND NOT EXISTS (SELECT 1 FROM message_folders mf WHERE mf.message_id = m.id))
+		SELECT g.provider, g.email, g.remote_id, ml.label_id, '`+MarkManual+`', 1 FROM gone g
+			JOIN message_labels ml ON ml.message_id = g.id AND ml.source = 'manual'
+		UNION ALL SELECT g.provider, g.email, g.remote_id, r.label_id, '`+MarkRejected+`', 1 FROM gone g
+			JOIN label_rejections r ON r.message_id = g.id
+		UNION ALL SELECT g.provider, g.email, g.remote_id, o.label_id, '`+MarkOverride+`', 1 FROM gone g
+			JOIN label_overrides o ON o.message_id = g.id`, anySlice(ids)...)
+	return err
 }
 
 // reconcileComplete drops folder memberships that a complete listing
