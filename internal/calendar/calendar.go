@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	_ "time/tzdata" // IANA zones on systems without zoneinfo (Windows)
@@ -26,6 +28,8 @@ type Calendar struct {
 	TimeZone string // IANA, "" if unknown
 	// DefaultReminders apply to events that use the calendar defaults.
 	DefaultReminders []int
+	// VideoCallProvider: "meet" | "teams" | "skype" | "".
+	VideoCallProvider string
 }
 
 // Event is a provider event (or one occurrence of a series).
@@ -57,6 +61,8 @@ type Event struct {
 	// ETag is the provider version; Update/Delete send it as If-Match so a
 	// change made elsewhere isn't overwritten (ErrConflict).
 	ETag string
+	// AddVideoCall asks the provider to create a Meet/Teams link.
+	AddVideoCall bool
 }
 
 // SyncRequest asks for the events of a calendar in [Start, End).
@@ -165,6 +171,13 @@ func NormalizeInput(in *models.EventInput) error {
 	default:
 		return errors.New("unknown repeat option " + in.Recurrence.Frequency)
 	}
+	if u := strings.TrimSpace(in.MeetingURL); u != "" {
+		p, err := url.Parse(u)
+		if err != nil || p.Scheme != "https" || p.Host == "" || strings.ContainsAny(u, " \r\n\t<>\"") || len(u) > 2048 {
+			return errors.New("the meeting link must be an https:// link")
+		}
+		in.MeetingURL = u
+	}
 	if len(in.Title) > 1000 {
 		in.Title = in.Title[:1000]
 	}
@@ -209,9 +222,33 @@ func NormalizeInput(in *models.EventInput) error {
 func FromInput(in models.EventInput) Event {
 	ev := Event{Title: in.Title, Start: in.Start, End: in.End, AllDay: in.AllDay, TimeZone: in.TimeZone,
 		Location: in.Location, Description: in.Description, Attendees: in.Attendees, Reminders: in.ReminderMinutes,
-		Status: models.EventConfirmed}
+		Status: models.EventConfirmed, AddVideoCall: in.AddVideoCall}
+	if in.MeetingURL != "" {
+		ev.MeetingURL = in.MeetingURL
+		switch {
+		case strings.TrimSpace(ev.Location) == "":
+			ev.Location = in.MeetingURL
+		case !strings.Contains(ev.Location, in.MeetingURL) && !strings.Contains(ev.Description, in.MeetingURL):
+			ev.Description = strings.TrimRight("Join: "+in.MeetingURL+"\n\n"+ev.Description, "\n")
+		}
+	}
 	if r := BuildRRule(in.Recurrence, in.Start, in.TimeZone); r != "" {
 		ev.RRule, ev.IsRecurring, ev.Recurrence = r, true, Summarize(r)
 	}
 	return ev
+}
+
+// meetingRe matches join links of the common meeting services.
+var meetingRe = regexp.MustCompile(`https://(?:[a-z0-9-]+\.)*(?:zoom\.us|zoomgov\.com|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|` +
+	`webex\.com|gotomeeting\.com|meet\.goto\.com|whereby\.com|meet\.jit\.si|chime\.aws|bluejeans\.com)/[^\s<>"')\]]*`)
+
+// DetectMeetingURL finds a meeting link in the location or description
+// (for events without conference data).
+func DetectMeetingURL(location, description string) string {
+	for _, s := range []string{location, description} {
+		if m := meetingRe.FindString(s); m != "" {
+			return strings.TrimRight(m, ".,;:")
+		}
+	}
+	return ""
 }

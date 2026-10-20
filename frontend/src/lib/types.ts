@@ -50,6 +50,8 @@ export interface Calendar {
   primary: boolean
   canEdit: boolean
   visible: boolean
+  /** Video meetings this calendar can create: "meet" (Google), "teams" (Microsoft) or "" (none). */
+  videoCallProvider?: 'meet' | 'teams' | '' | string
 }
 
 export type AttendeeResponse = 'accepted' | 'tentative' | 'declined' | 'needsAction' | string
@@ -108,6 +110,8 @@ export interface EventInput {
   description: string
   attendees: Attendee[]
   meetingUrl: string
+  /** Ask the provider to attach a Google Meet / Teams meeting (Calendar.videoCallProvider). */
+  addVideoCall?: boolean
   recurrence: string
   reminders: number[]
 }

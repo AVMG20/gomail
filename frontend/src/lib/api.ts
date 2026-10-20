@@ -247,9 +247,6 @@ export async function toWireInput(i: EventInput & { accountId?: string }): Promi
   const { parseRRule } = await import('./calendar')
   const rule = parseRRule(i.recurrence)
   const day = (ymd: string) => `${ymd.slice(0, 10)}T00:00:00Z`
-  // The backend has no meeting-link field yet: keep the link in the description so it isn't lost.
-  const link = i.meetingUrl?.trim()
-  const description = link && !i.description.includes(link) ? `${i.description.trim()}${i.description.trim() ? '\n\n' : ''}Join: ${link}` : i.description
   return {
     accountId: i.accountId ?? '',
     calendarId: i.calendarId,
@@ -259,7 +256,9 @@ export async function toWireInput(i: EventInput & { accountId?: string }): Promi
     allDay: i.allDay,
     timeZone: i.timeZone,
     location: i.location,
-    description,
+    description: i.description,
+    meetingUrl: i.meetingUrl?.trim() ?? '',
+    addVideoCall: !!i.addVideoCall,
     attendees: i.attendees.map((a) => ({ name: a.name, email: a.email, response: a.response === 'needsAction' ? 'none' : a.response, optional: false })),
     recurrence: {
       frequency: rule.freq,

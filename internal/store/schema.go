@@ -342,6 +342,10 @@ ALTER TABLE messages ADD COLUMN invite TEXT NOT NULL DEFAULT ''; -- JSON Invite 
 	`
 ALTER TABLE events ADD COLUMN etag TEXT NOT NULL DEFAULT '';
 `,
+	// 7: video call support per calendar
+	`
+ALTER TABLE calendars ADD COLUMN video_provider TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

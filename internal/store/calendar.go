@@ -30,17 +30,18 @@ type CalendarRow struct {
 // Provider returns the provider view of the calendar.
 func (c CalendarRow) Provider() calendar.Calendar {
 	return calendar.Calendar{RemoteID: c.RemoteID, Name: c.Name, Color: c.Color, Primary: c.Primary, CanEdit: c.CanEdit,
-		TimeZone: c.TimeZone, DefaultReminders: c.DefaultReminders}
+		TimeZone: c.TimeZone, DefaultReminders: c.DefaultReminders, VideoCallProvider: c.VideoCallProvider}
 }
 
-const calendarCols = `id, account_id, remote_id, name, color, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end`
+const calendarCols = `id, account_id, remote_id, name, color, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end, video_provider`
 
 func scanCalendar(sc interface{ Scan(...any) error }) (CalendarRow, error) {
 	var c CalendarRow
 	var primary, canEdit, visible int
 	var rem string
 	var ws, we int64
-	err := sc.Scan(&c.ID, &c.AccountID, &c.RemoteID, &c.Name, &c.Color, &primary, &canEdit, &visible, &c.TimeZone, &rem, &c.State, &ws, &we)
+	err := sc.Scan(&c.ID, &c.AccountID, &c.RemoteID, &c.Name, &c.Color, &primary, &canEdit, &visible, &c.TimeZone, &rem, &c.State, &ws, &we,
+		&c.VideoCallProvider)
 	c.Primary, c.CanEdit, c.Visible = primary == 1, canEdit == 1, visible == 1
 	if rem != "" {
 		_ = json.Unmarshal([]byte(rem), &c.DefaultReminders)
@@ -58,11 +59,13 @@ func (s *Store) ReplaceCalendars(accountID string, cals []calendar.Calendar) err
 			id := CalendarID(accountID, c.RemoteID)
 			keep[id] = true
 			rem, _ := json.Marshal(c.DefaultReminders)
-			if _, err := tx.Exec(`INSERT INTO calendars(id, account_id, remote_id, name, color, is_primary, can_edit, time_zone, reminders)
-				VALUES(?,?,?,?,?,?,?,?,?)
+			if _, err := tx.Exec(`INSERT INTO calendars(id, account_id, remote_id, name, color, is_primary, can_edit, time_zone, reminders, video_provider)
+				VALUES(?,?,?,?,?,?,?,?,?,?)
 				ON CONFLICT(id) DO UPDATE SET name = excluded.name, color = excluded.color, is_primary = excluded.is_primary,
-					can_edit = excluded.can_edit, time_zone = excluded.time_zone, reminders = excluded.reminders`,
-				id, accountID, c.RemoteID, c.Name, c.Color, boolInt(c.Primary), boolInt(c.CanEdit), c.TimeZone, string(rem)); err != nil {
+					can_edit = excluded.can_edit, time_zone = excluded.time_zone, reminders = excluded.reminders,
+					video_provider = excluded.video_provider`,
+				id, accountID, c.RemoteID, c.Name, c.Color, boolInt(c.Primary), boolInt(c.CanEdit), c.TimeZone, string(rem),
+				c.VideoCallProvider); err != nil {
 				return err
 			}
 		}

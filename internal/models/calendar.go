@@ -13,6 +13,10 @@ type Calendar struct {
 	Primary   bool   `json:"primary"`
 	CanEdit   bool   `json:"canEdit"` // owner/writer: events can be created and changed
 	Visible   bool   `json:"visible"` // shown in the unified view (SetCalendarVisible)
+	// VideoCallProvider is what EventInput.addVideoCall creates here:
+	// "meet" (Google Meet), "teams" (Microsoft Teams), "skype" (personal
+	// Microsoft accounts that only allow Skype) or "" (not supported).
+	VideoCallProvider string `json:"videoCallProvider"`
 }
 
 // Attendee responses (also used for CalendarEvent.myResponse).
@@ -102,6 +106,13 @@ type EventInput struct {
 	Attendees       []Attendee      `json:"attendees"` // invitations are sent by the provider
 	Recurrence      EventRecurrence `json:"recurrence"`
 	ReminderMinutes []int           `json:"reminderMinutes"` // nil = calendar default
+	// AddVideoCall creates a meeting link with the calendar's
+	// videoCallProvider (Meet/Teams); an existing one is kept.
+	AddVideoCall bool `json:"addVideoCall"`
+	// MeetingURL is a link the user typed (Zoom, Webex, ...). Providers have
+	// no field for it: it goes into the location when that is empty, else
+	// "Join: <url>" is put in front of the description.
+	MeetingURL string `json:"meetingUrl"`
 }
 
 // Event change scopes for UpdateEvent / DeleteEvent.
