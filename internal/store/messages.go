@@ -991,13 +991,19 @@ func (s *Store) AddLabels(ids []string, labelID string) error {
 // RemoveLabels removes a label from messages whatever its source. Removing
 // a provider/system assignment records an override so sync doesn't re-add
 // it, and every removal records a rejection so classification doesn't.
+//
+// Manual assignments get an override too: AddLabels upgrades a provider or
+// system assignment to manual, so a manual label may still be reported by
+// the provider (or be Junk of a message in Spam). Sync drops the override
+// once the provider stops reporting the label (refreshJunk once the message
+// leaves Spam), so it is harmless for labels that were always manual.
 func (s *Store) RemoveLabels(ids []string, labelID string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
 		for _, chunk := range chunks(ids, 500) {
 			args := append([]any{labelID}, anySlice(chunk)...)
 			if _, err := tx.Exec(`INSERT OR REPLACE INTO label_overrides(message_id, label_id, created_at)
 				SELECT message_id, label_id, `+fmt.Sprint(time.Now().UnixMilli())+` FROM message_labels
-				WHERE label_id = ? AND source IN ('provider', 'system') AND message_id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
+				WHERE label_id = ? AND source IN ('provider', 'system', 'manual') AND message_id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(`DELETE FROM message_labels WHERE label_id = ? AND message_id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
