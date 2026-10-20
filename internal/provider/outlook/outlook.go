@@ -1239,6 +1239,52 @@ func (c *Client) EmptyFolder(ctx context.Context, folder mail.Folder) error {
 	})
 }
 
+// DeleteFolder moves a custom folder's mail to Deleted Items, then deletes
+// the empty folder for good (a plain delete would only move it, with its
+// name, under Deleted Items). It checks on the server that the folder is
+// empty first, so nothing is deleted with it.
+func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
+	if folder.Kind != models.FolderCustom || folder.RemoteID == "" {
+		return errors.New("only your own folders can be deleted")
+	}
+	path := "me/mailFolders/" + url.PathEscape(folder.RemoteID)
+	var info struct {
+		ChildFolderCount int `json:"childFolderCount"`
+		TotalItemCount   int `json:"totalItemCount"`
+	}
+	stat := func() error {
+		return c.api.JSON(ctx, http.MethodGet, path+"?$select=childFolderCount,totalItemCount", nil, &info)
+	}
+	if err := stat(); err != nil {
+		return err
+	}
+	if info.ChildFolderCount > 0 {
+		return provider.ErrFolderHasSubfolders
+	}
+	if info.TotalItemCount > 0 {
+		ids, err := c.folderIDs(ctx, folder.RemoteID, "")
+		if err != nil {
+			return err
+		}
+		if err := c.Move(ctx, ids, mail.Folder{RemoteID: "deleteditems", Name: "Deleted Items", Kind: models.FolderTrash}); err != nil {
+			return err
+		}
+		if err := stat(); err != nil {
+			return err
+		}
+		if info.TotalItemCount > 0 || info.ChildFolderCount > 0 {
+			return errors.New("not all of its mail could be moved to Deleted Items; the folder was kept")
+		}
+	}
+	err := c.api.JSON(ctx, http.MethodPost, path+"/permanentDelete", map[string]any{}, nil)
+	switch httpx.StatusOf(err) {
+	case http.StatusBadRequest, http.StatusForbidden:
+		// Outlook's own folders (RSS Feeds, Scheduled, ...) can't be deleted.
+		return fmt.Errorf("Outlook doesn’t let this folder be deleted; hide it instead (%w)", err)
+	}
+	return err
+}
+
 var _ provider.Provider = (*Client)(nil)
 
 var meetingMethods = map[string]string{"meetingRequest": "REQUEST", "meetingCancelled": "CANCEL", "meetingAccepted": "REPLY",

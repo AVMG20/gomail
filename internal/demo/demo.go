@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -779,6 +780,35 @@ func (p *Provider) EmptyFolder(ctx context.Context, folder mail.Folder) error {
 			p.touch(id, true)
 		}
 	}
+	return nil
+}
+
+func (p *Provider) DeleteFolder(ctx context.Context, folder mail.Folder) error {
+	if folder.Kind != models.FolderCustom {
+		return errors.New("only your own folders can be deleted")
+	}
+	if err := p.sleep(ctx); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	i := slices.IndexFunc(p.folders, func(f mail.Folder) bool { return f.RemoteID == folder.RemoteID })
+	if i < 0 {
+		return errors.New("that folder no longer exists")
+	}
+	trash := ""
+	for _, f := range p.folders {
+		if f.Kind == models.FolderTrash {
+			trash = f.RemoteID
+		}
+	}
+	for id, m := range p.msgs {
+		if contains(m.meta.FolderRemoteIDs, folder.RemoteID) {
+			m.meta.FolderRemoteIDs = []string{trash}
+			p.touch(id, false)
+		}
+	}
+	p.folders = slices.Delete(p.folders, i, i+1)
 	return nil
 }
 

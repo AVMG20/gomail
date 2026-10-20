@@ -18,7 +18,7 @@ import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { ACCOUNT_COLORS } from '@/lib/color'
 import { relativeTime } from '@/lib/format'
-import type { Account } from '@/lib/types'
+import type { Account, Folder } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useCalendarStore } from '@/stores/calendar'
@@ -42,10 +42,29 @@ const mb = useMailboxSettings()
 const a = computed(() => accounts.accountMap.get(props.accountId) ?? null)
 const s = computed(() => settings.settings!)
 const hasCalendar = hasMethod('ListCalendars')
+// Gmail has no folders of its own (its labels are labels here).
+const canDeleteFolders = computed(() => hasMethod('DeleteFolder') && a.value?.provider !== 'gmail')
 const providerName = (acc: Account) => (acc.provider === 'gmail' ? 'Gmail' : 'Outlook')
 
 // Other folders (e.g. an old Outlook "GitHub" folder): shown under More in the sidebar unless hidden.
 const otherFolders = computed(() => (accounts.folders[props.accountId] ?? []).filter((f) => f.kind === 'custom'))
+const deleting = ref<Folder | null>(null)
+const deleteOpen = ref(false)
+function askDelete(f: Folder) {
+  deleting.value = f
+  deleteOpen.value = true
+}
+async function deleteFolder() {
+  const f = deleting.value
+  if (!f) return
+  try {
+    await accounts.deleteFolder(f.id)
+    if (mail.mailbox.folderId === f.id) mail.goToKind('inbox')
+    toast(`Folder “${f.name}” deleted`)
+  } catch (e) {
+    toast.error(`Couldn’t delete ${f.name}`, { description: errorMessage(e) })
+  }
+}
 
 // Three tabs: the mailbox itself, how its mail gets sorted, its calendar. Older tab ids
 // (notifications, labels, ai) still land on the tab that holds them now.
@@ -222,9 +241,12 @@ function labelAll() {
           </SettingRow>
         </SettingSection>
 
-        <SettingSection v-if="otherFolders.length" title="Other folders" description="Folders besides the usual ones, listed under More in the sidebar. Hide the ones you don’t use; their mail still turns up in search.">
+        <SettingSection v-if="otherFolders.length" title="Other folders" :description="`Folders besides the usual ones, listed under More in the sidebar. Hide the ones you don’t use; their mail still turns up in search.${canDeleteFolders ? ` Or delete them, here and in ${providerName(a)}.` : ''}`">
           <SettingRow v-for="f in otherFolders" :key="f.id" :title="f.name" :description="f.total ? `${f.total.toLocaleString()} messages${f.unread ? ` · ${f.unread.toLocaleString()} unread` : ''}` : 'Empty'">
-            <Switch :model-value="mb.folderShown(f.id)" :aria-label="`Show ${f.name} in the sidebar`" @update:model-value="(v: boolean) => mb.setFolderShown(f.id, v)" />
+            <div class="flex items-center gap-2">
+              <Button v-if="canDeleteFolders" variant="ghost" size="icon-sm" class="text-muted-foreground hover:text-destructive" :aria-label="`Delete the folder ${f.name}`" @click="askDelete(f)"><Trash2Icon /></Button>
+              <Switch :model-value="mb.folderShown(f.id)" :aria-label="`Show ${f.name} in the sidebar`" @update:model-value="(v: boolean) => mb.setFolderShown(f.id, v)" />
+            </div>
           </SettingRow>
         </SettingSection>
 
@@ -248,7 +270,7 @@ function labelAll() {
           <SettingRow title="Let AI correct Gmail/Outlook labels" :description="s.aiCorrectsProviderLabels ? 'Removes imported labels it’s sure don’t apply.' : 'Off for all mailboxes in AI settings.'">
             <Switch :model-value="s.aiCorrectsProviderLabels && mb.corrects(a.id)" :disabled="!s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => mb.setCorrects(a!.id, v)" />
           </SettingRow>
-          <SettingRow title="Junk goes to the Junk folder" description="New mail Jev labels Junk is marked read and moved to Junk, so it never clutters the inbox. Move it back to teach it otherwise.">
+          <SettingRow title="Junk goes to the Junk folder" description="Mail that gets the Junk label, from Jev, a rule or you, is marked read and moved to Junk, so it never clutters the inbox. Move it back to teach Jev otherwise.">
             <OctagonAlertIcon class="text-muted-foreground size-4" aria-hidden="true" />
           </SettingRow>
           <SettingRow title="Label existing mail" description="Run Jev once on mail already downloaded here.">
@@ -280,6 +302,19 @@ function labelAll() {
 
       </TabsContent>
     </Tabs>
+
+    <AlertDialog v-model:open="deleteOpen">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete the folder “{{ deleting?.name }}”?</AlertDialogTitle>
+          <AlertDialogDescription>{{ deleting?.total ? `Its ${deleting.total.toLocaleString()} message${deleting.total === 1 ? '' : 's'} move to Trash first. ` : '' }}The folder is deleted in {{ providerName(a) }} too, for good.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction class="bg-destructive text-white hover:bg-destructive/90" @click="deleteFolder">Delete folder</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
 
     <AlertDialog v-model:open="confirmRemove">
       <AlertDialogContent>

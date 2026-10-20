@@ -734,6 +734,9 @@ func (s *Service) MarkFolderRead(folderID string) error { return s.engine.MarkFo
 // EmptyFolder permanently deletes the contents of Trash or Spam.
 func (s *Service) EmptyFolder(folderID string) error { return s.engine.EmptyFolder(folderID) }
 
+// DeleteFolder deletes a custom folder on the server; its mail goes to Trash.
+func (s *Service) DeleteFolder(folderID string) error { return s.engine.DeleteFolder(folderID) }
+
 func (s *Service) accountName(id string) string {
 	a, err := s.store.Account(id)
 	if err != nil {

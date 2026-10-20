@@ -813,6 +813,16 @@ func (m *MailService) EmptyFolder(folderID string) error {
 	return uiError(s.EmptyFolder(folderID))
 }
 
+// DeleteFolder deletes one of the user's own folders on the server; its
+// mail goes to Trash.
+func (m *MailService) DeleteFolder(folderID string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.DeleteFolder(folderID))
+}
+
 // ---- Labels ----
 
 // AddLabel assigns a label manually.

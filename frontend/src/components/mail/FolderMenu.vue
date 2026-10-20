@@ -165,6 +165,29 @@ async function moveAll(to: 'spam' | 'inbox') {
   })
 }
 
+/** Other folders: delete it on the server (Outlook); its mail goes to Trash first. */
+function del() {
+  const f = accounts.folderMap.get(props.folderId)
+  if (!f) return
+  const where = accounts.accountMap.get(f.accountId)?.provider === 'outlook' ? 'Outlook' : 'the server'
+  ask({
+    title: `Delete the folder “${props.name}”?`,
+    text: `${f.total ? `Its ${plural(f.total)} move to Trash first. ` : ''}The folder is deleted in ${where} too, for good.`,
+    action: 'Delete folder',
+    destructive: true,
+    run: async () => {
+      try {
+        await accounts.deleteFolder(f.id)
+        if (mail.mailbox.folderId === f.id) mail.goToKind('inbox')
+        toast(`Folder “${props.name}” deleted`)
+      } catch (e) {
+        toast.error(`Couldn’t delete ${props.name}`, { description: errorMessage(e) })
+      }
+      refresh()
+    },
+  })
+}
+
 function hide() {
   if (!props.folderId) return
   mb.setFolderShown(props.folderId, false)
@@ -259,6 +282,7 @@ const monthAgo = () => toYmd(new Date(Date.now() - 30 * 86_400_000))
         <ContextMenuItem @select="moveAll('spam')"><OctagonAlertIcon /> Move everything to Junk…</ContextMenuItem>
         <ContextMenuItem @select="moveAll('inbox')"><InboxIcon /> Move everything to Inbox…</ContextMenuItem>
         <ContextMenuItem @select="hide"><EyeOffIcon /> Hide folder</ContextMenuItem>
+        <ContextMenuItem v-if="folderId && hasMethod('DeleteFolder')" variant="destructive" @select="del"><Trash2Icon /> Delete folder…</ContextMenuItem>
       </template>
 
       <template v-if="kind === 'spam'">

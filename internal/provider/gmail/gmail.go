@@ -1155,4 +1155,10 @@ func (c *Client) EmptyFolder(ctx context.Context, folder mail.Folder) error {
 	return errors.New("only Trash and Spam can be emptied")
 }
 
+// DeleteFolder: Gmail has labels, not folders (its labels are gomail
+// labels).
+func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
+	return provider.ErrUnsupported
+}
+
 var _ provider.Provider = (*Client)(nil)

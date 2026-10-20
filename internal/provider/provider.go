@@ -106,7 +106,14 @@ type Provider interface {
 	// (Gmail without full-mailbox scope: Spam moves to Trash; Trash is
 	// emptied by Gmail itself after 30 days).
 	EmptyFolder(ctx context.Context, folder mail.Folder) error
+	// DeleteFolder deletes a custom folder on the server. Its mail goes to
+	// Trash first (recoverable there); a folder with subfolders is
+	// refused. ErrUnsupported where there are no custom folders.
+	DeleteFolder(ctx context.Context, folder mail.Folder) error
 }
+
+// ErrFolderHasSubfolders refuses deleting a folder with folders inside.
+var ErrFolderHasSubfolders = errors.New("this folder has folders inside it; delete those first")
 
 // OlderBound is the exclusive upper date bound ListOlder uses for before:
 // the end of before's second.

@@ -69,6 +69,14 @@ export const useAccountsStore = defineStore('accounts', () => {
     folders.value = next
   }
 
+  /** Deletes one of the user's own folders on the server; its mail goes to Trash. */
+  async function deleteFolder(id: string) {
+    const f = folderMap.value.get(id)
+    await api.deleteFolder(id)
+    if (f) await loadFolders([f.accountId])
+    refreshCounts()
+  }
+
   async function loadLabelCounts(scope: LabelScope = labelScope.value) {
     labelScope.value = scope
     const seq = ++countsSeq
@@ -183,6 +191,6 @@ export const useAccountsStore = defineStore('accounts', () => {
   return {
     setAccountColor, moveAccount,
     accounts, folders, labelCounts, labelTotals, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
-    load, saveSignature, loadFolders, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
+    load, saveSignature, loadFolders, deleteFolder, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })

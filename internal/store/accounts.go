@@ -174,6 +174,24 @@ var kindOrder = map[string]int{
 const folderOrderSQL = `CASE kind WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'sent' THEN 2 WHEN 'drafts' THEN 3
 	WHEN 'archive' THEN 4 WHEN 'spam' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END`
 
+// DeleteFolder removes a local folder (deleted on the server), and its
+// messages from it.
+func (s *Store) DeleteFolder(id string) error {
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		var accountID string
+		if err := tx.QueryRow(`SELECT account_id FROM folders WHERE id = ?`, id).Scan(&accountID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
+			return err
+		}
+		return recomputeKinds(tx, "", accountID)
+	})
+}
+
 // ReplaceFolders upserts the provider's folder list for an account and
 // deletes local folders that no longer exist remotely. Counts for "starred"
 // folders are computed locally from the starred flag.

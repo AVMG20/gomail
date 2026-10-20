@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -688,5 +689,70 @@ func (e *Engine) EmptyFolder(folderID string) error {
 		}
 	}
 	e.changed(f.AccountID)
+	return nil
+}
+
+// DeleteFolder deletes a custom folder on the server (its mail goes to
+// Trash). Locally its mail moves to Trash and the folder goes away; the
+// sync that follows catches up with the server.
+func (e *Engine) DeleteFolder(folderID string) error {
+	f, err := e.cfg.Store.Folder(folderID)
+	if err != nil {
+		return errors.New("that folder no longer exists")
+	}
+	if f.Kind != models.FolderCustom {
+		return errors.New("only your own folders can be deleted")
+	}
+	a, _ := e.cfg.Store.Account(f.AccountID)
+	p, err := e.cfg.Provider(f.AccountID)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(e.ctx, 10*time.Minute)
+		err = p.DeleteFolder(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind})
+		cancel()
+	}
+	if err != nil {
+		return fmt.Errorf("couldn't delete %s: %s", f.Name, HumanError(a, err))
+	}
+	ids, err := e.cfg.Store.FolderMessageIDs(f.ID, false)
+	if err == nil && len(ids) > 0 {
+		old, _ := e.cfg.Store.MessageFolders(ids)
+		trash, terr := e.cfg.Store.FolderByKind(f.AccountID, models.FolderTrash)
+		next := map[string][]string{}
+		for _, id := range ids {
+			keep := []string{}
+			for _, fid := range old[id] {
+				if fid != f.ID {
+					keep = append(keep, fid)
+				}
+			}
+			if terr == nil && !slices.Contains(keep, trash.ID) {
+				keep = append(keep, trash.ID)
+			}
+			next[id] = keep
+		}
+		unlock := e.lockApply(f.AccountID)
+		err = e.cfg.Store.SetMessageFolders(next)
+		unlock()
+		if err != nil {
+			slog.Warn("delete folder: moving its mail locally", "err", err)
+		}
+	}
+	unlock := e.lockApply(f.AccountID)
+	err = e.cfg.Store.DeleteFolder(f.ID)
+	unlock()
+	if err != nil {
+		slog.Warn("delete folder: removing it locally", "err", err)
+	}
+	e.changed(f.AccountID)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		defer safe.Recover("sync after deleting a folder")
+		ctx, cancel := context.WithTimeout(e.ctx, 5*time.Minute)
+		defer cancel()
+		if err := e.SyncNow(ctx, f.AccountID); err != nil {
+			slog.Debug("sync after deleting a folder", "err", err)
+		}
+	}()
 	return nil
 }

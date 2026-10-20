@@ -464,6 +464,20 @@ class MockBackend {
     this.changed(folderId.split(':')[0])
   }
 
+  async DeleteFolder(folderId: string): Promise<void> {
+    await sleep(300)
+    const accountId = folderId.split(':')[0]
+    const list = this.folders.get(accountId) ?? []
+    const f = list.find((x) => x.id === folderId)
+    if (!f || f.kind !== 'custom') throw new Error('only your own folders can be deleted')
+    const trash = list.find((x) => x.kind === 'trash')
+    for (const m of this.messages.values()) {
+      if (m.folderIds.includes(folderId)) m.folderIds = [...m.folderIds.filter((id) => id !== folderId && id !== trash?.id), ...(trash ? [trash.id] : [])]
+    }
+    this.folders.set(accountId, list.filter((x) => x.id !== folderId))
+    this.changed(accountId)
+  }
+
   async MarkFolderRead(folderId: string): Promise<void> {
     await latency(80, 200)
     this.version++
