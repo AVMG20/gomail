@@ -299,6 +299,13 @@ export function OpenExternalURL(url: string): $CancellablePromise<void> {
 }
 
 /**
+ * ParseEventText turns a natural-language description into event fields.
+ */
+export function ParseEventText(text: string, timeZone: string): $CancellablePromise<models$0.EventDraft> {
+    return $Call.ByID(1694543936, text, timeZone);
+}
+
+/**
  * ReauthAccount signs in again for an account with needsReauth, keeping
  * its local data.
  */
@@ -396,6 +403,13 @@ export function SetAccountCalendarEnabled(accountID: string, enabled: boolean): 
  */
 export function SetAccountCalendarMuted(accountID: string, muted: boolean): $CancellablePromise<void> {
     return $Call.ByID(1556156550, accountID, muted);
+}
+
+/**
+ * SetCalendarColor changes the color shown for a calendar ("" = the provider's).
+ */
+export function SetCalendarColor(calendarID: string, color: string): $CancellablePromise<void> {
+    return $Call.ByID(3273401731, calendarID, color);
 }
 
 /**

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -275,6 +276,25 @@ func (s *Service) SetCalendarVisible(calendarID string, visible bool) error {
 		return errors.New("calendar not found")
 	}
 	if err := s.store.SetCalendarVisible(calendarID, visible); err != nil {
+		return err
+	}
+	s.emitCalendar(row.AccountID)
+	return nil
+}
+
+var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// SetCalendarColor changes the color gomail shows for a calendar and its
+// events; "" goes back to the provider's color. Gmail/Outlook aren't changed.
+func (s *Service) SetCalendarColor(calendarID, color string) error {
+	if color != "" && !hexColor.MatchString(color) {
+		return errors.New("pick a color like #2563eb")
+	}
+	row, err := s.store.Calendar(calendarID)
+	if err != nil {
+		return errors.New("calendar not found")
+	}
+	if err := s.store.SetCalendarColor(calendarID, strings.ToLower(color)); err != nil {
 		return err
 	}
 	s.emitCalendar(row.AccountID)

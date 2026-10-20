@@ -33,7 +33,8 @@ func (c CalendarRow) Provider() calendar.Calendar {
 		TimeZone: c.TimeZone, DefaultReminders: c.DefaultReminders, VideoCallProvider: c.VideoCallProvider}
 }
 
-const calendarCols = `id, account_id, remote_id, name, color, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end, video_provider`
+// color is the user's pick when there is one (SetCalendarColor), else the provider's.
+const calendarCols = `id, account_id, remote_id, name, CASE WHEN color_override != '' THEN color_override ELSE color END, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end, video_provider`
 
 func scanCalendar(sc interface{ Scan(...any) error }) (CalendarRow, error) {
 	var c CalendarRow
@@ -127,6 +128,18 @@ func (s *Store) Calendar(id string) (CalendarRow, error) {
 // SetCalendarVisible shows or hides a calendar in the unified view.
 func (s *Store) SetCalendarVisible(id string, visible bool) error {
 	res, err := s.db.Exec(`UPDATE calendars SET visible = ? WHERE id = ?`, boolInt(visible), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetCalendarColor sets the color shown for a calendar ("" = the provider's).
+func (s *Store) SetCalendarColor(id, color string) error {
+	res, err := s.db.Exec(`UPDATE calendars SET color_override = ? WHERE id = ?`, color, id)
 	if err != nil {
 		return err
 	}

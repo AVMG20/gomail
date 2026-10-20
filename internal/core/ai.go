@@ -103,6 +103,19 @@ func emailForPrompt(m models.Message) string {
 	return b.String()
 }
 
+// ParseEventText fills a new event from a natural-language description with
+// the chat model chosen in Settings → AI.
+// timeZone is the UI's IANA zone (Go's local zone has no usable name).
+func (s *Service) ParseEventText(text, timeZone string) (models.EventDraft, error) {
+	now := time.Now()
+	if loc, err := time.LoadLocation(timeZone); err == nil && timeZone != "" {
+		now = now.In(loc)
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, time.Minute)
+	defer cancel()
+	return s.ai.ParseEvent(ctx, s.chatModel(), text, now)
+}
+
 // SummarizeMessage returns a short bullet summary.
 func (s *Service) SummarizeMessage(id string) (string, error) {
 	m, err := s.Message(id)

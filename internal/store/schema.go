@@ -377,6 +377,10 @@ CREATE TABLE label_rejections (
 	PRIMARY KEY(message_id, label_id)
 ) WITHOUT ROWID;
 `,
+	// 11: a color the user picked for a calendar; "" follows the provider's.
+	`
+ALTER TABLE calendars ADD COLUMN color_override TEXT NOT NULL DEFAULT '';
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

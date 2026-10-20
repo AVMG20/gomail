@@ -464,6 +464,41 @@ export interface DefaultPrompts {
 }
 
 /**
+ * EventDraft is an event described in natural language, as parsed by the AI
+ * model (ParseEventText). Dates and times are local wall-clock values; empty
+ * fields were not mentioned.
+ */
+export interface EventDraft {
+    "title": string;
+
+    /**
+     * YYYY-MM-DD
+     */
+    "date": string;
+
+    /**
+     * HH:MM (24-hour)
+     */
+    "startTime": string;
+    "endDate": string;
+    "endTime": string;
+    "allDay": boolean;
+    "location": string;
+    "description": string;
+
+    /**
+     * names or email addresses
+     */
+    "attendees": string[] | null;
+    "videoCall": boolean;
+
+    /**
+     * none | daily | weekly | monthly | yearly
+     */
+    "repeat": string;
+}
+
+/**
  * EventInput creates or updates an event. Start/End follow CalendarEvent
  * (all-day: dates at 00:00 UTC, End exclusive; a zero End means one hour,
  * or one day for all-day events).
@@ -988,6 +1023,12 @@ export interface Settings {
      * "right" | "off" (default "right")
      */
     "readingPane": string;
+
+    /**
+     * ReplyQuote is how replies quote the original: "header" (On … wrote: + quote),
+     * "plain" (quote only) or "none" (default "header").
+     */
+    "replyQuote": string;
 
     /**
      * EmailBackground is "auto" (follow the theme, dark bodies in dark mode

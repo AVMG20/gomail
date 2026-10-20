@@ -1,12 +1,17 @@
 <script setup lang="ts">
 // Calendar sidebar: new event, mini month, and one collapsible group per mailbox
 // with its calendars as show/hide checkboxes. Right-click (or the hover "⋯")
-// on a group header opens the mailbox menu: disable/enable, mute, solo, sync.
+// on a group header opens the mailbox menu: disable/enable, mute, solo, sync,
+// color. Right-click a calendar to show/hide it, show only it, or recolor it.
 // Mailboxes without calendar access show "Connect" instead.
 import { computed, ref } from 'vue'
-import { BellOffIcon, ChevronRightIcon, EllipsisIcon, LoaderIcon, PlusIcon } from '@lucide/vue'
+import { BellOffIcon, ChevronRightIcon, EllipsisIcon, EyeIcon, EyeOffIcon, LoaderIcon, PaletteIcon, PlusIcon, ScanEyeIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
+import {
+  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent,
+  ContextMenuSubTrigger, ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import ColorSwatches from './ColorSwatches.vue'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import MailboxMenuItems from './MailboxMenuItems.vue'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
@@ -101,6 +106,8 @@ const busyDays = computed(() => {
             </ContextMenu>
             <ul v-if="expanded.has(a.id) && a.calendarConsent !== false" class="mt-0.5 ml-5 space-y-px">
               <li v-for="c in cal.calendarsOf(a.id)" :key="c.id">
+                <ContextMenu>
+                <ContextMenuTrigger as-child>
                 <label
                   :class="[
                     'flex items-center gap-2.5 rounded-md px-1.5 py-1 text-[13px]',
@@ -126,6 +133,22 @@ const busyDays = computed(() => {
                   <span class="min-w-0 flex-1 truncate">{{ c.name }}</span>
                   <span v-if="!c.canEdit" class="text-muted-foreground text-[10.5px]">read-only</span>
                 </label>
+                </ContextMenuTrigger>
+                <ContextMenuContent class="w-56">
+                  <ContextMenuLabel class="text-muted-foreground truncate text-xs font-normal">{{ c.name }}</ContextMenuLabel>
+                  <ContextMenuItem :disabled="a.calendarEnabled === false" @select="cal.setCalendarVisible(c.id, !c.visible)">
+                    <component :is="c.visible ? EyeOffIcon : EyeIcon" /> {{ c.visible ? 'Hide calendar' : 'Show calendar' }}
+                  </ContextMenuItem>
+                  <ContextMenuItem :disabled="a.calendarEnabled === false" @select="cal.soloCalendar(c.id)"><ScanEyeIcon /> Show only this calendar</ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuSub>
+                    <ContextMenuSubTrigger class="gap-2"><PaletteIcon class="text-muted-foreground size-4" /> Color</ContextMenuSubTrigger>
+                    <ContextMenuSubContent class="w-auto p-0">
+                      <ColorSwatches :current="c.color" :reset-label="`Use ${a.provider === 'outlook' ? 'Outlook' : 'Google'}’s color`" @pick="(col) => cal.setCalendarColor(c.id, col)" />
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                </ContextMenuContent>
+                </ContextMenu>
               </li>
               <li v-if="!cal.calendarsOf(a.id).length" class="text-muted-foreground px-1.5 py-1 text-xs">{{ cal.loaded || cal.error ? 'No calendars' : 'Loading…' }}</li>
             </ul>

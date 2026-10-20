@@ -25,6 +25,7 @@ export type {
     Contact,
     DatabaseStatus,
     DefaultPrompts,
+    EventDraft,
     EventInput,
     EventRecurrence,
     Folder,

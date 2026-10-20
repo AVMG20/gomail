@@ -4,7 +4,7 @@
 // in-memory mock in ./mock.
 import type {
   Account, AIModel, AppInfo, AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
-  EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
+  EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, EventDraft, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo,
 } from './types'
 import { isSafeExternalUrl } from './format'
 import { LABEL_COLORS as LABEL_FALLBACK, safeColor } from './color'
@@ -123,9 +123,9 @@ export const USED_METHODS = [
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
-export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
+export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', ...CALENDAR_METHODS]
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'SearchContacts', 'EmptyFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', ...CALENDAR_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -392,6 +392,8 @@ export const api = {
   // ---- calendar
   listCalendars: async () => ((await call<Calendar[] | null>('ListCalendars')) ?? []).map((c) => ({ ...c, color: safeColor(c.color, '#64748b') })),
   setCalendarVisible: (id: string, visible: boolean) => call<void>('SetCalendarVisible', id, visible),
+  /** "" goes back to the provider's color. */
+  setCalendarColor: (id: string, color: string) => call<void>('SetCalendarColor', id, color),
   /** Disable/enable a mailbox's calendar entirely (no sync, no events, no reminders). */
   setAccountCalendarEnabled: (accountId: string, enabled: boolean) => call<void>('SetAccountCalendarEnabled', accountId, enabled),
   setAccountCalendarMuted: (accountId: string, muted: boolean) => call<void>('SetAccountCalendarMuted', accountId, muted),
@@ -492,6 +494,8 @@ export const api = {
   },
   cancelClassify: (jobId: string) => call<void>('CancelClassify', jobId),
   summarizeMessage: (id: string) => call<string>('SummarizeMessage', id),
+  /** Natural language → event fields with the chat model; timeZone anchors "tomorrow 9am". */
+  parseEventText: (text: string, timeZone: string) => call<EventDraft>('ParseEventText', text, timeZone),
   improveGrammar: (text: string) => call<string>('ImproveGrammar', text),
 
   // ---- runtime

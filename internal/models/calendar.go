@@ -158,3 +158,20 @@ type MoveCheck struct {
 	HasAttendees bool   `json:"hasAttendees"` // with crossAccount (or Outlook): attendees get a cancellation and a new invitation
 	Recurring    bool   `json:"recurring"`    // the whole series moves
 }
+
+// EventDraft is an event described in natural language, as parsed by the AI
+// model (ParseEventText). Dates and times are local wall-clock values; empty
+// fields were not mentioned.
+type EventDraft struct {
+	Title       string   `json:"title"`
+	Date        string   `json:"date"`      // YYYY-MM-DD
+	StartTime   string   `json:"startTime"` // HH:MM (24-hour)
+	EndDate     string   `json:"endDate"`
+	EndTime     string   `json:"endTime"`
+	AllDay      bool     `json:"allDay"`
+	Location    string   `json:"location"`
+	Description string   `json:"description"`
+	Attendees   []string `json:"attendees"` // names or email addresses
+	VideoCall   bool     `json:"videoCall"`
+	Repeat      string   `json:"repeat"` // none | daily | weekly | monthly | yearly
+}

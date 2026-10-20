@@ -6,7 +6,7 @@ import { fromWireInput, MockCalendar } from './calendar'
 import type {
   Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
-  SearchQuery, SearchResult, Settings, Calendar, CalendarEvent, EventInput, RecurrenceScope, AttendeeResponse,
+  SearchQuery, SearchResult, Settings, Calendar, CalendarEvent, EventInput, RecurrenceScope, AttendeeResponse, EventDraft,
 } from '../types'
 import {
   DEFAULT_CLASSIFY_INSTRUCTIONS, DEFAULT_GRAMMAR_PROMPT, INCOMING, MOCK_MODELS, PROVIDER_LABELS, SEED_ACCOUNTS, SEED_SETTINGS,
@@ -572,6 +572,15 @@ class MockBackend {
     this.cal.setVisible(id, visible)
   }
 
+  async SetCalendarColor(id: string, color: string): Promise<void> {
+    await latency(20, 60)
+    const c = this.cal.calendars.find((x) => x.id === id)
+    if (!c) throw new Error('calendar not found')
+    const base = c as typeof c & { providerColor?: string }
+    base.providerColor ??= c.color
+    c.color = color || base.providerColor
+  }
+
   async SetAccountCalendarEnabled(accountId: string, enabled: boolean): Promise<void> {
     await latency(20, 60)
     const a = this.accounts.find((x) => x.id === accountId)
@@ -1019,6 +1028,19 @@ class MockBackend {
   async CancelClassify(jobId: string): Promise<void> {
     const job = this.jobs.get(jobId)
     if (job) job.cancelled = true
+  }
+
+  async ParseEventText(text: string): Promise<EventDraft> {
+    await latency(300, 700)
+    // Tiny stand-in for the model: "… at 12:30 …" sets the time, the rest is the title.
+    const t = /\b(\d{1,2})[:.](\d{2})\b/.exec(text)
+    const d = new Date(Date.now() + 86_400_000)
+    const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    return {
+      title: text.replace(/\b(tomorrow|morgen)\b|\b\d{1,2}[:.]\d{2}\b/gi, '').replace(/\s+/g, ' ').trim(),
+      date: ymd, startTime: t ? `${t[1].padStart(2, '0')}:${t[2]}` : '', endDate: '', endTime: '', allDay: !t,
+      location: '', description: '', attendees: [], videoCall: /\b(teams|meet|video)\b/i.test(text), repeat: 'none',
+    }
   }
 
   async SummarizeMessage(id: string): Promise<string> {

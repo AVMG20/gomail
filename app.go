@@ -870,6 +870,15 @@ func (m *MailService) EstimateClassify(q models.ListQuery, onlyUnlabeled, includ
 	return uiResult(s.EstimateClassify(q, onlyUnlabeled, includeAllFolders))
 }
 
+// ParseEventText turns a natural-language description into event fields.
+func (m *MailService) ParseEventText(text, timeZone string) (models.EventDraft, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.EventDraft{}, err
+	}
+	return uiResult(s.ParseEventText(text, timeZone))
+}
+
 // SummarizeMessage returns short TL;DR bullets for a message.
 func (m *MailService) SummarizeMessage(id string) (string, error) {
 	s, err := m.ready()
@@ -932,6 +941,15 @@ func (m *MailService) SetCalendarVisible(calendarID string, visible bool) error 
 		return err
 	}
 	return uiError(s.SetCalendarVisible(calendarID, visible))
+}
+
+// SetCalendarColor changes the color shown for a calendar ("" = the provider's).
+func (m *MailService) SetCalendarColor(calendarID, color string) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetCalendarColor(calendarID, color))
 }
 
 // SetAccountCalendarEnabled disables or re-enables an account's calendar

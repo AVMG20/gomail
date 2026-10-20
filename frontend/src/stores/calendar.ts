@@ -102,6 +102,18 @@ export const useCalendarStore = defineStore('calendar', () => {
 
   // ------------------------------------------------------------ toggles (optimistic)
 
+  async function setCalendarColor(id: string, color: string) {
+    const before = calendars.value
+    if (color) calendars.value = calendars.value.map((c) => (c.id === id ? { ...c, color } : c))
+    try {
+      await api.setCalendarColor(id, color)
+      if (!color) await loadCalendars() // back to the provider's color
+    } catch (e) {
+      calendars.value = before
+      toast.error('Couldn’t change the color', { description: errorMessage(e) })
+    }
+  }
+
   async function setCalendarVisible(id: string, visible: boolean) {
     const before = calendars.value
     calendars.value = calendars.value.map((c) => (c.id === id ? { ...c, visible } : c))
@@ -337,7 +349,7 @@ export const useCalendarStore = defineStore('calendar', () => {
 
   return {
     calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, openEventId, canEditEvent, available, calendarMap, weekStart, showDeclined,
-    visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible,
+    visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible, setCalendarColor,
     soloCalendar, setAccountEnabled, setAccountMuted, soloAccount, syncAccount, connect, create, update, move, remove, respond,
   }
 })

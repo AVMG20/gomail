@@ -137,6 +137,21 @@ export interface EventInvite {
   myResponse?: AttendeeResponse
 }
 
+/** An event described in natural language, as parsed by the AI model (local wall-clock values; "" = not mentioned). */
+export interface EventDraft {
+  title: string
+  date: string
+  startTime: string
+  endDate: string
+  endTime: string
+  allDay: boolean
+  location: string
+  description: string
+  attendees: string[] | null
+  videoCall: boolean
+  repeat: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly'
+}
+
 export interface Contact {
   name: string
   email: string

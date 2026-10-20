@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // Full event editor: title, all-day, start/end, time zone (collapsed), repeat,
 // location, meeting link, guests, reminders, description and calendar.
-import { computed, onMounted, ref, watch } from 'vue'
-import { BellIcon, ChevronDownIcon, ClockIcon, GlobeIcon, LinkIcon, MapPinIcon, RepeatIcon, TextIcon, UsersIcon, VideoIcon, XIcon } from '@lucide/vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { BellIcon, ChevronDownIcon, ClockIcon, GlobeIcon, LinkIcon, LoaderIcon, MapPinIcon, RepeatIcon, SparklesIcon, TextIcon, UsersIcon, VideoIcon, XIcon } from '@lucide/vue'
+import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -21,7 +22,7 @@ import CalendarPicker from './CalendarPicker.vue'
 import ScopePrompt from './ScopePrompt.vue'
 import { closeEditor, editorRequest } from './editorState'
 import { askConfirm, askScope } from './scopePrompt'
-import { api, hasMethod } from '@/lib/api'
+import { api, errorMessage, hasMethod } from '@/lib/api'
 
 const cal = useCalendarStore()
 const settings = useSettingsStore()
@@ -88,6 +89,58 @@ watch([startDay, startTime], () => {
   lastStart = `${startDay.value}T${startTime.value}`
 })
 
+// ---- describe it: natural language → fields, with the chat model from Settings → AI
+const aiFill = computed(() => isNew && settings.aiReady && hasMethod('ParseEventText'))
+const prompt = ref('')
+const filling = ref(false)
+const promptEl = ref<HTMLInputElement | null>(null)
+const titleEl = ref<HTMLInputElement | null>(null)
+/** Open on the describe field (or the title), not on the header's close button. */
+function focusFirst(e: Event) {
+  if (readOnly.value) return
+  e.preventDefault()
+  void nextTick(() => (promptEl.value ?? titleEl.value)?.focus())
+}
+async function fillFromText() {
+  const text = prompt.value.trim()
+  if (!text || filling.value) return
+  filling.value = true
+  try {
+    const d = await api.parseEventText(text, localTz)
+    if (d.title) title.value = d.title
+    if (d.date) {
+      allDay.value = d.allDay || !d.startTime
+      startDay.value = d.date
+      if (d.startTime) startTime.value = d.startTime
+      await nextTick() // let the start watcher move the end first, then set the end we were given
+      if (d.endDate || d.endTime) {
+        endDay.value = d.endDate || d.date
+        if (d.endTime) endTime.value = d.endTime
+      } else if (allDay.value) endDay.value = d.date
+    }
+    if (d.location) location.value = d.location
+    if (d.description) description.value = description.value ? `${description.value}\n${d.description}` : d.description
+    if (d.repeat && d.repeat !== 'none') freq.value = d.repeat
+    if (d.videoCall && videoProvider.value) addVideo.value = true
+    // People: addresses as given, names looked up in the contacts gomail knows from your mail.
+    const missing: string[] = []
+    for (const who of d.attendees ?? []) {
+      let addr: Address | null = /\S+@\S+\.\S+/.test(who) ? { name: '', email: who } : null
+      if (!addr) {
+        const hit = (await api.searchContacts(who, 1).catch(() => []))[0]
+        addr = hit ? { name: hit.name, email: hit.email } : null
+      }
+      if (!addr) missing.push(who)
+      else if (!guests.value.some((g) => g.email.toLowerCase() === addr!.email.toLowerCase())) guests.value = [...guests.value, addr]
+    }
+    prompt.value = ''
+    if (missing.length) toast(`No address found for ${missing.join(', ')}`, { description: 'Add them under Guests.' })
+  } catch (e) {
+    toast.error('Couldn’t fill in the event', { description: errorMessage(e) })
+  } finally {
+    filling.value = false
+  }
+}
 function buildInput(): EventInput | null {
   let start: string
   let end: string
@@ -204,17 +257,37 @@ function addReminder(v: unknown) {
 
 <template>
   <Dialog :open="open" @update:open="(v: boolean) => !v && requestClose()">
-    <DialogContent class="flex max-h-[min(780px,calc(100vh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-[620px]">
-      <div class="border-border flex items-center gap-2 border-b px-5 py-3">
-        <DialogTitle class="text-sm font-semibold">{{ isNew ? 'New event' : readOnly ? 'Event' : 'Edit event' }}</DialogTitle>
+    <DialogContent :show-close-button="false" @open-auto-focus="focusFirst" class="flex max-h-[min(780px,calc(100vh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-[620px]">
+      <!-- Own close button: the dialog's default one sits off the header's center line. -->
+      <div class="border-border flex items-center gap-2 border-b py-2 pr-3 pl-5">
+        <DialogTitle class="flex-1 text-sm font-semibold">{{ isNew ? 'New event' : readOnly ? 'Event' : 'Edit event' }}</DialogTitle>
         <DialogDescription class="sr-only">Event details</DialogDescription>
+        <DialogClose as-child>
+          <Button variant="ghost" size="icon-sm" class="text-muted-foreground" aria-label="Close"><XIcon /></Button>
+        </DialogClose>
       </div>
 
       <form class="thin-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4" @submit.prevent="save">
+        <!-- Describe it in your own words; the AI model fills in the fields below. -->
+        <div v-if="aiFill" class="border-border focus-within:border-ring focus-within:ring-ring/40 flex items-center gap-2 rounded-lg border bg-violet-500/5 px-3 py-1.5 focus-within:ring-2">
+          <SparklesIcon class="size-4 shrink-0 text-violet-500" />
+          <input
+            ref="promptEl"
+            v-model="prompt"
+            :disabled="filling"
+            placeholder="Describe it: lunch with Sam friday 12:30 at Coffee Co for an hour"
+            aria-label="Describe the event"
+            class="placeholder:text-muted-foreground/70 min-w-0 flex-1 bg-transparent py-1 text-[13px] outline-none"
+            @keydown.enter.prevent="fillFromText"
+          />
+          <Button type="button" size="xs" variant="ghost" class="shrink-0 gap-1 text-violet-600 dark:text-violet-400" :disabled="!prompt.trim() || filling" @click="fillFromText">
+            <LoaderIcon v-if="filling" class="animate-spin" /> Fill in
+          </Button>
+        </div>
         <input
+          ref="titleEl"
           v-model="title"
           :disabled="readOnly"
-          autofocus
           placeholder="Add a title"
           aria-label="Title"
           class="placeholder:text-muted-foreground/70 w-full bg-transparent text-xl font-semibold tracking-tight outline-none"

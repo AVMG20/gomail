@@ -138,7 +138,22 @@ export const useAccountsStore = defineStore('accounts', () => {
     }
   }
 
+  /** Mailbox color (avatar, accent, calendar group), optimistic. */
+  async function setAccountColor(id: string, color: string) {
+    const a = accounts.value.find((x) => x.id === id)
+    if (!a || a.color === color) return
+    const prev = a.color
+    a.color = color
+    try {
+      await api.updateAccount(id, a.displayName, color)
+    } catch (e) {
+      a.color = prev
+      throw e
+    }
+  }
+
   return {
+    setAccountColor,
     accounts, folders, labelCounts, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
     load, saveSignature, loadFolders, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
