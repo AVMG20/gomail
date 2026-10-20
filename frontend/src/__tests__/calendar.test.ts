@@ -279,3 +279,24 @@ describe('event time display', () => {
     expect(formatEventWhenInZone({ ...e, allDay: true }, 'en-GB', 'Europe/Amsterdam')).toBe('')
   })
 })
+
+describe('relativeDay (agenda)', async () => {
+  const { relativeDay } = await import('@/lib/calendar')
+  const today = new Date(2026, 9, 20, 15, 30)
+  const at = (d: number) => new Date(2026, 9, 20 + d, 9, 0)
+  it('words the distance to a day', () => {
+    expect(relativeDay(at(0), today)).toBe('')
+    expect(relativeDay(at(1), today)).toBe('Tomorrow')
+    expect(relativeDay(at(-1), today)).toBe('Yesterday')
+    expect(relativeDay(at(5), today)).toBe('in 5 days')
+    expect(relativeDay(at(7), today)).toBe('in 1 week')
+    expect(relativeDay(at(17), today)).toBe('in 2 weeks and 3 days')
+    expect(relativeDay(at(22), today)).toBe('in 3 weeks and 1 day')
+    expect(relativeDay(at(90), today)).toBe('in about 3 months')
+    expect(relativeDay(at(-9), today)).toBe('1 week and 2 days ago')
+  })
+  it('counts calendar days across a DST change', () => {
+    // Europe moves the clocks back on Oct 25, 2026; the day count must not drift.
+    expect(relativeDay(new Date(2026, 9, 26, 0, 30), new Date(2026, 9, 24, 23, 30))).toBe('in 2 days')
+  })
+})

@@ -447,3 +447,29 @@ export function formatReminder(min: number): string {
 
 export const REMINDER_CHOICES = [0, 5, 10, 15, 30, 60, 120, 1440, 2880]
 export const DURATION_CHOICES = [15, 30, 45, 60, 90, 120]
+
+/** Whole calendar days from `today` to `day` (local dates, DST-safe). */
+export function daysBetween(today: Date, day: Date): number {
+  const a = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
+  const b = Date.UTC(day.getFullYear(), day.getMonth(), day.getDate())
+  return Math.round((b - a) / 86_400_000)
+}
+
+/** Agenda hint next to a date: "Tomorrow", "in 5 days", "in 2 weeks and 3 days", "in about 3 months",
+ *  "3 days ago"; "" for today (it has its own badge). */
+export function relativeDay(day: Date, today = new Date()): string {
+  const n = daysBetween(today, day)
+  if (n === 0) return ''
+  if (n === 1) return 'Tomorrow'
+  if (n === -1) return 'Yesterday'
+  const d = Math.abs(n)
+  const unit = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`
+  let text: string
+  if (d < 7) text = unit(d, 'day')
+  else if (d < 56) {
+    const w = Math.floor(d / 7)
+    const r = d % 7
+    text = r ? `${unit(w, 'week')} and ${unit(r, 'day')}` : unit(w, 'week')
+  } else text = `about ${unit(Math.round(d / 30.44), 'month')}`
+  return n > 0 ? `in ${text}` : `${text} ago`
+}

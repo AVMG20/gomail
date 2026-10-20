@@ -151,6 +151,7 @@
 .gm-fc .fc .fc-list-day-cushion { text-align: left; }
 .gm-fc .gm-list-day { font-weight: 600; font-size: 13px; color: var(--foreground); text-transform: capitalize; }
 .gm-fc .gm-list-day.gm-today { color: var(--primary); }
+.gm-fc .gm-list-rel { margin-left: 8px; font-size: 12px; font-weight: 500; color: var(--muted-foreground); text-transform: none; }
 .gm-fc .gm-list-today { margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--primary-foreground); background: var(--primary); border-radius: 999px; padding: 1px 7px; text-transform: none; }
 
 .dark .gm-fc .fc .gm-dow.gm-today,

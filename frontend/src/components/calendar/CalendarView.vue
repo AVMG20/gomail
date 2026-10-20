@@ -17,7 +17,7 @@ import Tip from '@/components/common/Tip.vue'
 import type { AnchorRect } from '@/components/common/FloatingCard.vue'
 import { api, errorMessage } from '@/lib/api'
 import {
-  addDays, addMinutes, eventToInput, localeUses12h, needsScopeChoice, seriesMoveInput, startOfDay, toRfc3339, toYmd, type CalendarViewKind,
+  addDays, addMinutes, eventToInput, localeUses12h, needsScopeChoice, relativeDay, seriesMoveInput, startOfDay, toRfc3339, toYmd, type CalendarViewKind,
 } from '@/lib/calendar'
 import { escapeHtml } from '@/lib/format'
 import { isEditableTarget } from '@/lib/platform'
@@ -204,7 +204,9 @@ function eventContent(arg: EventContentArg) {
 function dayHeaderContent(arg: DayHeaderContentArg) {
   if (arg.view.type.startsWith('list')) {
     const label = escapeHtml(arg.date.toLocaleDateString(locale, { weekday: 'long', day: 'numeric', month: 'long' }))
-    return { html: `<span class="gm-list-day${arg.isToday ? ' gm-today' : ''}">${label}${arg.isToday ? ' <span class="gm-list-today">Today</span>' : ''}</span>` }
+    const rel = arg.isToday ? '' : relativeDay(arg.date)
+    const hint = arg.isToday ? ' <span class="gm-list-today">Today</span>' : rel ? ` <span class="gm-list-rel">${escapeHtml(rel)}</span>` : ''
+    return { html: `<span class="gm-list-day${arg.isToday ? ' gm-today' : ''}">${label}${hint}</span>` }
   }
   const wd = escapeHtml(arg.date.toLocaleDateString(locale, { weekday: 'short' }))
   if (arg.view.type === 'dayGridMonth') return { html: `<span class="gm-dow">${wd}</span>` }
