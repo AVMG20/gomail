@@ -909,7 +909,7 @@ export const useMailStore = defineStore('mail', () => {
       let moved = 0
       await inChunks(actionIds(ids), async (c) => { moved += await api.addLabel(c, labelId) })
       const name = label?.name ?? labelId
-      // "Labels you add follow When added" is on and the label moved mail (the list refreshes).
+      // "Move mail when you add a label yourself" is on and the label moved mail (the list refreshes).
       if (moved) toast(`Label “${name}” added`, { description: `${rows(moved)} moved, as the label says.` })
       // Part of the selection is in a mailbox without this label: say so, never skip it silently.
       if (skipped) toast(`Label “${name}” added to ${rows(ids.length)}`, { description: `${rows(skipped)} in other mailboxes didn’t get it: “${name}” isn’t one of their labels.` })

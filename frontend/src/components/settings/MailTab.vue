@@ -41,7 +41,7 @@ async function setConversation(v: boolean) {
     </SettingSection>
 
     <SettingSection title="Labels" all-mailboxes>
-      <SettingRow title="Labels you add follow “When added”" description="Jev and rules always do. Off: adding a label yourself only labels the mail.">
+      <SettingRow title="Move mail when you add a label yourself" description="Some labels move mail, like Junk to the Junk folder (see each mailbox’s Sorting). Jev and rules always move it. Turn this on to move it too when you add such a label by hand.">
         <Switch :model-value="settings.settings.manualLabelActions ?? false" @update:model-value="(v: boolean) => settings.update({ manualLabelActions: v }, 0)" />
       </SettingRow>
     </SettingSection>
