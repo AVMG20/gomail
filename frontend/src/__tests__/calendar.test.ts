@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addDays, buildRRule, defaultCalendarId, formatEventWhen, formatEventWhenInZone, editableCalendars, effectiveWeekStart, expandOccurrences, fromYmd, isEventShown, localeUses12h, localeWeekStart,
-  needsScopeChoice, overlaps, parseRRule, scopeTargetId, seriesMoveInput, shiftTimes, stepDate, toRfc3339, toYmd, utcToZoned, viewRange,
+  eventToInput, needsScopeChoice, overlaps, parseRRule, scopeTargetId, seriesMoveInput, shiftTimes, stepDate, toRfc3339, toYmd, utcToZoned, viewRange,
   zonedToUtc, zoneOffsetMinutes,
 } from '@/lib/calendar'
 import type { Calendar, CalendarEvent } from '@/lib/types'
@@ -257,6 +257,12 @@ describe('calendar store: series edits from an occurrence', async () => {
     expect(ok).toBe(false)
     expect(cal.events.find((e) => e.id === 'a')!.start).toBe(a.start)
     expect(cal.events.find((e) => e.id === 'b')!.title).toBe('Other (fresh)')
+  })
+})
+
+describe('event input', () => {
+  it('never resends the event’s own meeting link (the backend would copy it into the description)', () => {
+    expect(eventToInput(ev({ meetingUrl: 'https://meet.google.com/abc-defg-hij' })).meetingUrl).toBe('')
   })
 })
 

@@ -320,7 +320,10 @@ export function scopeTargetId(ev: Pick<CalendarEvent, 'id' | 'seriesId'>, scope:
 export function eventToInput(ev: CalendarEvent): EventInput {
   return {
     accountId: ev.accountId, calendarId: ev.calendarId, title: ev.title, start: ev.start, end: ev.end, allDay: ev.allDay, timeZone: ev.timeZone,
-    location: ev.location, description: ev.description, attendees: ev.attendees.map((a) => ({ ...a })), meetingUrl: ev.meetingUrl,
+    location: ev.location, description: ev.description, attendees: ev.attendees.map((a) => ({ ...a })),
+    // meetingUrl is only for a link the user typed: the event's own link stays where it is
+    // (resending it would make the backend copy it into the location/description).
+    meetingUrl: '',
     recurrence: ev.recurrence, reminders: [...ev.reminders],
   }
 }
