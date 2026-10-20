@@ -443,7 +443,7 @@ export const useMailStore = defineStore('mail', () => {
     accounts.refreshCounts()
   }
 
-  /** Open a message (marked read per Settings → General: immediately / after 2 s / manually). `auto`: opened for the user after archiving/deleting the previous one;
+  /** Open a message (marked read per Settings → Mail: immediately / after 2 s / manually). `auto`: opened for the user after archiving/deleting the previous one;
    *  it only counts as read once they stay on it for a moment (triaging with e/# must not mark
    *  everything it passes as read). */
   function open(id: string | null, opts: { auto?: boolean } = {}) {
@@ -783,7 +783,7 @@ export const useMailStore = defineStore('mail', () => {
     const label = settings.labelMap.get(labelId)
     if (label) ids = ids.filter((id) => { const m = byId.value.get(id); return !m || labelInAccount(label, m.accountId) })
     if (!ids.length) {
-      if (label) toast(`“${label.name}” isn’t a label of this mailbox`, { description: 'Choose its mailboxes in Settings → Labels.' })
+      if (label) toast(`“${label.name}” isn’t a label of this mailbox`, { description: 'Choose its mailboxes in Settings → Labels & rules.' })
       return
     }
     patchLocal(ids, (m) => ({

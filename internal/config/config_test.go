@@ -187,6 +187,7 @@ func TestNormalizeDropsDeletedLabels(t *testing.T) {
 	}
 	s.QuietLabels = map[string][]string{"acct": {"deleted", "gitlab", JunkLabelID}}
 	s.MutedMailboxes = []string{" acct ", "", "acct", "other"}
+	s.AutoLabelAccounts = []string{"acct", " acct", ""}
 	Normalize(&s)
 	if r := s.LabelRules; r[0].LabelID != "gitlab" || r[1].LabelID != "" || r[1].Action != "label" || r[2].Action != "junk" || r[2].LabelID != "" {
 		t.Fatalf("rules %+v", r)
@@ -196,6 +197,21 @@ func TestNormalizeDropsDeletedLabels(t *testing.T) {
 	}
 	if got := fmtSlice(s.MutedMailboxes); got != "[acct other]" {
 		t.Fatalf("muted %s", got)
+	}
+	if got := fmtSlice(s.AutoLabelAccounts); got != "[acct]" || !s.AutoClassify {
+		t.Fatalf("autoLabelAccounts %s (autoClassify %v)", got, s.AutoClassify)
+	}
+	if !AutoClassifies(s, "acct") || AutoClassifies(s, "other") {
+		t.Fatal("AutoClassifies ignores the per-mailbox list")
+	}
+	s.AICorrectsProviderLabels = true
+	s.AICorrectsOff = []string{"other"}
+	if !AICorrects(s, "acct") || AICorrects(s, "other") {
+		t.Fatal("AICorrects ignores the per-mailbox list")
+	}
+	s.AICorrectsProviderLabels = false
+	if AICorrects(s, "acct") {
+		t.Fatal("AICorrectsProviderLabels off still corrects")
 	}
 }
 
@@ -232,5 +248,25 @@ func TestLabelScope(t *testing.T) {
 	}
 	if got := names(LabelsForAccount(labels, "")); got != "Old,Scoped,Junk," {
 		t.Fatalf("unified labels %s", got)
+	}
+}
+
+// The old app-wide auto-label switch becomes the per-mailbox list once:
+// on means every mailbox, off none.
+func TestMigrateAutoLabel(t *testing.T) {
+	on := models.Settings{AutoClassify: true}
+	if !MigrateAutoLabel(&on, []string{"a", "b"}) || fmtSlice(on.AutoLabelAccounts) != "[a b]" {
+		t.Fatalf("on: %v", on.AutoLabelAccounts)
+	}
+	if MigrateAutoLabel(&on, []string{"a", "b", "c"}) || len(on.AutoLabelAccounts) != 2 {
+		t.Fatal("migrated twice")
+	}
+	off := models.Settings{}
+	if !MigrateAutoLabel(&off, []string{"a"}) || off.AutoLabelAccounts == nil || len(off.AutoLabelAccounts) != 0 {
+		t.Fatalf("off: %v", off.AutoLabelAccounts)
+	}
+	Normalize(&off)
+	if MigrateAutoLabel(&off, []string{"a"}) {
+		t.Fatal("normalized settings migrated again")
 	}
 }

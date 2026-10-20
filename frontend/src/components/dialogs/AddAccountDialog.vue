@@ -94,13 +94,13 @@ function openOAuthSettings() {
           <p class="text-foreground text-[13px] font-medium">Signing in with {{ failedProvider === 'gmail' ? 'Google' : 'Microsoft' }} needs a one-time setup</p>
           <ol class="text-muted-foreground mt-1.5 list-decimal space-y-0.5 pl-4">
             <li>Create a free sign-in client in the {{ failedProvider === 'gmail' ? 'Google Cloud Console' : 'Microsoft Entra admin center' }} (about 5 minutes).</li>
-            <li>Paste its client ID in Settings → Accounts.</li>
+            <li>Paste its client ID in Settings → Mailboxes.</li>
             <li>Come back here and connect.</li>
           </ol>
           <p class="text-muted-foreground mt-1.5">Official gomail release builds come with this already set up.</p>
           <div class="mt-2.5 flex flex-wrap gap-2">
             <Button size="xs" @click="api.openExternal(SETUP_GUIDE)"><ExternalLinkIcon /> Open setup guide</Button>
-            <Button variant="outline" size="xs" @click="openOAuthSettings"><SettingsIcon /> Settings → Accounts</Button>
+            <Button variant="outline" size="xs" @click="openOAuthSettings"><SettingsIcon /> Settings → Mailboxes</Button>
           </div>
         </div>
         <div v-else-if="error" class="bg-destructive/5 border-destructive/20 mt-1 rounded-lg border px-3 py-2.5 text-xs">

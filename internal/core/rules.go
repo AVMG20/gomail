@@ -147,7 +147,7 @@ func (s *Service) applyRules(accountID string, ids []string) {
 }
 
 // ApplyLabelRules runs the label rules over the mail already on this
-// computer (Settings → Labels → "Apply to existing mail") and returns how
+// computer (Settings → Labels & rules → "Apply to existing mail") and returns how
 // many messages got a label. Junk rules are skipped: they only act on new
 // mail, so mail the user took out of Junk stays out.
 func (s *Service) ApplyLabelRules() (int, error) {

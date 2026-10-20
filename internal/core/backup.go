@@ -303,7 +303,7 @@ func (s *Service) ImportBackupFrom(r io.Reader) (models.RestoreSummary, error) {
 		return models.RestoreSummary{}, err
 	}
 	sum := models.RestoreSummary{CreatedAt: f.CreatedAt.UTC().Format(time.RFC3339)}
-	before := s.Settings().Labels
+	before := s.Settings()
 	if err := s.restoreSettings(f, &sum); err != nil {
 		return sum, err
 	}
@@ -447,10 +447,15 @@ func mergeLabels(backup, current []models.Label) []models.Label {
 // backup belong to the mailboxes they belonged to there (plus, for a label
 // this install already had, its mailboxes here); a label of no mailbox
 // here (or from a backup made before labels were per mailbox) belongs to
-// every mailbox. Rules, quiet labels and muted mailboxes follow the ids.
-func (s *Service) remapRestoredAccounts(f backupFile, before []models.Label, idMap map[string]string) {
+// every mailbox. Rules, quiet labels and the per-mailbox lists follow the
+// ids; those lists keep the mailboxes this install had on them (before).
+// A backup from before auto-labeling was per mailbox auto-labels its
+// mailboxes when its old switch was on.
+func (s *Service) remapRestoredAccounts(f backupFile, before models.Settings, idMap map[string]string) {
 	var bs struct {
-		Labels []models.Label `json:"labels"`
+		Labels            []models.Label `json:"labels"`
+		AutoClassify      bool           `json:"autoClassify"`
+		AutoLabelAccounts []string       `json:"autoLabelAccounts"`
 	}
 	if len(f.Settings) > 0 {
 		_ = json.Unmarshal(f.Settings, &bs)
@@ -470,7 +475,7 @@ func (s *Service) remapRestoredAccounts(f backupFile, before []models.Label, idM
 			scope[l.ID] = append(scope[l.ID], mapID(a))
 		}
 	}
-	for _, l := range before {
+	for _, l := range before.Labels {
 		if inBackup[l.ID] && len(scope[l.ID]) > 0 {
 			scope[l.ID] = append(scope[l.ID], l.AccountIDs...)
 		}
@@ -508,9 +513,28 @@ func (s *Service) remapRestoredAccounts(f backupFile, before []models.Label, idM
 			}
 			st.QuietLabels = quiet
 		}
-		for i, a := range st.MutedMailboxes {
-			if mapID(a) != a {
-				st.MutedMailboxes[i] = mapID(a)
+		if len(f.Settings) > 0 && bs.AutoLabelAccounts == nil && bs.AutoClassify {
+			for _, ba := range f.Accounts {
+				st.AutoLabelAccounts = append(st.AutoLabelAccounts, ba.ID)
+				changed = true
+			}
+		}
+		for _, l := range []struct {
+			cur *[]string
+			had []string
+		}{
+			{&st.MutedMailboxes, before.MutedMailboxes},
+			{&st.AutoLabelAccounts, before.AutoLabelAccounts},
+			{&st.AICorrectsOff, before.AICorrectsOff},
+		} {
+			next := []string{}
+			for _, a := range append(slices.Clone(*l.cur), l.had...) {
+				if a = mapID(a); !slices.Contains(next, a) {
+					next = append(next, a)
+				}
+			}
+			if !slices.Equal(next, *l.cur) {
+				*l.cur = next
 				changed = true
 			}
 		}

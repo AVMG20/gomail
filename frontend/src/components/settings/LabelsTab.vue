@@ -164,7 +164,7 @@ function labelAll() {
 
 <template>
   <div v-if="settings.settings">
-    <SettingSection title="Your labels" description="Tag mail in your mailboxes. Each label belongs to the mailboxes you pick; the description tells the AI when it applies.">
+    <SettingSection title="Your labels" description="Each label belongs to the mailboxes you pick. Its description tells the AI when it applies.">
       <div v-for="(l, i) in userLabels" :key="l.id" class="group flex items-start gap-3 py-3">
         <Popover>
           <PopoverTrigger as-child>

@@ -155,7 +155,7 @@ function loadImages(threadId: string) {
 function trustSender(m: Message) {
   const list = settings.settings?.trustedImageSenders ?? []
   void settings.update({ trustedImageSenders: normalizeSenders([...list, m.from.email]) }, 0)
-  toast(`Images from ${m.from.email} will always load`, { description: 'Change this in Settings → General → Privacy.' })
+  toast(`Images from ${m.from.email} will always load`, { description: 'Change this in Settings → Mail → Privacy.' })
 }
 
 // The backend strips remote content from GetThread/GetMessage. Whenever a shown message is

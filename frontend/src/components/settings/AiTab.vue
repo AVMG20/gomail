@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { CheckCircle2Icon, KeyRoundIcon, LoaderIcon, RotateCcwIcon, SparklesIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
@@ -18,6 +17,9 @@ import { formatUSD } from '@/lib/format'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
 import { JEV_MODELS, useSettingsStore } from '@/stores/settings'
+import AccountAvatar from '@/components/common/AccountAvatar.vue'
+import { useAccountsStore } from '@/stores/accounts'
+import { useMailboxSettings } from './mailboxSettings'
 import ModelPicker from './ModelPicker.vue'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
@@ -25,6 +27,8 @@ import SettingSection from './SettingSection.vue'
 const settings = useSettingsStore()
 const mail = useMailStore()
 const ai = useAiStore()
+const accounts = useAccountsStore()
+const mb = useMailboxSettings()
 const s = computed(() => settings.settings!)
 
 const keyInput = ref('')
@@ -92,10 +96,10 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
 
 <template>
   <div v-if="settings.settings">
-    <SettingSection title="OpenRouter" description="AI features are optional and use your own OpenRouter key. Mail is sent to the model only when labeling or improving text.">
+    <SettingSection title="OpenRouter key" description="Optional, with your own key. Mail goes to the model only to label it or improve your text.">
       <SettingRow title="API key" stacked>
         <template #description>
-          <span v-if="s.openRouterKeySet" class="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><CheckCircle2Icon class="size-3.5" /> A key is set. It is stored in your system keychain and never shown again.</span>
+          <span v-if="s.openRouterKeySet" class="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><CheckCircle2Icon class="size-3.5" aria-hidden="true" /> A key is set. It’s kept in your system keychain and never shown again.</span>
           <span v-else>Get a key at <button type="button" class="text-foreground underline-offset-2 hover:underline" @click="api.openExternal('https://openrouter.ai/keys')">openrouter.ai/keys</button>.</span>
         </template>
         <div class="flex items-center gap-2">
@@ -121,7 +125,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
         </div>
       </div>
       <p v-if="usage?.budgetReached" class="mb-1 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">Today’s budget is used up, so automatic labeling is paused until tomorrow. Manual labeling still works.</p>
-      <SettingRow title="Daily budget" description="Auto-labeling pauses for the day when AI spend reaches this. 0 = no limit.">
+      <SettingRow title="Daily budget" description="Auto-labeling pauses for the day when AI spend reaches this. 0 means no limit.">
         <div class="flex items-center gap-1.5">
           <span class="text-muted-foreground text-sm">$</span>
           <Input type="number" min="0" step="0.25" class="h-8 w-24 text-right tabular-nums" placeholder="0" :model-value="s.aiDailyBudgetUsd ?? 1" aria-label="Daily AI budget in US dollars" @update:model-value="onBudget" />
@@ -129,8 +133,21 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       </SettingRow>
     </SettingSection>
 
-    <SettingSection title="AI labeling" description="Sorts your mail into the labels from Settings → Labels, using a Jev decision model on OpenRouter.">
+    <SettingSection title="AI labeling" description="Jev, a decision model on OpenRouter, sorts mail into your labels.">
       <p v-if="!s.openRouterKeySet" class="text-muted-foreground py-2 text-xs">Add an OpenRouter key above to use AI labeling.</p>
+      <SettingRow title="Auto-label new mail in" description="Jev labels new mail of these mailboxes after each sync. You can always label by hand." stacked>
+        <p v-if="!accounts.accounts.length" class="text-muted-foreground text-xs">Add a mailbox first.</p>
+        <ul v-else class="space-y-1.5" aria-label="Auto-labeling per mailbox">
+          <li v-for="a in accounts.accounts" :key="a.id" class="flex items-center gap-3">
+            <Switch :model-value="mb.autoLabels(a.id)" :aria-label="`Auto-label new mail in ${a.email}`" @update:model-value="(v: boolean) => mb.setAutoLabel(a.id, v)" />
+            <AccountAvatar :account="a" :size="18" :glyph="false" />
+            <span class="min-w-0 truncate text-[13px]" :class="!mb.autoLabels(a.id) && 'text-muted-foreground'" :title="a.email">{{ a.email }}</span>
+          </li>
+        </ul>
+      </SettingRow>
+    </SettingSection>
+
+    <SettingSection title="How Jev labels" all-mailboxes>
       <SettingRow title="Labeling model" stacked>
         <ModelPicker v-model="classifierModel" kind="decision" :recommended="JEV_MODELS" recommended-kind="decision" recommended-heading="Recommended for labeling" class="max-w-md" />
       </SettingRow>
@@ -141,50 +158,47 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
           <span class="w-10 text-right text-xs tabular-nums">{{ pct(s.classifyThreshold) }}</span>
         </div>
       </SettingRow>
-      <SettingRow title="Let AI correct Gmail/Outlook labels" description="Jev may remove imported labels it is confident don’t apply. Labels you set yourself are never removed.">
+      <SettingRow title="Let AI correct Gmail/Outlook labels" description="Removes imported labels it’s sure don’t apply, never your own. Each mailbox can opt out on its page.">
         <Switch :model-value="s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => settings.update({ aiCorrectsProviderLabels: v })" />
       </SettingRow>
-      <SettingRow v-if="s.aiCorrectsProviderLabels" title="Remove an imported label when AI is this unsure" stacked>
-        <template #description>An imported label scoring below this is removed.</template>
+      <SettingRow v-if="s.aiCorrectsProviderLabels" title="Remove imported labels below" stacked>
+        <template #description>Imported labels scored below this are removed.</template>
         <div class="flex max-w-md items-center gap-3">
           <Slider :model-value="[s.classifyRemoveThreshold]" :min="0" :max="0.5" :step="0.05" class="flex-1" @update:model-value="(v) => v && settings.update({ classifyRemoveThreshold: v[0] })" />
           <span class="w-10 text-right text-xs tabular-nums">{{ pct(s.classifyRemoveThreshold) }}</span>
         </div>
       </SettingRow>
-      <SettingRow title="Auto-label new mail" description="Run Jev on incoming mail after each sync.">
-        <Switch :model-value="s.autoClassify" @update:model-value="(v: boolean) => settings.update({ autoClassify: v })" />
-      </SettingRow>
-      <SettingRow title="Classification instructions" stacked>
+      <SettingRow title="Labeling instructions" stacked>
         <template #description>
           <span class="flex items-center justify-between gap-2">
-            General guidance for Jev; each label's description is added automatically.
-            <button type="button" class="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1" :disabled="!settings.defaults.classify" @click="settings.update({ classifyInstructions: settings.defaults.classify })"><RotateCcwIcon class="size-3" /> Reset to default</button>
+            General guidance for the AI. Each label’s description is added automatically.
+            <button type="button" class="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1" :disabled="!settings.defaults.classify" @click="settings.update({ classifyInstructions: settings.defaults.classify })"><RotateCcwIcon class="size-3" aria-hidden="true" /> Reset to default</button>
           </span>
         </template>
         <Textarea :model-value="s.classifyInstructions || settings.defaults.classify" rows="3" class="text-xs" placeholder="Empty: the built-in instructions are used" @update:model-value="(v) => settings.update({ classifyInstructions: String(v) }, 600)" />
       </SettingRow>
       <div class="flex items-center gap-3 py-3.5">
         <Button variant="outline" size="sm" :disabled="!s.openRouterKeySet || (!!ai.job && !ai.job.finished)" :title="!s.openRouterKeySet ? 'Add an OpenRouter key first' : ai.job && !ai.job.finished ? 'A labeling run is in progress' : undefined" @click="labelCurrent"><SparklesIcon class="text-violet-500" /> Label current folder…</Button>
-        <span v-if="ai.job" class="text-muted-foreground text-xs tabular-nums">
+        <span v-if="ai.job" class="text-muted-foreground text-xs tabular-nums" aria-live="polite">
           {{ ai.job.finished ? 'Done' : 'Running' }} · {{ ai.job.done }}/{{ ai.job.total || '…' }} · {{ formatUSD(ai.job.cost) }}
         </span>
       </div>
     </SettingSection>
 
-    <SettingSection title="Grammar" description="Right-click the subject or message body while composing and choose “Improve grammar”.">
-      <SettingRow title="Text model" stacked>
+    <SettingSection title="Writing & summaries" description="To fix grammar while writing, right-click the text and choose “Improve grammar”." all-mailboxes>
+      <p v-if="!s.openRouterKeySet" class="text-muted-foreground py-2 text-xs">Add an OpenRouter key above to use writing help.</p>
+      <SettingRow title="Text model" description="Improves grammar, summarizes messages and turns a description into a calendar event." stacked>
         <ModelPicker v-model="chatModel" kind="chat" class="max-w-md" />
       </SettingRow>
-      <SettingRow title="Grammar system prompt" stacked>
+      <SettingRow title="Grammar instructions" stacked>
         <template #description>
           <span class="flex items-center justify-between gap-2">
-            Instructions sent with the text to improve.
-            <button type="button" class="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1" :disabled="!settings.defaults.grammar" @click="settings.update({ grammarSystemPrompt: settings.defaults.grammar })"><RotateCcwIcon class="size-3" /> Reset to default</button>
+            Sent along with the text you want improved.
+            <button type="button" class="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1" :disabled="!settings.defaults.grammar" @click="settings.update({ grammarSystemPrompt: settings.defaults.grammar })"><RotateCcwIcon class="size-3" aria-hidden="true" /> Reset to default</button>
           </span>
         </template>
         <Textarea :model-value="s.grammarSystemPrompt || settings.defaults.grammar" rows="4" class="text-xs" @update:model-value="(v) => settings.update({ grammarSystemPrompt: String(v) }, 600)" />
       </SettingRow>
-      <Badge v-if="!s.openRouterKeySet" variant="secondary" class="my-3">Add an API key above to enable grammar help</Badge>
     </SettingSection>
 
     <AlertDialog v-model:open="confirmRemoveKey">

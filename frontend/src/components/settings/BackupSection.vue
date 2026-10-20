@@ -48,12 +48,12 @@ async function importBackup() {
 <template>
   <SettingSection
     v-if="hasMethod('ExportBackup')"
-    title="Backup"
-    description="Save your settings, labels, label rules, accounts and the labels you gave your mail to a file, to restore them on another device or after a reinstall. Your mail itself isn’t in the backup: it downloads again from Gmail or Outlook once you sign in."
+    title="Backup & restore"
+    description="Saves your settings, accounts, labels and rules to a file, for a new computer or a reinstall. Your mail isn’t in it: it downloads again when you sign in."
   >
-    <SettingRow title="Export backup" description="Writes a .gomailbackup file. Sign-ins are never included: restored accounts ask you to sign in again.">
+    <SettingRow title="Export a backup" description="Saves a .gomailbackup file. Sign-ins are never included, so restored accounts ask you to sign in again.">
       <Button size="sm" variant="outline" :disabled="!!busy" @click="exportBackup">
-        <LoaderIcon v-if="busy === 'export'" class="animate-spin" /><DownloadIcon v-else /> Export backup…
+        <LoaderIcon v-if="busy === 'export'" class="animate-spin" /><DownloadIcon v-else /> Export…
       </Button>
     </SettingRow>
     <div class="py-3.5">
@@ -62,14 +62,14 @@ async function importBackup() {
         <label :for="secretsId" class="text-[13px] leading-snug font-medium">Include API keys and OAuth app credentials</label>
       </div>
       <p v-if="includeSecrets" class="mt-2 ml-6.5 flex items-start gap-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400" role="note">
-        <TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
-        The file will contain your OpenRouter API key and Google/Microsoft client secrets in readable form. Store it somewhere safe and don’t share it.
+        <TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+        The file will hold your OpenRouter key and Google/Microsoft client secrets in plain text. Keep it somewhere safe.
       </p>
-      <p v-else class="text-muted-foreground mt-1 ml-6.5 text-xs">Off: you enter your OpenRouter key again after restoring.</p>
+      <p v-else class="text-muted-foreground mt-1 ml-6.5 text-xs">When off, you enter your OpenRouter key again after restoring.</p>
     </div>
-    <SettingRow title="Import backup" description="Merges a backup into this install. Nothing here is deleted; accounts you already have are kept as they are.">
+    <SettingRow title="Restore a backup" description="Adds a backup to this install. Nothing is deleted, and accounts you already have stay as they are.">
       <Button size="sm" variant="outline" :disabled="!!busy" @click="importBackup">
-        <LoaderIcon v-if="busy === 'import'" class="animate-spin" /><UploadIcon v-else /> Import backup…
+        <LoaderIcon v-if="busy === 'import'" class="animate-spin" /><UploadIcon v-else /> Import…
       </Button>
     </SettingRow>
   </SettingSection>

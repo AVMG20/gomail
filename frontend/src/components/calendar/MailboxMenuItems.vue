@@ -46,5 +46,5 @@ const muted = computed(() => !!props.account.calendarMuted)
     </component>
   </component>
   <component :is="Sep" />
-  <component :is="Item" @select="ui.openSettings('calendar')"><SettingsIcon /> Mailbox settings…</component>
+  <component :is="Item" @select="ui.openSettings(`mailbox:${account.id}`)"><SettingsIcon /> Mailbox settings…</component>
 </template>

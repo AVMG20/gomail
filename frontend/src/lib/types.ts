@@ -371,6 +371,10 @@ export interface Settings {
   quietLabels?: Record<string, string[]>
   /** Account ids whose new mail never notifies (calendar reminders are separate). */
   mutedMailboxes?: string[]
+  /** Account ids whose new mail Jev labels automatically. */
+  autoLabelAccounts?: string[]
+  /** Account ids where the AI never removes imported labels (aiCorrectsProviderLabels is the switch for all mailboxes). */
+  aiCorrectsOff?: string[]
   /** Import Gmail labels / Outlook categories as labels. */
   importProviderLabels: boolean
   /** Native desktop notifications for new mail (backend shows them). */

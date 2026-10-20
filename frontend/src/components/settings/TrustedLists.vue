@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Settings → General → Privacy → "Manage": the link domains that open without asking and
+// Settings → Mail → Privacy → "Manage": the link domains that open without asking and
 // the senders whose mail always loads remote images. Deliberately tucked away.
 import { computed } from 'vue'
 import { XIcon } from '@lucide/vue'

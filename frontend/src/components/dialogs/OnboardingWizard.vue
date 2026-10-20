@@ -136,7 +136,7 @@ function openDocs(anchor = '') {
             This build needs a one-time sign-in setup before it can connect Gmail or Outlook (official release builds include it).
             <button type="button" class="text-foreground inline-flex items-center gap-1 font-medium hover:underline" @click="openDocs()">Open setup guide <ExternalLinkIcon class="size-3" /></button>
             ·
-            <button type="button" class="text-foreground inline-flex items-center gap-1 font-medium hover:underline" @click="ui.openSettings('accounts')">Settings → Accounts</button>
+            <button type="button" class="text-foreground inline-flex items-center gap-1 font-medium hover:underline" @click="ui.openSettings('accounts')">Settings → Mailboxes</button>
           </div>
         </section>
 

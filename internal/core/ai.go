@@ -140,9 +140,10 @@ func (s *Service) labelDefs(accountID string) []ai.LabelDef {
 	return out
 }
 
-func (s *Service) policy() store.AIPolicy {
+// policy is how scores change the labels of mail of an account.
+func (s *Service) policy(accountID string) store.AIPolicy {
 	st := s.Settings()
-	return store.AIPolicy{AddThreshold: st.ClassifyThreshold, RemoveThreshold: st.ClassifyRemoveThreshold, CorrectProvider: st.AICorrectsProviderLabels}
+	return store.AIPolicy{AddThreshold: st.ClassifyThreshold, RemoveThreshold: st.ClassifyRemoveThreshold, CorrectProvider: config.AICorrects(st, accountID)}
 }
 
 func (s *Service) checkAIReady() error {
@@ -191,7 +192,7 @@ func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) model
 		res.Scores, res.Skipped = in.AIScores, true
 		// No new scores needed, but the thresholds or provider-label
 		// policy may have changed since: apply them to the stored scores.
-		added, removed, err := s.store.ApplyAIScores(in.ID, in.AIScores, s.policy(), hash)
+		added, removed, err := s.store.ApplyAIScores(in.ID, in.AIScores, s.policy(in.AccountID), hash)
 		if err == nil {
 			res.Added, res.Removed = added, removed
 		}
@@ -211,7 +212,7 @@ func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) model
 		return res
 	}
 	res.Scores = scores.Scores
-	added, removed, err := s.store.ApplyAIScores(in.ID, scores.Scores, s.policy(), hash)
+	added, removed, err := s.store.ApplyAIScores(in.ID, scores.Scores, s.policy(in.AccountID), hash)
 	if err != nil {
 		res.Error = err.Error()
 		return res
@@ -464,7 +465,7 @@ func (s *Service) EstimateClassify(q models.ListQuery, onlyUnlabeled, includeAll
 // onNewMessages auto-labels newly synced incoming mail.
 func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 	st := s.Settings()
-	if !st.AutoClassify || s.checkAIReady() != nil {
+	if !config.AutoClassifies(st, accountID) || s.checkAIReady() != nil {
 		return
 	}
 	if s.budgetReached() {

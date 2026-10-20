@@ -303,7 +303,7 @@ func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
 			return err
 		}
 		if len(ids) == 0 {
-			return fmt.Errorf("the label “%s” isn’t used in this mailbox; choose its mailboxes in Settings → Labels", l.Name)
+			return fmt.Errorf("the label “%s” isn’t used in this mailbox; choose its mailboxes in Settings → Labels & rules", l.Name)
 		}
 		err = s.store.AddLabels(ids, labelID)
 	} else {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Settings → Labels → Rules. Each rule reads as a sentence:
+// Settings → Labels & rules → Rules. Each rule reads as a sentence:
 //   When [Sender] contains [text]
 //   in [All mailboxes] → [Add “GitLab”]
 // Rules run on every new mail, without AI. "Apply to existing mail" adds labels to what's downloaded
