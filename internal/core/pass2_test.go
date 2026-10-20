@@ -453,6 +453,40 @@ func TestRemoteContentBlocking(t *testing.T) {
 	}
 }
 
+func TestRemoteContentTrustedSender(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	res, _ := s.SearchMessages(models.SearchQuery{Query: "morning brew"})
+	m, err := s.Message(res[0].Message.ID)
+	if err != nil || !m.RemoteContentBlocked {
+		t.Fatalf("expected blocked remote content: %v", err)
+	}
+	st := s.GetSettings()
+	// Saved with odd casing and a duplicate: normalized on save.
+	st.TrustedImageSenders = []string{strings.ToUpper(m.From.Email), m.From.Email, "not-an-address"}
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetSettings().TrustedImageSenders; len(got) != 1 || got[0] != strings.ToLower(m.From.Email) {
+		t.Fatalf("trusted senders %v", got)
+	}
+	full, _ := s.Message(m.ID)
+	if full.RemoteContentBlocked || !strings.Contains(full.BodyHTML, "open-pixel") {
+		t.Fatal("trusted sender still blocked")
+	}
+	// Other senders stay blocked.
+	for _, r := range res[1:] {
+		if o, _ := s.Message(r.Message.ID); o.HasRemoteContent && !strings.EqualFold(o.From.Email, m.From.Email) && !o.RemoteContentBlocked {
+			t.Fatalf("untrusted sender %s not blocked", o.From.Email)
+		}
+	}
+	st.TrustedImageSenders = nil
+	s.SaveSettings(st)
+	if again, _ := s.Message(m.ID); !again.RemoteContentBlocked {
+		t.Fatal("still allowed after removing the sender")
+	}
+}
+
 func TestProgressiveBackfill(t *testing.T) {
 	e := newEnv(t, "")
 	s := e.s

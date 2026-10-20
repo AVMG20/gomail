@@ -7,6 +7,7 @@ import AccountRail from '@/components/mail/AccountRail.vue'
 import FolderSidebar from '@/components/mail/FolderSidebar.vue'
 import MessageList from '@/components/mail/MessageList.vue'
 import Onboarding from '@/components/dialogs/Onboarding.vue'
+import LinkConfirmDialog from '@/components/dialogs/LinkConfirmDialog.vue'
 import TooltipLayer from '@/components/common/TooltipLayer.vue'
 import { useBackendEvents } from '@/composables/useBackendEvents'
 import { useShortcuts } from '@/composables/useShortcuts'
@@ -179,6 +180,7 @@ watch([() => mail.mailboxName, showCalendar], ([name, cal]) => {
     <AddAccountDialog v-if="used.addAccount" />
     <ShortcutsDialog v-if="used.shortcuts" />
     <ClassifyConfirmDialog v-if="used.classify" />
+    <LinkConfirmDialog />
     <Toaster position="bottom-center" :theme="toasterTheme" close-button />
     <TooltipLayer />
   </div>

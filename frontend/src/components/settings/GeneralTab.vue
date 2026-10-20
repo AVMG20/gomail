@@ -6,13 +6,17 @@ import { shortcutLabel } from '@/lib/platform'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useSettingsStore } from '@/stores/settings'
 import { useMailStore } from '@/stores/mail'
+import { ref } from 'vue'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
+import TrustedLists from './TrustedLists.vue'
 
 const settings = useSettingsStore()
 const localeClock = localeUses12h() ? '12-hour' : '24-hour'
 const intervals = [1, 5, 15, 30, 60]
 const mail = useMailStore()
+const showTrusted = ref(false)
+const trustedCount = () => (settings.settings?.trustedImageSenders?.length ?? 0) + (settings.settings?.trustedLinkDomains?.length ?? 0)
 async function setConversation(v: boolean) {
   await settings.update({ conversationView: v }, 0)
   void mail.reload()
@@ -123,6 +127,11 @@ async function setConversation(v: boolean) {
       <SettingRow title="Load remote images automatically" description="Remote images can reveal when and where you open a message. When off, you can still load them per message.">
         <Switch :model-value="settings.settings.showRemoteImages" @update:model-value="(v: boolean) => settings.update({ showRemoteImages: v })" />
       </SettingRow>
+      <div class="text-muted-foreground -mt-1.5 pb-3 text-xs">
+        Trusted senders and links<template v-if="trustedCount()"> ({{ trustedCount() }})</template> ·
+        <button type="button" class="text-foreground underline-offset-2 hover:underline" :aria-expanded="showTrusted" @click="showTrusted = !showTrusted">{{ showTrusted ? 'Hide' : 'Manage' }}</button>
+      </div>
+      <TrustedLists v-if="showTrusted" />
     </SettingSection>
   </div>
 </template>

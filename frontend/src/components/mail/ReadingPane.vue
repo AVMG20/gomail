@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import {
   ArchiveIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MoreHorizontalIcon, ReplyAllIcon, SparklesIcon, StarIcon,
   Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon, PencilIcon,
@@ -15,6 +15,7 @@ import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { displayName } from '@/lib/format'
+import { needsRemoteRefetch, normalizeSenders, remoteAllowedFor } from '@/lib/trust'
 import type { Label, Message, MessageLabel } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
@@ -47,9 +48,6 @@ let timer: ReturnType<typeof setTimeout> | null = null
 
 function applyThread(id: string, list: Message[]) {
   thread.value = list
-  // Images were allowed for this conversation earlier: fetch the unstripped bodies again.
-  const tid = list[0]?.threadId
-  if (tid && mail.remoteAllowed.has(tid) && list.some((m) => m.remoteContentBlocked)) void nextTick(() => loadImages(tid))
   const last = list[list.length - 1]
   // Expand the newest message plus any unread ones, like most mail apps.
   expanded.value = new Set([id, last?.id, ...list.filter((m) => m.unread).map((m) => m.id)].filter(Boolean) as string[])
@@ -135,7 +133,11 @@ const newest = computed(() => thread.value[thread.value.length - 1] ?? null)
 const invite = computed(() => [...thread.value].reverse().find((m) => m.invite)?.invite ?? null)
 const ownEmail = computed(() => (current.value ? accounts.accountMap.get(current.value.accountId)?.email ?? '' : ''))
 const account = computed(() => (current.value ? accounts.accountMap.get(current.value.accountId) : undefined))
-const allowRemote = computed(() => !!settings.settings?.showRemoteImages || (!!current.value && remoteAllowed.value.has(current.value.threadId)))
+const trustedSenders = computed(() => settings.settings?.trustedImageSenders ?? [])
+/** Remote images for this message: global switch, trusted sender, or "Load images" for the conversation. */
+function allowRemoteFor(m: Message): boolean {
+  return remoteAllowedFor(m, { showRemoteImages: settings.settings?.showRemoteImages, trustedImageSenders: trustedSenders.value, allowedThreads: remoteAllowed.value })
+}
 
 const labelPills = computed(() => {
   const m = current.value
@@ -144,20 +146,43 @@ const labelPills = computed(() => {
   return m.labels.map((id) => ({ label: settings.labelMap.get(id), detail: details.get(id) })).filter((x): x is { label: Label; detail: MessageLabel | undefined } => !!x.label)
 })
 
-/** "Load images": the backend strips remote content, so refetch with it kept. */
-async function loadImages(threadId: string) {
+/** "Load images": allow this conversation; ensureRemoteBodies() fetches the unstripped bodies. */
+function loadImages(threadId: string) {
   mail.remoteAllowed = new Set([...mail.remoteAllowed, threadId])
+}
+
+/** "Always load images from <sender>": stored in settings; the backend stops stripping their mail. */
+function trustSender(m: Message) {
+  const list = settings.settings?.trustedImageSenders ?? []
+  void settings.update({ trustedImageSenders: normalizeSenders([...list, m.from.email]) }, 0)
+  toast(`Images from ${m.from.email} will always load`, { description: 'Change this in Settings → General → Privacy.' })
+}
+
+// The backend strips remote content from GetThread/GetMessage. Whenever a shown message is
+// allowed to load images but its body is still stripped, fetch it with remote content kept.
+// Every path converges here (the "Load images" button, a trusted sender, the global switch,
+// a thread reloaded by a background refresh), and results are merged by id into whatever
+// is shown at that moment, so a reload in between can't drop them.
+const fetchingRemote = new Set<string>()
+async function ensureRemoteBodies() {
   if (!hasMethod('GetMessageWithRemoteContent')) return
-  const t = token
-  const source = thread.value
+  const want = thread.value.filter((m) => !fetchingRemote.has(m.id) && needsRemoteRefetch(m, allowRemoteFor(m)))
+  if (!want.length) return
+  want.forEach((m) => fetchingRemote.add(m.id))
   try {
-    const updated = await Promise.all(source.map((m) => (m.remoteContentBlocked || m.hasRemoteContent ? api.getMessageWithRemoteContent(m.id) : Promise.resolve(m))))
-    if (t !== token || thread.value !== source) return // another message was opened meanwhile
-    thread.value = updated
+    const got = await Promise.all(want.map((m) => api.getMessageWithRemoteContent(m.id)))
+    // GetMessageWithRemoteContent never strips; mark it so this can't loop.
+    const fresh = got.map((m) => ({ id: m.id, bodyHtml: m.bodyHtml, hasRemoteContent: m.hasRemoteContent, remoteContentBlocked: false }))
+    mail.updateCachedBodies(fresh)
+    const byMsg = new Map(fresh.map((m) => [m.id, m]))
+    if (thread.value.some((m) => byMsg.has(m.id))) thread.value = thread.value.map((m) => (byMsg.has(m.id) ? { ...m, ...byMsg.get(m.id)! } : m))
   } catch (e) {
     toast.error('Couldn’t load images', { description: errorMessage(e) })
+  } finally {
+    want.forEach((m) => fetchingRemote.delete(m.id))
   }
 }
+watch([thread, remoteAllowed, trustedSenders, () => settings.settings?.showRemoteImages], () => void ensureRemoteBodies(), { immediate: true })
 
 function toggleExpanded(id: string) {
   const next = new Set(expanded.value)
@@ -328,10 +353,11 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
               :message="m"
               :expanded="expanded.has(m.id)"
               :own-email="ownEmail"
-              :allow-remote="allowRemote"
+              :allow-remote="allowRemoteFor(m)"
               @toggle="toggleExpanded(m.id)"
               @reply="respond('reply', m)"
               @load-images="loadImages(m.threadId)"
+              @trust-sender="trustSender(m)"
             />
           </div>
 

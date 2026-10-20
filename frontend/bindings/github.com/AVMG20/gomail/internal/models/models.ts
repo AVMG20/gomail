@@ -1102,6 +1102,18 @@ export interface Settings {
      * check GitHub releases once a day (default true)
      */
     "checkUpdates": boolean;
+
+    /**
+     * TrustedLinkDomains open from mail without the "Open link?" prompt
+     * (lowercase host names without "www."; subdomains match too).
+     */
+    "trustedLinkDomains": string[] | null;
+
+    /**
+     * TrustedImageSenders always get remote images loaded (lowercase
+     * addresses), even with ShowRemoteImages off.
+     */
+    "trustedImageSenders": string[] | null;
     "googleClientId": string;
     "googleClientSecret": string;
     "microsoftClientId": string;

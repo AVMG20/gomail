@@ -282,6 +282,13 @@ type Settings struct {
 	LaunchAtLogin           bool    `json:"launchAtLogin"`           // start gomail at login, minimized to the tray when enabled (default false)
 	CheckUpdates            bool    `json:"checkUpdates"`            // check GitHub releases once a day (default true)
 
+	// TrustedLinkDomains open from mail without the "Open link?" prompt
+	// (lowercase host names without "www."; subdomains match too).
+	TrustedLinkDomains []string `json:"trustedLinkDomains"`
+	// TrustedImageSenders always get remote images loaded (lowercase
+	// addresses), even with ShowRemoteImages off.
+	TrustedImageSenders []string `json:"trustedImageSenders"`
+
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`
 	MicrosoftClientID  string `json:"microsoftClientId"`

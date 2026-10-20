@@ -1,28 +1,31 @@
 <script setup lang="ts">
 // Renders an email body safely:
 //  * HTML is sanitised with DOMPurify, then shown in a sandboxed iframe
-//    (sandbox="allow-same-origin" only: no scripts, forms, popups or top navigation;
+//    (sandbox="allow-same-origin allow-scripts": no forms, popups or top navigation;
 //    same-origin lets us measure height and intercept link clicks from here).
+//    allow-scripts is needed because WebKit (macOS, Linux) refuses to run even the
+//    PARENT's event listeners in a frame without it: link clicks then weren't
+//    intercepted and the email frame navigated to the website inside the app.
+//    The frame's own scripts still can't run: DOMPurify strips them and the CSP
+//    below says script-src 'none' (inline scripts, handlers and javascript: URLs).
 //  * A CSP meta tag inside the frame blocks remote loads unless images are allowed.
 //  * Remote images are stripped unless allowed; a banner offers to load them.
-//  * Links open in the system browser via the backend.
+//  * Links go through followMailLink(): confirm, then the system browser.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
-import { ImageOffIcon } from '@lucide/vue'
+import { ImageOffIcon, LoaderIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
-import { api } from '@/lib/api'
 import { shade } from '@/lib/color'
 import { isSimpleHtml } from '@/lib/emailTheme'
-import { linkify, parseMailto } from '@/lib/format'
+import { linkify } from '@/lib/format'
+import { followMailLink } from '@/composables/useLinkPrompt'
 import { themeState } from '@/lib/theme'
 import type { Message } from '@/lib/types'
-import { useComposeStore } from '@/stores/compose'
 import { useSettingsStore } from '@/stores/settings'
 
 const props = defineProps<{ message: Message; allowRemote: boolean }>()
-const emit = defineEmits<{ loadImages: [] }>()
+const emit = defineEmits<{ loadImages: []; trustSender: [] }>()
 
-const compose = useComposeStore()
 const settings = useSettingsStore()
 /** Dark theme + "Auto" email background: simple mail follows the app theme. */
 const darkAuto = computed(() => themeState.value.dark && (settings.settings?.emailBackground ?? 'auto') !== 'light')
@@ -124,6 +127,7 @@ function collapseQuotes(html: string): string {
   return doc.body.innerHTML
 }
 
+const senderEmail = computed(() => props.message.from?.email?.trim() ?? '')
 const isHtml = computed(() => !!props.message.bodyHtml.trim())
 
 const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml, props.allowRemote) : { html: '', blocked: 0 }))
@@ -157,7 +161,7 @@ const srcdoc = computed(() => {
   void themeState.value
   const img = props.allowRemote ? 'img-src data: cid: https: http:;' : 'img-src data: cid:;'
   return `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${img} style-src 'unsafe-inline'${props.allowRemote ? ' https:' : ''}; font-src data:${props.allowRemote ? ' https:' : ''};">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; ${img} style-src 'unsafe-inline'${props.allowRemote ? ' https:' : ''}; font-src data:${props.allowRemote ? ' https:' : ''};">
 <meta name="color-scheme" content="${dark ? 'dark' : 'light'}">
 <style>
   html,body{margin:0;padding:0;background:#fff;color:#1f2328}
@@ -220,12 +224,27 @@ function measure() {
   if (h && Math.abs(h - height.value) > 1) height.value = h
 }
 
-function handleLink(href: string) {
-  if (href.startsWith('mailto:')) {
-    compose.composeWith(parseMailto(href))
-    return
-  }
-  if (/^https?:\/\//i.test(href)) void api.openExternal(href)
+type LinkEl = HTMLAnchorElement | HTMLAreaElement
+
+function linkFrom(e: Event): LinkEl | null {
+  // <area> (image maps) navigates like a link: never inside the frame itself.
+  return ((e.target as Element | null)?.closest?.('a[href], area[href]') as LinkEl | null) ?? null
+}
+
+function linkText(a: LinkEl): string {
+  return a.tagName === 'AREA' ? (a as HTMLAreaElement).alt : a.textContent ?? ''
+}
+
+/** Every activation (click, middle click, ⌘/Ctrl-click) is handled here; the frame never navigates. */
+function onFrameClick(e: MouseEvent) {
+  const a = linkFrom(e)
+  if (!a) return
+  const href = a.getAttribute('href') ?? ''
+  if (href.startsWith('#')) return // in-page anchor: let the frame scroll
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.type === 'auxclick' && e.button !== 1) return
+  followMailLink(href, linkText(a))
 }
 
 function onLoad() {
@@ -240,15 +259,10 @@ function onLoad() {
     if (frame.value) ro.observe(frame.value)
   }
   doc.addEventListener('load', measure, true) // images
-  doc.addEventListener('click', (e) => {
-    // <area> (image maps) navigates like a link: never inside the frame itself.
-    const a = (e.target as Element | null)?.closest?.('a[href], area[href]') as HTMLAnchorElement | HTMLAreaElement | null
-    if (!a) return
-    e.preventDefault()
-    const href = a.getAttribute('href') ?? ''
-    if (href.startsWith('#')) return
-    handleLink(href)
-  })
+  doc.addEventListener('click', onFrameClick, true)
+  doc.addEventListener('auxclick', onFrameClick, true)
+  // Dragging a link out would hand the URL to the webview (it may navigate the app).
+  doc.addEventListener('dragstart', (e) => linkFrom(e) && e.preventDefault(), true)
   // Let keyboard shortcuts work while the frame has focus.
   doc.addEventListener('keydown', (e) => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: e.key, code: e.code, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey }))
@@ -261,7 +275,8 @@ function onTextClick(e: MouseEvent) {
   const a = (e.target as Element | null)?.closest('a[href]') as HTMLAnchorElement | null
   if (!a) return
   e.preventDefault()
-  handleLink(a.getAttribute('href') ?? '')
+  if (e.type === 'auxclick' && e.button !== 1) return
+  followMailLink(a.getAttribute('href') ?? '', a.textContent ?? '')
 }
 
 watch(srcdoc, () => {
@@ -275,17 +290,21 @@ onBeforeUnmount(() => ro?.disconnect())
   <div>
     <div
       v-if="isHtml && (blockedCount > 0 || message.remoteContentBlocked || (message.remoteContentBlocked === undefined && message.hasRemoteContent)) && !allowRemote"
-      class="bg-muted/60 text-muted-foreground mb-3 flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
+      class="bg-muted/60 text-muted-foreground mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-3 py-1.5 text-xs"
     >
       <ImageOffIcon class="size-3.5 shrink-0" />
-      <span class="flex-1">Remote images are hidden to protect your privacy.</span>
+      <span class="min-w-40 flex-1">Remote images are hidden to protect your privacy.</span>
       <Button variant="ghost" size="xs" class="text-foreground" @click="emit('loadImages')">Load images</Button>
+      <Button v-if="senderEmail" variant="ghost" size="xs" class="text-foreground max-w-full truncate" :title="`Always load images in mail from ${senderEmail}`" @click="emit('trustSender')">Always load images from {{ senderEmail }}</Button>
+    </div>
+    <div v-else-if="isHtml && allowRemote && message.remoteContentBlocked" class="text-muted-foreground mb-3 flex items-center gap-2 px-3 py-1.5 text-xs" role="status">
+      <LoaderIcon class="size-3.5 shrink-0 animate-spin" /> Loading images…
     </div>
     <div v-if="isHtml" :class="themed ? '' : 'overflow-hidden rounded-lg border border-black/5 bg-white dark:border-white/10'" :data-email-theme="themed ? 'dark' : 'light'">
       <iframe
         ref="frame"
         :srcdoc="srcdoc"
-        sandbox="allow-same-origin"
+        sandbox="allow-same-origin allow-scripts"
         referrerpolicy="no-referrer"
         title="Message content"
         class="block w-full border-0"
@@ -294,6 +313,6 @@ onBeforeUnmount(() => ro?.disconnect())
       />
     </div>
     <!-- eslint-disable-next-line vue/no-v-html -- linkify() escapes all text and only emits <a> tags -->
-    <div v-else :class="['mail-text selectable', forceLight ? 'gm-light-card rounded-lg border border-white/10 bg-white px-[22px] py-5 text-[#1f2328]' : 'text-foreground/90']" @click="onTextClick" v-html="textHtml" />
+    <div v-else :class="['mail-text selectable', forceLight ? 'gm-light-card rounded-lg border border-white/10 bg-white px-[22px] py-5 text-[#1f2328]' : 'text-foreground/90']" @click="onTextClick" @auxclick="onTextClick" v-html="textHtml" />
   </div>
 </template>
