@@ -724,6 +724,32 @@ export const useMailStore = defineStore('mail', () => {
     accounts.refreshCounts()
   }
 
+  /** The concrete folders behind the view (one per account in the unified view). */
+  const viewFolderIds = computed(() => {
+    if (mailbox.value.folderId) return [mailbox.value.folderId]
+    if (mailbox.value.kind === 'all') return []
+    return accounts.accounts.map((a) => accounts.folderOf(a.id, mailbox.value.kind)?.id).filter((x): x is string => !!x)
+  })
+
+  /** Mark everything in the view as read. A plain folder view is marked on the server, so mail
+   *  that was never downloaded (older than the offline window) is included: the folder's unread
+   *  counter is the server's, and resolving local ids alone would leave those unread. */
+  async function markAllRead() {
+    const loaded = messages.value.filter((m) => m.unread).map((m) => m.id)
+    patchLocal(loaded, { unread: false })
+    try {
+      const folderIds = viewFolderIds.value
+      if (hasMethod('MarkFolderRead') && !search.value && !hasLabelFilter.value && folderIds.length) await Promise.all(folderIds.map((id) => api.markFolderRead(id)))
+      else await inChunks(actionIds(await targetIdsForQuery()), (c) => api.markRead(c, true))
+      toast('Marked all as read')
+    } catch (e) {
+      patchLocal(loaded, { unread: true })
+      toast.error('Couldn’t mark as read', { description: errorMessage(e) })
+    }
+    accounts.refreshCounts()
+    void softRefresh()
+  }
+
   async function setStarred(ids: string[], starred: boolean) {
     if (!ids.length) return
     const before = snapshot(ids).map((m) => [m.id, m.starred] as const)
@@ -817,6 +843,6 @@ export const useMailStore = defineStore('mail', () => {
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
-    archive, trash, junk, setRead, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
+    archive, trash, junk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
   }
 })

@@ -204,3 +204,36 @@ describe('select all in this view', () => {
     expect(mail.selectAllQuery && mail.viewUnreadCount > 0).toBe(true)
   })
 })
+
+describe('mark all as read', () => {
+  it('marks a plain folder on the server, so never-downloaded mail is included', async () => {
+    const { useAccountsStore } = await import('@/stores/accounts')
+    const api$ = await import('@/lib/api')
+    vi.spyOn(api$, 'hasMethod').mockReturnValue(true)
+    const mail = useMailStore()
+    const accounts = useAccountsStore()
+    accounts.folders = { a: [{ id: 'a:inbox', accountId: 'a', kind: 'inbox', name: 'Inbox', unread: 217, total: 1108 } as never] }
+    mail.mailbox = { accountId: 'a', folderId: 'a:inbox', kind: 'inbox' }
+    vi.spyOn(api, 'listMessages').mockResolvedValue(page([]))
+    const folderRead = vi.spyOn(api, 'markFolderRead').mockResolvedValue()
+    const markRead = vi.spyOn(api, 'markRead').mockResolvedValue()
+    await mail.markAllRead()
+    expect(folderRead).toHaveBeenCalledWith('a:inbox')
+    expect(markRead).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the matching ids when the view is searched or filtered', async () => {
+    const api$ = await import('@/lib/api')
+    vi.spyOn(api$, 'hasMethod').mockReturnValue(true)
+    const mail = useMailStore()
+    mail.mailbox = { accountId: 'a', folderId: 'a:inbox', kind: 'inbox' }
+    mail.search = 'invoice'
+    vi.spyOn(api, 'listMessages').mockResolvedValue(page([]))
+    vi.spyOn(api, 'resolveQueryIds').mockResolvedValue(['m1', 'm2'])
+    const folderRead = vi.spyOn(api, 'markFolderRead').mockResolvedValue()
+    const markRead = vi.spyOn(api, 'markRead').mockResolvedValue()
+    await mail.markAllRead()
+    expect(folderRead).not.toHaveBeenCalled()
+    expect(markRead).toHaveBeenCalledWith(['m1', 'm2'], true)
+  })
+})

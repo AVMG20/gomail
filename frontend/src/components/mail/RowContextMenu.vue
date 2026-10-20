@@ -74,7 +74,7 @@ function toggleCtxLabel(labelId: string) {
       <ContextMenuSeparator />
       <ContextMenuItem @click="run(mail.archive)"><ArchiveIcon /> Archive <ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuItem @click="run(mail.trash)"><Trash2Icon /> Delete <ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
-      <ContextMenuItem @click="((read) => run((ids) => mail.setRead(ids, read)))(anyUnread)">
+      <ContextMenuItem @click="((read) => read && mail.selectAllQuery && mail.selection.has(messageId) ? (mail.clearSelection(), mail.markAllRead()) : run((ids) => mail.setRead(ids, read)))(anyUnread)">
         <component :is="anyUnread ? MailOpenIcon : MailIcon" /> {{ anyUnread ? 'Mark as read' : 'Mark as unread' }} <ContextMenuShortcut>U</ContextMenuShortcut>
       </ContextMenuItem>
       <ContextMenuItem @click="((star) => run((ids) => mail.setStarred(ids, star)))(!allStarred)"><StarIcon /> {{ allStarred ? 'Unstar' : 'Star' }} <ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>

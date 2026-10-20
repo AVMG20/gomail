@@ -166,7 +166,10 @@ export function useShortcuts() {
         void bulk((x) => mail.setRead(x, false))
         break
       case 'I':
-        void bulk((x) => mail.setRead(x, true))
+        if (mail.selectAllQuery) {
+          mail.clearSelection()
+          void mail.markAllRead()
+        } else void bulk((x) => mail.setRead(x, true))
         break
       case 'x':
         if (mail.openId) mail.toggleSelect(mail.openId)

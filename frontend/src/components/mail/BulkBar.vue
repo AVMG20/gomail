@@ -24,6 +24,15 @@ async function run(fn: (ids: string[]) => Promise<void> | void) {
   await fn(ids)
 }
 
+/** "All in this view" + read goes through markAllRead, which also covers mail only on the server. */
+function toggleRead(read: boolean) {
+  if (read && mail.selectAllQuery) {
+    mail.clearSelection()
+    return mail.markAllRead()
+  }
+  return run((ids) => mail.setRead(ids, read))
+}
+
 async function labelWithAi() {
   if (mail.selectAllQuery) {
     ai.requestBulk({ query: { ...mail.query, cursor: '' }, ids: [], title: `${mail.total.toLocaleString()} messages in ${mail.mailboxName}` })
@@ -45,7 +54,7 @@ async function labelWithAi() {
     <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="run(mail.trash)"><Trash2Icon /></Button></Tip>
     <Tip v-if="mail.mailbox.kind !== 'spam'" label="Move to Junk"><Button variant="ghost" size="icon-sm" aria-label="Move to Junk" @click="run(mail.junk)"><OctagonAlertIcon /></Button></Tip>
     <Tip :label="anyUnread ? 'Mark as read' : 'Mark as unread'">
-      <Button variant="ghost" size="icon-sm" :aria-label="anyUnread ? 'Mark as read' : 'Mark as unread'" @click="((read) => run((ids) => mail.setRead(ids, read)))(anyUnread)">
+      <Button variant="ghost" size="icon-sm" :aria-label="anyUnread ? 'Mark as read' : 'Mark as unread'" @click="toggleRead(anyUnread)">
         <MailOpenIcon v-if="anyUnread" /><MailIcon v-else />
       </Button>
     </Tip>

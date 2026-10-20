@@ -25,10 +25,7 @@ const kind = computed(() => mail.mailbox.kind)
 const folderName = computed(() => (kind.value === 'spam' ? 'Junk' : 'Trash'))
 
 /** The concrete folder ids behind the current view (one per account in the unified view). */
-const folderIds = computed(() => {
-  if (mail.mailbox.folderId) return [mail.mailbox.folderId]
-  return accounts.accounts.map((a) => accounts.folderOf(a.id, kind.value)?.id).filter((x): x is string => !!x)
-})
+const folderIds = computed(() => mail.viewFolderIds)
 // Gmail's Trash can't be emptied with gomail's API scope (it empties itself after 30 days).
 const emptyTargets = computed(() => folderIds.value.filter((id) => {
   const f = accounts.folderMap.get(id)
@@ -58,18 +55,8 @@ async function emptyFolder() {
   }
 }
 
-async function markAllRead() {
-  const ids = mail.messages.filter((m) => m.unread).map((m) => m.id)
-  mail.patchLocal(ids, { unread: false })
-  try {
-    if (hasMethod('MarkFolderRead') && !mail.search && !mail.hasLabelFilter) await Promise.all(folderIds.value.map((id) => api.markFolderRead(id)))
-    else await api.markRead(await mail.targetIdsForQuery(), true)
-    toast('Marked all as read')
-  } catch (e) {
-    mail.patchLocal(ids, { unread: true })
-    toast.error('Couldn’t mark as read', { description: errorMessage(e) })
-  }
-  accounts.refreshCounts()
+function markAllRead() {
+  void mail.markAllRead()
 }
 
 // Command palette entry points ("Mark all as read", "Empty Trash/Junk", "Label this view with AI").
