@@ -15,6 +15,7 @@ import { useUiStore } from '@/stores/ui'
 import { FOLDER_ICONS } from './folderIcons'
 import AccountMenuTrigger from './AccountMenuTrigger.vue'
 import SidebarLabel from './SidebarLabel.vue'
+import FolderMenu from './FolderMenu.vue'
 
 // The dropdown chunk loads lazily; a static copy of the trigger shows meanwhile.
 const AccountMenu = defineAsyncComponent({
@@ -122,6 +123,7 @@ function formatCount(n: number) {
       <!-- Folders -->
       <ul class="space-y-px">
         <li v-for="r in mainRows" :key="r.key">
+          <FolderMenu :kind="r.kind" :folder-id="r.folderId" :name="r.name" :unread="r.unread">
           <button
             type="button"
             :class="[
@@ -134,6 +136,7 @@ function formatCount(n: number) {
             <span class="flex-1 truncate text-left">{{ r.name }}</span>
             <span v-if="r.unread && r.kind !== 'sent'" class="text-xs tabular-nums" :class="isActive(r) ? 'text-foreground font-semibold' : 'text-muted-foreground font-medium'">{{ formatCount(r.unread) }}</span>
           </button>
+          </FolderMenu>
         </li>
       </ul>
 
@@ -148,6 +151,7 @@ function formatCount(n: number) {
         <CollapsibleContent>
           <ul class="space-y-px">
             <li v-for="r in customRows" :key="r.key">
+              <FolderMenu :kind="r.kind" :folder-id="r.folderId" :name="r.name" :unread="r.unread">
               <button
                 type="button"
                 :class="[
@@ -160,6 +164,7 @@ function formatCount(n: number) {
                 <span class="flex-1 truncate text-left">{{ r.name }}</span>
                 <span v-if="r.unread" class="text-muted-foreground text-xs tabular-nums">{{ formatCount(r.unread) }}</span>
               </button>
+              </FolderMenu>
             </li>
           </ul>
         </CollapsibleContent>
@@ -167,6 +172,7 @@ function formatCount(n: number) {
 
       <template v-if="trashRow">
         <div class="bg-sidebar-border mx-2.5 my-1.5 h-px" />
+        <FolderMenu :kind="trashRow.kind" :folder-id="trashRow.folderId" :name="trashRow.name" :unread="trashRow.unread">
         <button
           type="button"
           :class="[
@@ -178,6 +184,7 @@ function formatCount(n: number) {
           <Trash2Icon class="text-muted-foreground size-4 shrink-0" />
           <span class="flex-1 truncate text-left">{{ trashRow.name }}</span>
         </button>
+        </FolderMenu>
       </template>
 
       <!-- Labels -->
