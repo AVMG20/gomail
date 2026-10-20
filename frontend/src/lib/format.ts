@@ -7,7 +7,8 @@ const longFmts = new Map<boolean, Intl.DateTimeFormat>()
 function cached(cache: Map<boolean, Intl.DateTimeFormat>, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const h12 = uses12h()
   let f = cache.get(h12)
-  if (!f) cache.set(h12, (f = new Intl.DateTimeFormat(undefined, { ...opts, hour12: h12 })))
+  // hourCycle h23 rather than hour12: false, which some engines render as "24:05" after midnight.
+  if (!f) cache.set(h12, (f = new Intl.DateTimeFormat(undefined, { ...opts, ...(h12 ? { hour12: true } : { hourCycle: 'h23' as const }) })))
   return f
 }
 const weekdayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short' })

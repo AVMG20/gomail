@@ -12,17 +12,19 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import RecipientField from '@/components/compose/RecipientField.vue'
 import {
-  addDays, addMinutes, allTimeZones, buildRRule, eventDate, formatReminder, fromYmd, localTimeZone, needsScopeChoice, parseRRule,
-  REMINDER_CHOICES, toRfc3339, toYmd, utcToZoned, zonedToUtc, type RepeatFreq,
+  addDays, addMinutes, allTimeZones, describeRepeat, eventDate, formatReminder, fromYmd, isSimpleRRule, isValidTimeZone, localTimeZone, needsScopeChoice,
+  parseRRule, recurrenceForSave, REMINDER_CHOICES, toHm, toRfc3339, toYmd, utcToZoned, zonedToUtc, type RepeatFreq,
 } from '@/lib/calendar'
 import type { Address, EventInput } from '@/lib/types'
 import { useCalendarStore } from '@/stores/calendar'
 import { useSettingsStore } from '@/stores/settings'
 import CalendarPicker from './CalendarPicker.vue'
 import ScopePrompt from './ScopePrompt.vue'
+import TimeField from './TimeField.vue'
 import { closeEditor, editorRequest } from './editorState'
 import { askConfirm, askScope } from './scopePrompt'
 import { api, errorMessage, hasMethod } from '@/lib/api'
+import { shortcutLabel } from '@/lib/platform'
 
 const cal = useCalendarStore()
 const settings = useSettingsStore()
@@ -41,17 +43,25 @@ const endDate0 = base.end ? eventDate(base.end, !!base.allDay) : addMinutes(star
 
 const title = ref(base.title ?? '')
 const allDay = ref(!!base.allDay)
-const timeZone = ref(base.timeZone || localTz)
-const showTz = ref(!!base.timeZone && base.timeZone !== localTz)
+// An unknown zone name would make every conversion throw: fall back to ours.
+const tz0 = base.timeZone && isValidTimeZone(base.timeZone) ? base.timeZone : localTz
+const timeZone = ref(tz0)
+const showTz = ref(tz0 !== localTz)
 const s0 = utcToZoned(startDate0, allDay.value ? '' : timeZone.value)
 const e0 = utcToZoned(allDay.value ? addDays(endDate0, -1) : endDate0, allDay.value ? '' : timeZone.value)
 const startDay = ref(s0.ymd)
 const startTime = ref(s0.hm)
 const endDay = ref(e0.ymd)
 const endTime = ref(e0.hm)
-const rule0 = parseRRule(base.recurrence ?? '')
-const freq = ref<RepeatFreq>(rule0.freq)
-const until = ref(rule0.until)
+const recurrence0 = base.recurrence ?? ''
+const rule0 = parseRRule(recurrence0)
+/** A rule the menu can't express ("every 2 weeks", "every weekday") is kept as is unless replaced. */
+const customRule = !!ev?.isRecurring && (!recurrence0 || !isSimpleRRule(recurrence0))
+const customLabel = ev?.recurrenceText || (recurrence0 ? describeRepeat(rule0) : 'Repeats (custom)')
+const freq0: RepeatFreq | 'custom' = customRule ? 'custom' : rule0.freq
+const freq = ref<RepeatFreq | 'custom'>(freq0)
+const until = ref(customRule ? '' : rule0.until)
+const ruleChanged = () => freq.value !== freq0 || until.value !== (customRule ? '' : rule0.until)
 const location = ref(base.location ?? '')
 const meetingUrl = ref(base.meetingUrl ?? '')
 const guests = ref<Address[]>((base.attendees ?? []).map((a) => ({ name: a.name, email: a.email })))
@@ -68,7 +78,7 @@ const saving = ref(false)
 const error = ref('')
 
 const readOnly = computed(() => !!ev && !cal.canEditEvent(ev))
-const timeZones = allTimeZones()
+const timeZones = [...new Set([tz0, localTz, ...allTimeZones()].filter(Boolean))]
 const reminderOptions = computed(() => REMINDER_CHOICES.filter((m) => !reminders.value.includes(m)))
 
 function roundUp(d: Date): Date {
@@ -85,8 +95,15 @@ watch([startDay, startTime], () => {
   const delta = next.getTime() - prev.getTime()
   const end = new Date(fromYmd(endDay.value, endTime.value).getTime() + delta)
   endDay.value = toYmd(end)
-  endTime.value = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`
+  endTime.value = toHm(end)
   lastStart = `${startDay.value}T${startTime.value}`
+}, { flush: 'sync' }) // sync: Enter in a time field submits right after the start changed
+
+// All-day → timed: the day's 00:00 – 00:00 would be an empty (invalid) range; use 09:00 and the default length.
+watch(allDay, (on) => {
+  if (on || startTime.value !== '00:00' || endTime.value !== '00:00') return
+  startTime.value = '09:00' // moves the end along (watcher above)
+  endTime.value = toHm(addMinutes(fromYmd(endDay.value, '09:00'), duration))
 })
 
 // ---- describe it: natural language → fields, with the chat model from Settings → AI
@@ -156,7 +173,7 @@ function buildInput(): EventInput | null {
     start = toRfc3339(s)
     end = toRfc3339(e)
   }
-  if (freq.value !== 'none' && until.value && until.value < startDay.value) return fail('“Repeat until” is before the first event.')
+  if (freq.value !== 'none' && freq.value !== 'custom' && until.value && until.value < startDay.value) return fail('“Repeat until” is before the first event.')
   if (!calendarId.value) return fail('Choose a calendar.')
   const keep = new Map((ev?.attendees ?? []).map((a) => [a.email.toLowerCase(), a.response]))
   return {
@@ -173,7 +190,7 @@ function buildInput(): EventInput | null {
     // Cleared or replaced: the old link has to go (sending nothing would keep it).
     removeMeetingUrl: !!ev?.meetingUrl && meetingUrl.value.trim() !== ev.meetingUrl.trim(),
     addVideoCall: addVideo.value && !!videoProvider.value && !providerLink.value,
-    recurrence: buildRRule({ freq: freq.value, until: until.value, byDay: rule0.freq === freq.value ? rule0.byDay : undefined }),
+    recurrence: recurrenceForSave(recurrence0, freq.value, until.value),
     reminders: [...reminders.value].sort((a, b) => a - b),
   }
 }
@@ -215,7 +232,9 @@ async function save() {
       }
     }
     let scope: 'this' | 'series' = 'this'
-    if (needsScopeChoice(ev!)) {
+    // A new repeat rule only makes sense for the whole series (one occurrence can't have its own).
+    if (needsScopeChoice(ev!) && ruleChanged()) scope = 'series'
+    else if (needsScopeChoice(ev!)) {
       const s = await askScope('edit', ev!.title)
       if (!s) return
       scope = s
@@ -267,7 +286,13 @@ function addReminder(v: unknown) {
         </DialogClose>
       </div>
 
-      <form class="thin-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4" @submit.prevent="save">
+      <!-- Enter in a field saves (the hidden submit button); Cmd/Ctrl+Enter also from the description. -->
+      <form
+        class="thin-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5"
+        @submit.prevent="!readOnly && save()"
+        @keydown.meta.enter.prevent="!readOnly && save()"
+        @keydown.ctrl.enter.prevent="!readOnly && save()"
+      >
         <!-- Describe it in your own words; the AI model fills in the fields below. -->
         <div v-if="aiFill" class="border-border focus-within:border-ring focus-within:ring-ring/40 flex items-center gap-2 rounded-lg border bg-violet-500/5 px-3 py-1.5 focus-within:ring-2">
           <SparklesIcon class="size-4 shrink-0 text-violet-500" />
@@ -300,12 +325,12 @@ function addReminder(v: unknown) {
             <div class="grid grid-cols-[3rem_auto_auto_1fr] items-center gap-x-2 gap-y-1.5">
               <span class="text-muted-foreground text-xs">Starts</span>
               <Input v-model="startDay" type="date" class="h-8 w-auto text-sm" aria-label="Start date" :disabled="readOnly" />
-              <Input v-if="!allDay" v-model="startTime" type="time" step="900" class="h-8 w-auto text-sm" aria-label="Start time" :disabled="readOnly" />
+              <TimeField v-if="!allDay" v-model="startTime" label="Start time" :disabled="readOnly" />
               <span v-else />
               <span />
               <span class="text-muted-foreground text-xs">Ends</span>
               <Input v-model="endDay" type="date" class="h-8 w-auto text-sm" aria-label="End date" :disabled="readOnly" />
-              <Input v-if="!allDay" v-model="endTime" type="time" step="900" class="h-8 w-auto text-sm" aria-label="End time" :disabled="readOnly" />
+              <TimeField v-if="!allDay" v-model="endTime" label="End time" :duration-from="endDay === startDay ? startTime : undefined" :disabled="readOnly" />
               <span v-else />
               <span />
             </div>
@@ -318,7 +343,7 @@ function addReminder(v: unknown) {
             <div v-if="!allDay && showTz" class="flex items-center gap-2">
               <GlobeIcon class="text-muted-foreground size-3.5" />
               <Select v-model="timeZone" :disabled="readOnly">
-                <SelectTrigger class="h-8 w-72 text-xs" aria-label="Time zone"><SelectValue /></SelectTrigger>
+                <SelectTrigger class="h-8 w-full max-w-72 text-xs" aria-label="Time zone"><SelectValue /></SelectTrigger>
                 <SelectContent class="max-h-72">
                   <SelectItem v-for="z in timeZones" :key="z" :value="z">{{ z.replace(/_/g, ' ') }}</SelectItem>
                 </SelectContent>
@@ -330,20 +355,24 @@ function addReminder(v: unknown) {
         <!-- Repeat -->
         <div class="flex items-center gap-3">
           <RepeatIcon class="text-muted-foreground size-4 shrink-0" />
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
           <Select v-model="freq" :disabled="readOnly">
-            <SelectTrigger class="h-8 w-44 text-sm" aria-label="Repeat"><SelectValue /></SelectTrigger>
+            <SelectTrigger class="h-8 w-auto min-w-44 max-w-full text-sm" aria-label="Repeat"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="none">Does not repeat</SelectItem>
+              <SelectItem v-if="customRule" value="custom">{{ customLabel }}</SelectItem>
+              <!-- An existing series ends with "until"; the backend can't turn it back into a single event. -->
+              <SelectItem v-if="!ev?.isRecurring" value="none">Does not repeat</SelectItem>
               <SelectItem value="daily">Daily</SelectItem>
               <SelectItem value="weekly">Weekly</SelectItem>
               <SelectItem value="monthly">Monthly</SelectItem>
               <SelectItem value="yearly">Yearly</SelectItem>
             </SelectContent>
           </Select>
-          <template v-if="freq !== 'none'">
+          <template v-if="freq !== 'none' && freq !== 'custom'">
             <span class="text-muted-foreground text-sm">until</span>
             <Input v-model="until" type="date" class="h-8 w-auto text-sm" aria-label="Repeat until (optional)" :disabled="readOnly" />
           </template>
+          </div>
         </div>
 
         <!-- Where -->
@@ -371,9 +400,10 @@ function addReminder(v: unknown) {
         <!-- Guests -->
         <div class="flex gap-3">
           <UsersIcon class="text-muted-foreground mt-2 size-4 shrink-0" />
-          <div class="border-input min-w-0 flex-1 rounded-md border px-2">
+          <div v-if="!readOnly" class="border-input min-w-0 flex-1 rounded-md border px-2">
             <RecipientField ref="guestField" v-model="guests" label="Guests" />
           </div>
+          <p v-else class="text-muted-foreground min-w-0 flex-1 pt-1.5 text-sm break-words">{{ guests.length ? guests.map((g) => g.name || g.email).join(', ') : 'No guests' }}</p>
         </div>
 
         <!-- Reminders -->
@@ -414,7 +444,7 @@ function addReminder(v: unknown) {
 
       <div class="border-border flex items-center justify-end gap-2 border-t px-5 py-3">
         <Button variant="ghost" size="sm" @click="requestClose">Cancel</Button>
-        <Button v-if="!readOnly" size="sm" :disabled="saving" @click="save">{{ isNew ? 'Create event' : 'Save' }}</Button>
+        <Button v-if="!readOnly" size="sm" :disabled="saving" :title="`${isNew ? 'Create event' : 'Save'} (${shortcutLabel('mod+enter')})`" @click="save">{{ isNew ? 'Create event' : 'Save' }}</Button>
       </div>
       <ScopePrompt />
     </DialogContent>

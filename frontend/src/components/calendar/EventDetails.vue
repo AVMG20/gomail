@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Event details card: time, calendar, location, Join, guests with responses,
 // RSVP buttons, Edit / Delete / Email guests.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
   CalendarIcon, CheckIcon, GlobeIcon, CircleHelpIcon, ClockIcon, MailIcon, MapPinIcon, PencilIcon, RepeatIcon, Trash2Icon, UsersIcon, VideoIcon, XIcon,
 } from '@lucide/vue'
@@ -52,6 +52,19 @@ function responseLabel(r: AttendeeResponse) {
   return r === 'accepted' ? 'Going' : r === 'declined' ? 'Not going' : r === 'tentative' ? 'Maybe' : 'Awaiting response'
 }
 
+const responding = ref(false)
+const respondError = ref('')
+/** RSVP: the card closes once the answer went through; on failure it stays open with the error. */
+async function respond(r: AttendeeResponse) {
+  if (responding.value) return
+  responding.value = true
+  respondError.value = ''
+  const err = await cal.respond(ev.value, r)
+  responding.value = false
+  if (err) respondError.value = err
+  else emit('close')
+}
+
 function edit() {
   openEditor({ event: ev.value })
   emit('close')
@@ -74,7 +87,7 @@ function onKey(e: KeyboardEvent) {
   const k = e.key.toLowerCase()
   if (k === 'e' && canEdit.value) edit()
   else if ((k === 'delete' || k === 'backspace') && canEdit.value) void del()
-  else if (canRespond.value && (k === 'y' || k === 'm' || k === 'n')) void cal.respond(ev.value, k === 'y' ? 'accepted' : k === 'm' ? 'tentative' : 'declined')
+  else if (canRespond.value && (k === 'y' || k === 'm' || k === 'n')) void respond(k === 'y' ? 'accepted' : k === 'm' ? 'tentative' : 'declined')
   else return
   e.preventDefault()
   e.stopPropagation()
@@ -134,9 +147,11 @@ function emailGuests() {
           size="xs"
           :variant="ev.myResponse === r.value ? 'default' : 'outline'"
           :aria-pressed="ev.myResponse === r.value"
-          @click="cal.respond(ev, r.value)"
+          :disabled="responding"
+          @click="respond(r.value)"
         >{{ r.label }}</Button>
       </div>
+      <p v-if="respondError" role="alert" class="text-destructive mt-2 text-xs">{{ respondError }}</p>
       <div v-if="guests.some((g) => g.email && g.email.toLowerCase() !== myEmail)" class="mt-2 flex justify-end">
         <Button variant="ghost" size="xs" class="text-muted-foreground" @click="emailGuests"><MailIcon /> Email guests</Button>
       </div>

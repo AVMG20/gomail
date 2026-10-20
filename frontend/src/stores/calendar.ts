@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import {
-  defaultCalendarId, editableCalendars, effectiveWeekStart, eventDate, eventToInput, isEventShown, scopeTargetId, shiftTimes, type CalendarViewKind,
+  defaultCalendarId, editableCalendars, effectiveWeekStart, eventDate, eventToInput, isEventShown, type CalendarViewKind,
 } from '@/lib/calendar'
 import type { AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope } from '@/lib/types'
 import { useAccountsStore } from './accounts'
@@ -262,28 +262,20 @@ export const useCalendarStore = defineStore('calendar', () => {
     }
   }
 
-  /** Save edits. Recurring + "series" refetches (every occurrence changes). */
-  async function update(ev: CalendarEvent, input: EventInput, scope: RecurrenceScope, quiet = false, seriesTimesResolved = false): Promise<boolean> {
+  /**
+   * Save edits. Always addressed to the event the user is looking at: with scope "series"
+   * the backend finds the series from this occurrence and moves every occurrence by the
+   * change made to this one (the series keeps its own first date). Series edits refetch.
+   */
+  async function update(ev: CalendarEvent, input: EventInput, scope: RecurrenceScope, quiet = false): Promise<boolean> {
     rememberCalendar(input.calendarId)
-    if (scope === 'series' && ev.isRecurring && !seriesTimesResolved) {
-      // The editor shows one occurrence; for "all events" apply its time change to the
-      // series' own first date instead of moving the whole series to this occurrence.
-      try {
-        const master = await api.getEvent(ev.seriesId || ev.id)
-        const ds = eventDate(input.start, input.allDay).getTime() - eventDate(ev.start, ev.allDay).getTime()
-        const de = eventDate(input.end, input.allDay).getTime() - eventDate(ev.end, ev.allDay).getTime()
-        input = { ...input, ...shiftTimes(master, ds, de, input.allDay) }
-      } catch (e) {
-        toast.error('Couldn’t load the series', { description: errorMessage(e) })
-        return false
-      }
-    }
-    if (scope === 'this' || !ev.isRecurring) {
+    const series = scope === 'series' && ev.isRecurring
+    if (!series) {
       replaceLocal(ev.id, { ...ev, ...input, accountId: calendarMap.value.get(input.calendarId)?.accountId ?? ev.accountId })
     }
     try {
-      const saved = await api.updateEvent(scopeTargetId(ev, scope), withAccount(input), scope)
-      if (scope === 'series' && ev.isRecurring) await fetchEvents()
+      const saved = await api.updateEvent(ev.id, withAccount(input), scope)
+      if (series) await fetchEvents()
       else replaceLocal(ev.id, saved)
       if (!quiet) toast.success('Event saved')
       return true
@@ -295,30 +287,38 @@ export const useCalendarStore = defineStore('calendar', () => {
     }
   }
 
-  /**
-   * Drag-move / resize with an Undo toast. For a whole series, pass the master's
-   * new input and its input before the move (Undo writes that back).
-   */
-  async function move(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, scope: RecurrenceScope, series?: { next: EventInput; before: EventInput }, kind: 'drop' | 'resize' = 'drop'): Promise<boolean> {
-    const input = series ? series.next : { ...eventToInput(ev), ...times }
-    const ok = await update(ev, input, scope, true, !!series)
+  /** Drag-move / resize with an Undo toast. */
+  async function move(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, scope: RecurrenceScope, kind: 'drop' | 'resize' = 'drop'): Promise<boolean> {
+    const ok = await update(ev, { ...eventToInput(ev), ...times }, scope, true)
     if (!ok) return false
+    const series = scope === 'series' && ev.isRecurring
     toast(kind === 'resize' ? 'Event time changed' : 'Event moved', {
       description: ev.title,
       duration: UNDO_MS,
-      action: {
-        label: 'Undo',
-        onClick: () => void (series ? update(ev, series.before, 'series', true, true) : update({ ...ev, ...times }, eventToInput(ev), scope, true)),
-      },
+      action: { label: 'Undo', onClick: () => void undoMove(ev, times, series) },
     })
     return true
+  }
+
+  /** Put a moved event back. A moved series has new occurrence ids: find the occurrence where it landed. */
+  async function undoMove(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, series: boolean) {
+    let moved: CalendarEvent | undefined = { ...ev, ...times }
+    if (series) {
+      const at = eventDate(times.start, times.allDay).getTime()
+      moved = events.value.find((e) => (e.seriesId || e.id) === (ev.seriesId || ev.id) && e.allDay === times.allDay && eventDate(e.start, e.allDay).getTime() === at)
+      if (!moved) {
+        toast('Couldn’t undo the move', { description: 'Open the event and change its time instead.' })
+        return
+      }
+    }
+    await update(moved, { ...eventToInput(moved), start: ev.start, end: ev.end, allDay: ev.allDay }, series ? 'series' : 'this', true)
   }
 
   async function remove(ev: CalendarEvent, scope: RecurrenceScope, fromUndo = false) {
     if (scope === 'series' && ev.isRecurring) events.value = events.value.filter((e) => (e.seriesId || e.id) !== (ev.seriesId || ev.id))
     else replaceLocal(ev.id, null)
     try {
-      await api.deleteEvent(scopeTargetId(ev, scope), scope)
+      await api.deleteEvent(ev.id, scope)
       if (fromUndo) return
       // Single events can be restored by recreating them; occurrences of a series can't.
       const undoable = !ev.isRecurring
@@ -334,16 +334,20 @@ export const useCalendarStore = defineStore('calendar', () => {
     }
   }
 
-  async function respond(ev: CalendarEvent, response: AttendeeResponse) {
+  /** Answer an invitation (the whole series for a recurring one). Resolves to "" on success, else the error. */
+  async function respond(ev: CalendarEvent, response: AttendeeResponse): Promise<string> {
     const series = ev.seriesId || ev.id
     const setResponse = (r: AttendeeResponse) => (events.value = events.value.map((e) => ((e.seriesId || e.id) === series ? { ...e, myResponse: r } : e)))
     setResponse(response)
     try {
       await api.respondToEvent(ev.id, response)
       toast.success(response === 'accepted' ? 'Accepted' : response === 'declined' ? 'Declined' : 'Marked as maybe', { description: ev.title })
+      return ''
     } catch (e) {
       setResponse(ev.myResponse)
-      toast.error('Couldn’t send your response', { description: errorMessage(e) })
+      const msg = errorMessage(e) || 'Couldn’t send your response'
+      toast.error('Couldn’t send your response', { description: msg })
+      return msg
     }
   }
 

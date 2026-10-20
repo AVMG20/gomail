@@ -1,7 +1,7 @@
 // Pure calendar helpers: week/locale rules, date ranges, time zones, recurrence
 // rules and recurrence-scope decisions. No Vue or DOM here (unit tested).
 import { ref } from 'vue'
-import type { Account, Calendar, CalendarEvent, EventInput, RecurrenceScope } from './types'
+import type { Account, Calendar, CalendarEvent, EventInput } from './types'
 
 export type CalendarViewKind = 'day' | 'week' | 'month' | 'agenda'
 
@@ -184,6 +184,17 @@ export function utcToZoned(date: Date, timeZone: string): { ymd: string; hm: str
   return { ymd: `${p.year}-${pad(p.month)}-${pad(p.day)}`, hm: `${pad(p.hour)}:${pad(p.minute)}` }
 }
 
+/** Whether Intl knows the zone (an unknown one would throw in every conversion). */
+export function isValidTimeZone(tz: string): boolean {
+  if (!tz) return false
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function localTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
@@ -256,9 +267,51 @@ export function parseRRule(value: string): RepeatRule {
   return out
 }
 
+/**
+ * Rules the editor's Repeat menu (and the backend's frequency/until/count input) can
+ * express without losing anything: one frequency, an end date or a count, weekly on
+ * at most one day. Anything else ("every 2 weeks", "Mon, Wed, Fri", "2nd Tuesday")
+ * is shown as is and left untouched on save.
+ */
+export function isSimpleRRule(value: string): boolean {
+  const raw = (value ?? '').replace(/^RRULE:/i, '').trim()
+  if (!raw) return true
+  let freq = ''
+  for (const part of raw.split(';')) {
+    const [k, v = ''] = part.split('=')
+    const key = k.toUpperCase()
+    if (key === 'FREQ') freq = v.toUpperCase()
+    else if (key === 'UNTIL' || key === 'COUNT' || key === 'WKST') continue
+    else if (key === 'INTERVAL' && Number(v) === 1) continue
+    else if (key === 'BYDAY' && !v.includes(',') && /^(SU|MO|TU|WE|TH|FR|SA)$/i.test(v)) continue
+    else return false
+  }
+  if (!(freq in FREQS)) return false
+  return freq === 'WEEKLY' || !/BYDAY=/i.test(raw)
+}
+
+/**
+ * The recurrence to send when saving an event whose rule was `original`.
+ * A rule the editor can't express ("custom") is sent as "" so the backend keeps the
+ * provider's own rule (it rebuilds rules only from frequency/until/count, which would
+ * turn "every 2 weeks" into "weekly"). A simple rule keeps its count and weekday.
+ */
+export function recurrenceForSave(original: string, freq: RepeatFreq | 'custom', until: string): string {
+  if (freq === 'custom') return ''
+  const r0 = parseRRule(original)
+  const same = freq === r0.freq
+  return buildRRule({ freq, until, byDay: same ? r0.byDay : undefined, count: same && !until ? r0.count : undefined })
+}
+
 export function describeRepeat(r: RepeatRule, locale?: string): string {
   if (r.freq === 'none') return 'Does not repeat'
-  const every = r.interval && r.interval > 1 ? `Every ${r.interval} ${{ daily: 'days', weekly: 'weeks', monthly: 'months', yearly: 'years' }[r.freq]}` : { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' }[r.freq]
+  let every = r.interval && r.interval > 1 ? `Every ${r.interval} ${{ daily: 'days', weekly: 'weeks', monthly: 'months', yearly: 'years' }[r.freq]}` : { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' }[r.freq]
+  // Weekly on several days: "Every weekday", "Weekly on Mon, Wed, Fri".
+  if (r.freq === 'weekly' && (r.byDay?.length ?? 0) > 1) {
+    const days = [...new Set(r.byDay)].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+    const names = days.map((d) => new Date(2026, 0, 4 + d).toLocaleDateString(locale, { weekday: 'short' })) // 4 Jan 2026 is a Sunday
+    every = days.join() === '1,2,3,4,5' && !(r.interval && r.interval > 1) ? 'Every weekday' : `${every} on ${names.join(', ')}`
+  }
   const until = r.until ? ` until ${fromYmd(r.until).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}` : r.count ? `, ${r.count} times` : ''
   return `${every}${until}`
 }
@@ -323,11 +376,6 @@ export function needsScopeChoice(ev: Pick<CalendarEvent, 'isRecurring' | 'series
   return !!ev.isRecurring
 }
 
-/** The id an update/delete targets for a scope (occurrence id vs. series master id). */
-export function scopeTargetId(ev: Pick<CalendarEvent, 'id' | 'seriesId'>, scope: RecurrenceScope): string {
-  return scope === 'series' && ev.seriesId ? ev.seriesId : ev.id
-}
-
 export function eventToInput(ev: CalendarEvent): EventInput {
   return {
     accountId: ev.accountId, calendarId: ev.calendarId, title: ev.title, start: ev.start, end: ev.end, allDay: ev.allDay, timeZone: ev.timeZone,
@@ -335,7 +383,8 @@ export function eventToInput(ev: CalendarEvent): EventInput {
     // meetingUrl is only for a link the user typed: the event's own link stays where it is
     // (resending it would make the backend copy it into the location/description).
     meetingUrl: '',
-    recurrence: ev.recurrence, reminders: [...ev.reminders],
+    // A custom rule goes out as "" (the backend then keeps the provider's rule as is).
+    recurrence: isSimpleRRule(ev.recurrence) ? ev.recurrence : '', reminders: [...ev.reminders],
   }
 }
 
@@ -356,12 +405,64 @@ export function shiftTimes(ev: Pick<CalendarEvent, 'start' | 'end' | 'allDay'>, 
   return { start: toRfc3339(ns), end: toRfc3339(ne), allDay: false }
 }
 
+/** Local "YYYY-MM-DD" days the events cover (each day of a multi-day event, up to 62). */
+export function eventDays(events: Pick<CalendarEvent, 'start' | 'end' | 'allDay'>[]): Set<string> {
+  const out = new Set<string>()
+  for (const ev of events) {
+    const s = eventDate(ev.start, ev.allDay)
+    let e = eventDate(ev.end || ev.start, ev.allDay)
+    if (Number.isNaN(s.getTime())) continue
+    if (Number.isNaN(e.getTime()) || e <= s) e = addMinutes(s, 1)
+    let d = startOfDay(s)
+    for (let i = 0; i < 62 && d < e; i++, d = addDays(d, 1)) out.add(toYmd(d))
+  }
+  return out
+}
+
+// ------------------------------------------------------------------ time-of-day fields
+
+/** "13:05" → "1:05 PM" (12-hour clock) or "13:05" (24-hour), following Settings → Time format. */
+export function formatHm(hm: string, h12 = uses12h()): string {
+  const [h, m] = hm.split(':').map(Number)
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return hm
+  if (!h12) return `${pad(h)}:${pad(m)}`
+  return `${h % 12 || 12}:${pad(m)} ${h < 12 ? 'AM' : 'PM'}`
+}
+
 /**
- * Moving one occurrence with scope "series": apply the same delta to the series
- * master's own start/end (keeping its first date), so every occurrence moves.
+ * A typed time → "HH:MM", or null. Takes "13:30", "1:30 pm", "1pm", "9.30", "13h30",
+ * "930", "0930", "noon" and "midnight"; a bare hour without am/pm is 24-hour ("9" = 09:00).
  */
-export function seriesMoveInput(master: CalendarEvent, startDeltaMs: number, endDeltaMs: number): EventInput {
-  return { ...eventToInput(master), ...shiftTimes(master, startDeltaMs, endDeltaMs) }
+export function parseTimeInput(text: string): string | null {
+  const t = text.trim().toLowerCase().replace(/([ap])\.?\s*m\.?$/, '$1m').replace(/\s+/g, '')
+  if (!t) return null
+  if (t === 'noon' || t === 'midday') return '12:00'
+  if (t === 'midnight') return '00:00'
+  const m = /^(\d{1,2})(?:[:.h]?(\d{2}))?(am|pm|a|p)?$/.exec(t)
+  if (!m) return null
+  let h = Number(m[1])
+  const min = Number(m[2] ?? 0)
+  if (min > 59) return null
+  if (m[3]) {
+    if (h < 1 || h > 12) return null
+    h = (h % 12) + (m[3].startsWith('p') ? 12 : 0)
+  } else if (h > 23) return null
+  return `${pad(h)}:${pad(min)}`
+}
+
+/** Times of day every `step` minutes ("00:00", "00:15", …). */
+export function timeSlots(step = 15): string[] {
+  return Array.from({ length: Math.ceil(1440 / step) }, (_, i) => `${pad(Math.floor((i * step) / 60))}:${pad((i * step) % 60)}`)
+}
+
+/** "30 min", "1 hr", "1.5 hrs", "2 hrs 10 min". */
+export function formatDuration(min: number): string {
+  if (min < 60) return `${min} min`
+  const h = Math.floor(min / 60)
+  const r = min % 60
+  if (!r) return `${h} hr${h === 1 ? '' : 's'}`
+  if (r === 30) return `${h}.5 hrs`
+  return `${h} hr${h === 1 ? '' : 's'} ${r} min`
 }
 
 // ------------------------------------------------------------------ calendars
@@ -393,8 +494,14 @@ export function isEventShown(ev: CalendarEvent, calendars: Map<string, Calendar>
 
 const LOCALE = () => (typeof navigator !== 'undefined' ? navigator.language : 'en-US')
 
+/** Intl options for the user's clock. `hourCycle: 'h23'` rather than `hour12: false`, which
+ *  some engines render as "24:05" after midnight. */
+export function clockOptions(locale?: string): Intl.DateTimeFormatOptions {
+  return uses12h(locale) ? { hour: 'numeric', minute: '2-digit', hour12: true } : { hour: 'numeric', minute: '2-digit', hourCycle: 'h23' }
+}
+
 export function formatClock(d: Date, locale = LOCALE()): string {
-  return d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: uses12h(locale) })
+  return d.toLocaleTimeString(locale, clockOptions(locale))
 }
 
 /** "Tue 20 Oct · 14:00 – 15:00", "Tue 20 Oct (all day)", "Wed 28 – Fri 30 Oct". */
@@ -425,8 +532,8 @@ export function formatEventWhenInZone(ev: Pick<CalendarEvent, 'start' | 'end' | 
   if (Number.isNaN(s.getTime())) return ''
   try {
     if (zoneOffsetMinutes(tz, s) === zoneOffsetMinutes(here || 'UTC', s)) return ''
-    const h12 = uses12h(locale)
-    const clock = (d: Date) => d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: h12, timeZone: tz })
+    const opts = clockOptions(locale)
+    const clock = (d: Date) => d.toLocaleTimeString(locale, { ...opts, timeZone: tz })
     const day = (d: Date) => d.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz })
     const city = (tz.split('/').pop() ?? tz).replace(/_/g, ' ')
     const sameDay = day(s) === day(e)

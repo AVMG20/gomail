@@ -73,7 +73,7 @@ func (s *Service) checkReminders() {
 			}
 			reminded[key] = now.Unix()
 			changed = true
-			title, body := ReminderText(ev, now)
+			title, body := ReminderText(ev, now, st.CalendarTimeFormat)
 			s.ui.Notify(title, body, models.NotificationOpen{AccountID: ev.AccountID, EventID: ev.ID})
 		}
 	}
@@ -90,8 +90,12 @@ func (s *Service) checkReminders() {
 }
 
 // ReminderText renders a reminder: the title and "In 10 minutes · 14:00 ·
-// Room 1" (times in the local zone).
-func ReminderText(ev models.CalendarEvent, now time.Time) (string, string) {
+// Room 1" (times in the local zone; "2:00 PM" with timeFormat "12h").
+func ReminderText(ev models.CalendarEvent, now time.Time, timeFormat string) (string, string) {
+	clock := "15:04"
+	if timeFormat == "12h" {
+		clock = "3:04 PM"
+	}
 	title := ev.Title
 	if strings.TrimSpace(title) == "" {
 		title = "(no title)"
@@ -111,10 +115,10 @@ func ReminderText(ev models.CalendarEvent, now time.Time) (string, string) {
 		}
 		parts = append(parts, fmt.Sprintf("In %d %s", n, unit))
 	default:
-		parts = append(parts, "At "+ev.Start.In(time.Local).Format("Mon 15:04"))
+		parts = append(parts, "At "+ev.Start.In(time.Local).Format("Mon "+clock))
 	}
 	if !ev.AllDay && until > 0 && until < time.Hour {
-		parts = append(parts, ev.Start.In(time.Local).Format("15:04"))
+		parts = append(parts, ev.Start.In(time.Local).Format(clock))
 	}
 	if ev.Location != "" {
 		parts = append(parts, ev.Location)
