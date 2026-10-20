@@ -57,7 +57,7 @@ func (s *Service) buildOutgoing(req models.ComposeRequest, draft bool) (models.A
 		return acct, mail.Outgoing{}, errors.New("choose the account to send from")
 	}
 	out := mail.Outgoing{From: models.Address{Name: acct.DisplayName, Email: acct.Email}, Subject: strings.TrimSpace(req.Subject),
-		HTML: req.BodyHTML, Text: req.BodyText, Mode: req.Mode}
+		HTML: req.BodyHTML, Text: req.BodyText, Mode: req.Mode, AttachmentsComplete: req.AttachmentsComplete}
 	if out.Mode == "" {
 		out.Mode = "new"
 	}

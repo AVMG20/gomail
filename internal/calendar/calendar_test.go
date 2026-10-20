@@ -161,3 +161,21 @@ func TestMeetingLinks(t *testing.T) {
 		t.Fatal("location first")
 	}
 }
+
+func TestStripMeetingURL(t *testing.T) {
+	const u = "https://zoom.us/j/42"
+	for _, c := range []struct{ loc, desc, wantLoc, wantDesc string }{
+		{u, "Agenda", "", "Agenda"},
+		{"Room 2", "Join: " + u + "\n\nAgenda", "Room 2", "Agenda"},
+		{"Room 2, " + u, "See " + u + " today", "Room 2", "See  today"},
+		{"Room 2", "Agenda", "Room 2", "Agenda"},
+	} {
+		l, d := StripMeetingURL(c.loc, c.desc, u)
+		if l != c.wantLoc || d != c.wantDesc {
+			t.Errorf("StripMeetingURL(%q, %q) = %q, %q", c.loc, c.desc, l, d)
+		}
+	}
+	if !IsProviderConference("https://teams.microsoft.com/l/meetup-join/x") || IsProviderConference(u) {
+		t.Fatal("IsProviderConference")
+	}
+}

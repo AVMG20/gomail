@@ -70,6 +70,7 @@ async function onFiles(e: Event) {
       r.readAsDataURL(f)
     })
     d.value.attachments.push({ id: uid('att'), filename: f.name, mimeType: f.type || 'application/octet-stream', size: f.size, dataBase64: dataUrl.slice(dataUrl.indexOf(',') + 1) })
+    compose.resolveMissing(d.value.id, f.name)
   }
   if (fileInput.value) fileInput.value.value = ''
 }
@@ -277,6 +278,18 @@ watch(() => d.value.accountId, (id, prev) => {
     </RichEditor>
     <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles" />
 
+    <div v-if="d.filesPending || d.missingFiles?.length" class="border-border flex shrink-0 items-center gap-2 border-t bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-300" role="status">
+      <template v-if="d.filesPending">
+        <LoaderIcon class="size-3.5 animate-spin" /> Restoring attachments…
+      </template>
+      <template v-else>
+        <span class="min-w-0 flex-1">
+          {{ d.missingFiles!.length === 1 ? 'This attachment' : 'These attachments' }} couldn’t be restored after gomail closed: <strong>{{ d.missingFiles!.join(', ') }}</strong>.
+          Re-add {{ d.missingFiles!.length === 1 ? 'it' : 'them' }} to send.
+        </span>
+        <Button variant="ghost" size="xs" class="shrink-0" @click="compose.resolveMissing(d.id)">Continue without them</Button>
+      </template>
+    </div>
     <div v-if="d.forwarded?.length" class="border-border flex shrink-0 flex-wrap items-center gap-1.5 border-t px-4 py-2" aria-label="Forwarded attachments">
       <span v-for="(a, i) in d.forwarded" :key="i" class="bg-muted/60 text-muted-foreground inline-flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 text-xs" :title="`${a.filename} is forwarded with the original message`">
         <PaperclipIcon class="size-3.5" />

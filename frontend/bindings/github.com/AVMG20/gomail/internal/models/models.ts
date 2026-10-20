@@ -426,6 +426,14 @@ export interface ComposeRequest {
      */
     "mode": string;
     "attachments": OutgoingAttachment[] | null;
+
+    /**
+     * AttachmentsComplete: Attachments is the draft's whole file list (the
+     * client loaded a reopened draft's files), so files on the server draft
+     * that aren't listed were removed by the user and are deleted there.
+     * Without it, unknown server files are kept.
+     */
+    "attachmentsComplete": boolean;
 }
 
 /**
@@ -502,6 +510,14 @@ export interface EventInput {
      * "Join: <url>" is put in front of the description.
      */
     "meetingUrl": string;
+
+    /**
+     * RemoveMeetingURL removes the event's current meeting link (UpdateEvent):
+     * a typed link is taken out of the location/description, a Google Meet
+     * conference is detached. Teams meetings can't be removed (Microsoft
+     * keeps them once created). With MeetingURL set, the link is replaced.
+     */
+    "removeMeetingUrl": boolean;
 }
 
 /**

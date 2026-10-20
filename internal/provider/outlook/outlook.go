@@ -819,7 +819,8 @@ func (c *Client) SaveDraft(ctx context.Context, out mail.Outgoing, draftID strin
 		}
 		draftID, created = draft.ID, true
 	}
-	if err := c.syncAttachments(ctx, draftID, out.Attachments); err != nil {
+	// Forwards keep the files createForward put on the draft.
+	if err := c.syncAttachments(ctx, draftID, out.Attachments, out.AttachmentsComplete && out.Mode != "forward"); err != nil {
 		if created {
 			c.discard(draftID)
 		}
@@ -829,8 +830,10 @@ func (c *Client) SaveDraft(ctx context.Context, out mail.Outgoing, draftID strin
 }
 
 // syncAttachments makes the draft's user-added attachments match atts.
-// Attachments the draft got from createForward are left alone.
-func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mail.OutgoingAttachment) error {
+// Files the draft got from createForward, or that this client doesn't know
+// about (uploaded before a restart, or elsewhere), are left alone unless
+// complete says atts is the draft's whole file list.
+func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mail.OutgoingAttachment, complete bool) error {
 	want := map[string]mail.OutgoingAttachment{}
 	for _, a := range atts {
 		want[attKey(a.Filename, len(a.Data))] = a
@@ -848,49 +851,68 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 	var existing struct {
 		Value []gAttachment `json:"value"`
 	}
-	if len(atts) > 0 || len(ours) > 0 {
-		if err := c.api.JSON(ctx, http.MethodGet, c.msgPath(draftID)+"/attachments?$select=id,name,size", nil, &existing); err != nil {
+	if len(atts) > 0 || len(ours) > 0 || complete {
+		if err := c.api.JSON(ctx, http.MethodGet, c.msgPath(draftID)+"/attachments?$select=id,name,size,isInline", nil, &existing); err != nil {
 			return err
 		}
 	}
-	have := map[string]string{}
-	ids := map[string]bool{}
-	for _, a := range existing.Value {
-		have[attKey(a.Name, int(a.Size))] = a.ID
-		ids[a.ID] = true
-	}
-	// Graph's size includes the attachment's properties, so a file that is
-	// already on the draft (uploaded earlier, or reopened from Drafts) may
-	// report more bytes than its content: match it by name instead of
-	// uploading a duplicate.
-	claimed := map[string]bool{}
-	present := func(key string, a mail.OutgoingAttachment) bool {
-		if _, ok := have[key]; ok {
-			return true
-		}
-		if id, ok := ours[key]; ok && ids[id] {
-			return true
-		}
-		for _, e := range existing.Value {
-			if !claimed[e.ID] && strings.EqualFold(e.Name, a.Filename) && int(e.Size) >= len(a.Data) {
-				claimed[e.ID] = true
-				return true
+	// Pair the wanted files with the draft's files. Graph's size includes
+	// the attachment's properties, so a file already on the draft may
+	// report more bytes than its content: an exact key, our own upload, or
+	// the same name with at least that size all count.
+	claimed := map[string]bool{} // server attachment id -> wanted
+	present := map[string]bool{} // want key -> on the draft
+	for _, pass := range []func(e gAttachment, key string, a mail.OutgoingAttachment) bool{
+		func(e gAttachment, key string, _ mail.OutgoingAttachment) bool {
+			return attKey(e.Name, int(e.Size)) == key
+		},
+		func(e gAttachment, key string, _ mail.OutgoingAttachment) bool { return ours[key] == e.ID },
+		func(e gAttachment, _ string, a mail.OutgoingAttachment) bool {
+			return strings.EqualFold(e.Name, a.Filename) && int(e.Size) >= len(a.Data)
+		},
+	} {
+		for key, a := range want {
+			if present[key] {
+				continue
+			}
+			for _, e := range existing.Value {
+				if !claimed[e.ID] && !e.IsInline && pass(e, key, a) {
+					claimed[e.ID], present[key] = true, true
+					break
+				}
 			}
 		}
-		return false
+	}
+	remove := func(id string) error {
+		err := c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID)+"/attachments/"+url.PathEscape(id), nil, nil)
+		if err != nil && httpx.StatusOf(err) != http.StatusNotFound {
+			return err
+		}
+		return nil
 	}
 	for key, id := range ours {
 		if _, keep := want[key]; !keep {
-			if err := c.api.JSON(ctx, http.MethodDelete, c.msgPath(draftID)+"/attachments/"+url.PathEscape(id), nil, nil); err != nil && httpx.StatusOf(err) != http.StatusNotFound {
+			if err := remove(id); err != nil {
 				return err
 			}
+			claimed[id] = true // handled
 			c.mu.Lock()
 			delete(ours, key)
 			c.mu.Unlock()
 		}
 	}
+	if complete {
+		// The user removed these in the reopened draft.
+		for _, e := range existing.Value {
+			if !claimed[e.ID] && !e.IsInline {
+				if err := remove(e.ID); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	for key, a := range want {
-		if present(key, a) {
+		if present[key] {
 			continue
 		}
 		id, err := c.addAttachment(ctx, draftID, a)

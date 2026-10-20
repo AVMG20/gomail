@@ -346,6 +346,14 @@ func TestVideoCalls(t *testing.T) {
 	if _, ok := f.bodies[len(f.bodies)-1]["conferenceData"]; ok {
 		t.Fatal("conference requested without Meet")
 	}
+	// Removing the link detaches the conference (null with conferenceDataVersion=1).
+	ev.AddVideoCall, ev.RemoveConference = false, true
+	if _, err := c.Update(ctx, cals[0], "e1", ev, models.ScopeThis); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := f.bodies[len(f.bodies)-1]["conferenceData"]; !ok || v != nil {
+		t.Fatalf("conferenceData %v %v", v, ok)
+	}
 	// Links in the location are detected when there's no conference data.
 	got := c.toEvent(gEvent{ID: "z", Location: "https://us02web.zoom.us/j/123", Start: gTime{DateTime: "2026-10-20T10:00:00Z"}, End: gTime{DateTime: "2026-10-20T11:00:00Z"}}, me)
 	if got.MeetingURL != "https://us02web.zoom.us/j/123" {

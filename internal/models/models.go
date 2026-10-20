@@ -227,6 +227,11 @@ type ComposeRequest struct {
 	DraftID     string               `json:"draftId"`   // draft handle from SaveDraft; sending it removes the draft
 	Mode        string               `json:"mode"`      // "new" | "reply" | "replyAll" | "forward"
 	Attachments []OutgoingAttachment `json:"attachments"`
+	// AttachmentsComplete: Attachments is the draft's whole file list (the
+	// client loaded a reopened draft's files), so files on the server draft
+	// that aren't listed were removed by the user and are deleted there.
+	// Without it, unknown server files are kept.
+	AttachmentsComplete bool `json:"attachmentsComplete"`
 }
 
 // Label is a user-defined label. Labels are applied manually or by the AI

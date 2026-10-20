@@ -132,6 +132,9 @@ type Outgoing struct {
 	// ForwardAttachments are the original's attachments to include when
 	// forwarding (filled by the core for providers that need them).
 	ForwardAttachments []OutgoingAttachment
+	// AttachmentsComplete: Attachments lists every file the draft should
+	// have (see models.ComposeRequest).
+	AttachmentsComplete bool
 }
 
 // SearchQuery is a provider-neutral server search.

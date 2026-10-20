@@ -259,6 +259,7 @@ export async function toWireInput(i: EventInput & { accountId?: string }): Promi
     description: i.description,
     meetingUrl: i.meetingUrl?.trim() ?? '',
     addVideoCall: !!i.addVideoCall,
+    removeMeetingUrl: !!i.removeMeetingUrl,
     attendees: i.attendees.map((a) => ({ name: a.name, email: a.email, response: a.response === 'needsAction' ? 'none' : a.response, optional: false })),
     recurrence: {
       frequency: rule.freq,

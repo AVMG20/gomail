@@ -68,6 +68,9 @@ func (p *CalendarProvider) videoLink(cal calendar.Calendar, id string) string {
 
 // meeting fills the meeting link of a created/updated event.
 func (p *CalendarProvider) meeting(cal calendar.Calendar, ev *calendar.Event, req calendar.Event) {
+	if req.RemoveConference {
+		ev.MeetingURL = "" // detached; a link left in the text is detected again below
+	}
 	switch {
 	case req.MeetingURL != "":
 		ev.MeetingURL = req.MeetingURL

@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { displayName, escapeHtml, formatAddress, htmlHasText, htmlToText, isEmail, longDate, signatureBlock, textToHtml } from '@/lib/format'
+import { deleteDraftFiles, loadDraftFiles, pruneDraftFiles, saveDraftFiles } from '@/lib/draftFiles'
 import { uid } from '@/lib/platform'
 import type { Address, ComposeMode, Message } from '@/lib/types'
 import { useAccountsStore } from './accounts'
@@ -44,10 +45,13 @@ export interface Draft {
   interrupted?: boolean
   /** Forward: the original's files, which the server attaches itself (shown read-only). */
   forwarded?: { filename: string; size: number }[]
+  /** Restored after a restart: the files' bytes are still being read back from IndexedDB. */
+  filesPending?: boolean
+  /** Restored after a restart: files whose bytes couldn't be read back (they must be re-added). */
+  missingFiles?: string[]
 }
 
 const DRAFTS_KEY = 'gomail.drafts.v1'
-const MAX_PERSIST_ATTACH = 1_500_000
 
 function loadDrafts(): Draft[] {
   try {
@@ -57,7 +61,12 @@ function loadDrafts(): Draft[] {
     const list = (Array.isArray(raw) ? raw : []).filter((d) => d && Array.isArray(d.to) && draftHasContent(d))
     if (list.length !== (Array.isArray(raw) ? raw.length : 0)) localStorage.setItem(DRAFTS_KEY, JSON.stringify(list))
     // Sends still waiting out the undo delay when the app closed come back as drafts, flagged.
-    return list.map((d) => ({ ...d, cc: d.cc ?? [], bcc: d.bcc ?? [], attachments: d.attachments ?? [], minimized: true, expanded: false, interrupted: !!(d.queued || d.sending), sending: false, queued: false }))
+    // Attachment bytes live in IndexedDB (restoreFiles reads them back); older versions kept them inline.
+    return list.map((d) => ({
+      ...d, cc: d.cc ?? [], bcc: d.bcc ?? [], attachments: d.attachments ?? [], minimized: true, expanded: false,
+      interrupted: !!(d.queued || d.sending), sending: false, queued: false,
+      filesPending: (d.attachments ?? []).some((a) => !a.dataBase64) || undefined,
+    }))
   } catch {
     return []
   }
@@ -99,8 +108,14 @@ export const useComposeStore = defineStore('compose', () => {
   /** SaveDraft calls in flight: sending waits for them so the server draft is replaced, not orphaned. */
   const remoteInflight = new Map<string, Promise<void>>()
   const scheduledRemote = new Map<string, string>()
+  /** Files of a restored draft aren't all back: saving or sending now would drop them. */
+  function filesIncomplete(d: Draft): boolean {
+    return !!d.filesPending || !!d.missingFiles?.length
+  }
+
   function scheduleRemote(d: Draft) {
-    if (!hasMethod('SaveDraft') || d.queued || d.sending || !draftHasContent(d)) return
+    // A draft whose files aren't back must not replace the server copy (which still has them).
+    if (!hasMethod('SaveDraft') || d.queued || d.sending || !draftHasContent(d) || filesIncomplete(d)) return
     const sig = JSON.stringify([d.accountId, d.to, d.cc, d.bcc, d.subject, d.html, d.attachments.length])
     if (lastRemote.get(d.id) === sig || scheduledRemote.get(d.id) === sig) return
     scheduledRemote.set(d.id, sig)
@@ -110,7 +125,7 @@ export const useComposeStore = defineStore('compose', () => {
       remoteTimers.delete(d.id)
       scheduledRemote.delete(d.id)
       const cur = drafts.value.find((x) => x.id === d.id)
-      if (!cur || cur.queued || cur.sending) return
+      if (!cur || cur.queued || cur.sending || filesIncomplete(cur)) return
       const run = (async () => {
         try {
           dropForeignRemote(cur)
@@ -138,11 +153,25 @@ export const useComposeStore = defineStore('compose', () => {
     if (hasMethod('DeleteDraft')) void api.deleteDraft(old).catch(() => {})
   }
 
+  /** Attachment ids last written to IndexedDB, per draft (to skip rewriting unchanged files). */
+  const storedFiles = new Map<string, string>()
+  function persistFiles(d: Draft) {
+    if (d.filesPending) return // not read back yet: keep what is stored
+    const sig = d.attachments.map((a) => a.id).join(',')
+    if (storedFiles.get(d.id) === sig) return
+    storedFiles.set(d.id, sig)
+    const done = d.attachments.length ? saveDraftFiles(d.id, d.attachments) : deleteDraftFiles(d.id).then(() => true)
+    void done.then((ok) => {
+      if (!ok && storedFiles.get(d.id) === sig) storedFiles.delete(d.id) // retry on the next change
+    })
+  }
+
   function persist() {
     drafts.value.forEach(scheduleRemote)
+    // localStorage only gets the files' names and sizes; their bytes go to IndexedDB.
     const list = drafts.value.filter((d) => draftHasContent(d)).map((d) => {
-      const size = d.attachments.reduce((n, a) => n + a.dataBase64.length, 0)
-      return { ...d, attachments: size > MAX_PERSIST_ATTACH ? [] : d.attachments }
+      persistFiles(d)
+      return { ...d, attachments: d.attachments.map(({ dataBase64: _b, ...meta }) => meta) }
     })
     try {
       localStorage.setItem(DRAFTS_KEY, JSON.stringify(list))
@@ -252,6 +281,48 @@ export const useComposeStore = defineStore('compose', () => {
 
   function close(id: string) {
     drafts.value = drafts.value.filter((d) => d.id !== id)
+    storedFiles.delete(id)
+    void deleteDraftFiles(id)
+  }
+
+  /** After a restart: read the drafts' attachment bytes back. Files that can't be found are
+   *  listed in missingFiles; such drafts are neither autosaved nor sent until they're re-added. */
+  let restoring: Promise<void> | null = null
+  function restoreFiles(): Promise<void> {
+    restoring ??= restoreFilesOnce()
+    return restoring
+  }
+  async function restoreFilesOnce() {
+    const ids = new Set(drafts.value.map((d) => d.id))
+    for (const d of drafts.value.filter((x) => x.filesPending)) {
+      const stored = await loadDraftFiles(d.id)
+      const cur = drafts.value.find((x) => x.id === d.id)
+      if (!cur?.filesPending) continue
+      const byId = new Map((stored ?? []).map((f) => [f.id, f]))
+      const missing: string[] = []
+      const back = cur.attachments.flatMap((a) => {
+        if (a.dataBase64) return [a]
+        const f = byId.get(a.id)
+        if (f?.dataBase64) return [{ ...a, dataBase64: f.dataBase64 }]
+        missing.push(a.filename)
+        return []
+      })
+      cur.attachments = back
+      cur.missingFiles = missing.length ? missing : undefined
+      cur.filesPending = undefined
+      storedFiles.set(cur.id, back.map((a) => a.id).join(','))
+    }
+    void pruneDraftFiles(new Set([...ids, ...drafts.value.map((d) => d.id)]))
+  }
+  if (typeof window !== 'undefined') void restoreFiles()
+
+  /** The user re-added a file, or chose to go on without the missing ones. */
+  function resolveMissing(id: string, filename?: string) {
+    const d = drafts.value.find((x) => x.id === id)
+    if (!d?.missingFiles) return
+    const rest = filename === undefined ? [] : d.missingFiles.filter((n) => n !== filename)
+    d.missingFiles = rest.length ? rest : undefined
+    if (!d.missingFiles) scheduleRemote(d)
   }
 
   /** Close the window: keep the draft on the server when supported. Returns false if it must be confirmed. */
@@ -260,6 +331,12 @@ export const useComposeStore = defineStore('compose', () => {
     if (!d) return true
     if (!draftHasContent(d)) {
       close(id)
+      return true
+    }
+    if (filesIncomplete(d)) {
+      // Saving now would replace the server draft without those files: keep it in the dock.
+      d.minimized = true
+      toast.warning('Draft kept in the dock', { description: d.filesPending ? 'Its attachments are still loading.' : `Re-add ${d.missingFiles!.join(', ')} first, or continue without them.` })
       return true
     }
     if (!hasMethod('SaveDraft')) return false
@@ -304,6 +381,9 @@ export const useComposeStore = defineStore('compose', () => {
       bodyHtml: d.html, bodyText: htmlToText(d.html), replyToId: d.replyToId, mode: d.mode,
       attachments: d.attachments.map(({ filename, mimeType, dataBase64 }) => ({ filename, mimeType, dataBase64 })),
       draftId: d.remoteId ?? '',
+      // This is the whole file list (saves and sends wait until restored files are back), so
+      // files removed here are removed from the server draft too.
+      attachmentsComplete: !filesIncomplete(d),
     }
   }
 
@@ -354,6 +434,17 @@ export const useComposeStore = defineStore('compose', () => {
       toast.error(`Check ${invalid.length === 1 ? 'this address' : 'these addresses'}: ${invalid.map((a) => a.email).join(', ')}`)
       return
     }
+    // Never send without files the user attached.
+    if (d.filesPending) {
+      toast('Attachments are still loading', { description: 'Try again in a moment.' })
+      return
+    }
+    if (d.missingFiles?.length) {
+      toast.error(`Re-add ${d.missingFiles.length === 1 ? 'this attachment' : 'these attachments'}: ${d.missingFiles.join(', ')}`, {
+        description: 'They couldn’t be restored after gomail closed. Re-add them, or choose “Continue without them”.',
+      })
+      return
+    }
     if (delaySeconds > 0) {
       d.queued = true
       const toastId = toast('Sending…', {
@@ -401,5 +492,5 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  return { drafts, compose, composeWith, respond, editDraft, close, discard, saveAndClose, focus, send, undoSend }
+  return { drafts, compose, composeWith, respond, editDraft, close, discard, saveAndClose, focus, send, undoSend, resolveMissing, restoreFiles }
 })

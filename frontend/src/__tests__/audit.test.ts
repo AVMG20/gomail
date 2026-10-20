@@ -230,3 +230,12 @@ describe('mail list', () => {
     expect(toasts.some((t) => t.kind === 'warning')).toBe(true)
   })
 })
+
+describe('calendar meeting links', () => {
+  it('sends the removal of a cleared meeting link', async () => {
+    const { toWireInput } = await import('@/lib/api')
+    const wire = await toWireInput({ calendarId: 'c', title: 't', start: '2026-10-20T10:00:00Z', end: '2026-10-20T11:00:00Z', allDay: false, timeZone: '',
+      location: '', description: '', attendees: [], meetingUrl: '', removeMeetingUrl: true, recurrence: '', reminders: [] })
+    expect(wire).toMatchObject({ meetingUrl: '', removeMeetingUrl: true })
+  })
+})

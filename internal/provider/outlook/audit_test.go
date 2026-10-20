@@ -189,3 +189,46 @@ func TestReopenedDraftAttachmentsNotDuplicated(t *testing.T) {
 		t.Fatalf("%d duplicate uploads", posts.Load())
 	}
 }
+
+// With the complete file list (a reopened draft whose files were loaded),
+// files the user removed are deleted from the server draft; without it
+// (or for forwards) unknown files stay.
+func TestCompleteAttachmentListDeletesRemoved(t *testing.T) {
+	run := func(out mail.Outgoing) []string {
+		var mu sync.Mutex
+		var deleted []string
+		c := auditClient(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/attachments"):
+				w.Write([]byte(`{"value":[{"id":"old","name":"old.pdf","size":500},{"id":"logo","name":"logo.png","size":90,"isInline":true},{"id":"keep","name":"keep.pdf","size":400}]}`))
+			case r.Method == http.MethodDelete:
+				mu.Lock()
+				deleted = append(deleted, r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
+				mu.Unlock()
+				w.WriteHeader(204)
+			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attachments"):
+				t.Error("unexpected upload")
+				w.Write([]byte(`{"id":"x"}`))
+			default:
+				w.Write([]byte(`{}`))
+			}
+		})
+		out.Subject, out.Text = "s", "t"
+		out.Attachments = []mail.OutgoingAttachment{{Filename: "keep.pdf", Data: make([]byte, 300)}}
+		if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return deleted
+	}
+	if got := run(mail.Outgoing{Mode: "new", AttachmentsComplete: true}); fmt.Sprint(got) != "[old]" {
+		t.Fatalf("complete list: deleted %v", got)
+	}
+	if got := run(mail.Outgoing{Mode: "new"}); len(got) != 0 {
+		t.Fatalf("partial list deleted %v", got)
+	}
+	if got := run(mail.Outgoing{Mode: "forward", AttachmentsComplete: true, Original: &mail.Message{RemoteID: "o"}}); len(got) != 0 {
+		t.Fatalf("forward deleted %v", got)
+	}
+}

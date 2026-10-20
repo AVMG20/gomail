@@ -676,3 +676,46 @@ func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// Clearing the meeting link removes it: a typed link leaves the location and
+// description, a Meet conference is detached, a Teams meeting is refused.
+func TestRemoveMeetingLink(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	start := time.Now().Add(24 * time.Hour).Truncate(time.Hour)
+	zoom, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, Title: "Zoom", Start: start, Location: "Room 2", Description: "Agenda", MeetingURL: "https://zoom.us/j/42"})
+	if err != nil || zoom.MeetingURL == "" {
+		t.Fatalf("%+v %v", zoom, err)
+	}
+	up, err := s.UpdateEvent(zoom.ID, models.EventInput{Title: "Zoom", Start: start, Location: zoom.Location, Description: zoom.Description, RemoveMeetingURL: true}, models.ScopeThis)
+	if err != nil || up.MeetingURL != "" || up.Location != "Room 2" || up.Description != "Agenda" {
+		t.Fatalf("typed link not removed: %+v %v", up, err)
+	}
+	meet, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, Title: "Meet", Start: start, AddVideoCall: true})
+	if err != nil || meet.MeetingURL == "" {
+		t.Fatalf("%+v %v", meet, err)
+	}
+	up, err = s.UpdateEvent(meet.ID, models.EventInput{Title: "Meet", Start: start, RemoveMeetingURL: true}, models.ScopeThis)
+	if err != nil || up.MeetingURL != "" {
+		t.Fatalf("meet not removed: %+v %v", up, err)
+	}
+	// Replacing a link: the old one goes, the new one is added.
+	z7, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, Title: "Z7", Start: start, MeetingURL: "https://zoom.us/j/7"})
+	if err != nil || z7.Location != "https://zoom.us/j/7" {
+		t.Fatalf("%+v %v", z7, err)
+	}
+	up, err = s.UpdateEvent(z7.ID, models.EventInput{Title: "Z7", Start: start, Location: z7.Location, RemoveMeetingURL: true, MeetingURL: "https://webex.com/m/9"}, models.ScopeThis)
+	if err != nil || up.MeetingURL != "https://webex.com/m/9" || up.Location != "https://webex.com/m/9" || strings.Contains(up.Description, "zoom") {
+		t.Fatalf("replace %+v %v", up, err)
+	}
+	teams, err := s.CreateEvent(models.EventInput{AccountID: demo.OutlookAccountID, Title: "Teams", Start: start, AddVideoCall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateEvent(teams.ID, models.EventInput{Title: "Teams", Start: start, RemoveMeetingURL: true}, models.ScopeThis); err == nil || !strings.Contains(err.Error(), "Teams") {
+		t.Fatalf("teams removal: %v", err)
+	}
+	if got, _ := s.GetEvent(teams.ID); got.MeetingURL == "" {
+		t.Fatal("refused removal still changed the event")
+	}
+}

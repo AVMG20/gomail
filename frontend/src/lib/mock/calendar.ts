@@ -222,7 +222,12 @@ export class MockCalendar {
 
   update(id: string, input: EventInput, scope: RecurrenceScope): CalendarEvent {
     const cal = this.canEdit(input.calendarId)
-    input = this.withVideo(input, cal, this.get(id).meetingUrl)
+    const existing = this.get(id).meetingUrl
+    // Like the backend: Teams meetings can't be removed once created.
+    if (input.removeMeetingUrl && /^https:\/\/teams\.(microsoft|live)\.com\//.test(existing)) {
+      throw new Error('a Teams meeting can’t be removed from an event once it exists; delete the event and create it again without one')
+    }
+    input = this.withVideo(input, cal, input.removeMeetingUrl ? '' : existing)
     const master = this.masters.get(id)
     const [masterId] = splitOccurrence(id)
     if (master || scope === 'series') {
@@ -321,6 +326,7 @@ export function fromWireInput(w: Record<string, unknown> & Partial<EventInput>):
     attendees,
     meetingUrl,
     addVideoCall: !!w.addVideoCall,
+    removeMeetingUrl: !!w.removeMeetingUrl,
     recurrence,
     reminders: ((w.reminderMinutes ?? w.reminders) as number[] | null) ?? [],
   }

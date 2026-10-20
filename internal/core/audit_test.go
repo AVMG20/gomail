@@ -248,3 +248,11 @@ func TestThresholdChangeAppliesToStoredScores(t *testing.T) {
 		t.Fatalf("result %+v", r)
 	}
 }
+
+func TestAttachmentsCompleteReachesProvider(t *testing.T) {
+	e := newEnv(t, "")
+	_, out, err := e.s.buildOutgoing(models.ComposeRequest{AccountID: demo.OutlookAccountID, Subject: "x", AttachmentsComplete: true}, true)
+	if err != nil || !out.AttachmentsComplete {
+		t.Fatalf("%+v %v", out, err)
+	}
+}

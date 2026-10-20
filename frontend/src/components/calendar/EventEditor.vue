@@ -117,6 +117,8 @@ function buildInput(): EventInput | null {
     // Only a new/changed link: the event's existing one (Meet, Teams, or a Zoom link
     // already in the location) stays put; resending it would duplicate it.
     meetingUrl: meetingUrl.value.trim() === (ev?.meetingUrl ?? '').trim() ? '' : meetingUrl.value.trim(),
+    // Cleared or replaced: the old link has to go (sending nothing would keep it).
+    removeMeetingUrl: !!ev?.meetingUrl && meetingUrl.value.trim() !== ev.meetingUrl.trim(),
     addVideoCall: addVideo.value && !!videoProvider.value && !providerLink.value,
     recurrence: buildRRule({ freq: freq.value, until: until.value, byDay: rule0.freq === freq.value ? rule0.byDay : undefined }),
     reminders: [...reminders.value].sort((a, b) => a - b),

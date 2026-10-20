@@ -63,6 +63,9 @@ type Event struct {
 	ETag string
 	// AddVideoCall asks the provider to create a Meet/Teams link.
 	AddVideoCall bool
+	// RemoveConference detaches the event's conference (Google Meet). Used by
+	// Update; ignored where a provider can't remove it.
+	RemoveConference bool
 }
 
 // SyncRequest asks for the events of a calendar in [Start, End).
@@ -237,6 +240,42 @@ func FromInput(in models.EventInput) Event {
 	}
 	return ev
 }
+
+// StripMeetingURL takes a meeting link out of an event's location and
+// description: the whole location when it is just the link, the
+// "Join: <link>" line FromInput writes, and other mentions of the link.
+func StripMeetingURL(location, description, link string) (string, string) {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return location, description
+	}
+	if strings.TrimSpace(location) == link {
+		location = ""
+	} else if strings.Contains(location, link) {
+		location = strings.Trim(strings.ReplaceAll(location, link, ""), " \t,;|-")
+	}
+	if strings.Contains(description, link) {
+		lines := strings.Split(description, "\n")
+		out := lines[:0]
+		for _, l := range lines {
+			t := strings.TrimSpace(l)
+			if t == link || t == "Join: "+link || t == "Join:"+link {
+				continue
+			}
+			out = append(out, strings.ReplaceAll(l, link, ""))
+		}
+		description = strings.TrimLeft(strings.Join(out, "\n"), "\n")
+	}
+	return location, description
+}
+
+// IsProviderConference reports whether a link is a Teams/Skype meeting,
+// which Microsoft keeps on an event once created.
+func IsProviderConference(link string) bool {
+	return teamsRe.MatchString(link)
+}
+
+var teamsRe = regexp.MustCompile(`^https://(?:[a-z0-9-]+\.)*(?:teams\.microsoft\.com|teams\.live\.com|join\.skype\.com)/`)
 
 // meetingRe matches join links of the common meeting services.
 var meetingRe = regexp.MustCompile(`https://(?:[a-z0-9-]+\.)*(?:zoom\.us|zoomgov\.com|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|` +

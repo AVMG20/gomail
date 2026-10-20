@@ -421,6 +421,8 @@ func body(ev calendar.Event) map[string]any {
 	if ev.AddVideoCall {
 		b["conferenceData"] = map[string]any{"createRequest": map[string]any{"requestId": requestID(),
 			"conferenceSolutionKey": map[string]string{"type": "hangoutsMeet"}}}
+	} else if ev.RemoveConference {
+		b["conferenceData"] = nil // with conferenceDataVersion=1: detach the Meet conference
 	}
 	return b
 }

@@ -607,14 +607,24 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 		return models.CalendarEvent{}, err
 	}
 	scope = normScope(scope)
+	removing := in.RemoveMeetingURL && cur.MeetingURL != ""
+	if removing {
+		if acct.Provider == models.ProviderOutlook && calendar.IsProviderConference(cur.MeetingURL) {
+			return models.CalendarEvent{}, errors.New("a Teams meeting can't be removed from an event once it exists; delete the event and create it again without one")
+		}
+		// The link gomail (or the user) put into the text goes; a Meet
+		// conference is detached by the provider update below.
+		in.Location, in.Description = calendar.StripMeetingURL(in.Location, in.Description, cur.MeetingURL)
+	}
 	if in.CalendarID != "" && in.CalendarID != cur.CalendarID {
 		return s.moveEvent(cur, row, acct, p, in, scope)
 	}
-	if in.AddVideoCall && row.VideoCallProvider == "" && cur.MeetingURL == "" {
+	if in.AddVideoCall && row.VideoCallProvider == "" && (cur.MeetingURL == "" || removing) {
 		return models.CalendarEvent{}, errors.New("this calendar can't add video calls; paste a meeting link instead")
 	}
 	ev := calendar.FromInput(in)
-	ev.AddVideoCall = in.AddVideoCall && cur.MeetingURL == "" // keep an existing call
+	ev.AddVideoCall = in.AddVideoCall && (cur.MeetingURL == "" || removing) // keep an existing call
+	ev.RemoveConference = removing
 	ev.SeriesRemoteID, ev.OriginalStart, ev.ICalUID = cur.SeriesRemoteID, cur.Start, cur.ICalUID
 	if scope == models.ScopeThis {
 		ev.ETag = cur.ETag
@@ -638,6 +648,8 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 		n.Title, n.Location, n.Description, n.AllDay, n.TimeZone = ev.Title, ev.Location, ev.Description, ev.AllDay, ev.TimeZone
 		if ev.MeetingURL != "" {
 			n.MeetingURL = ev.MeetingURL
+		} else if removing {
+			n.MeetingURL = ""
 		}
 		if in.Attendees != nil {
 			n.Attendees = in.Attendees

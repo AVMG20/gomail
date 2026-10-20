@@ -114,6 +114,8 @@ export interface EventInput {
   meetingUrl: string
   /** Ask the provider to attach a Google Meet / Teams meeting (Calendar.videoCallProvider). */
   addVideoCall?: boolean
+  /** Remove the event's current meeting link (cleared or replaced in the editor). */
+  removeMeetingUrl?: boolean
   recurrence: string
   reminders: number[]
 }
@@ -286,6 +288,8 @@ export interface ComposeRequest {
   attachments: OutgoingAttachment[]
   /** Draft handle from SaveDraft; the backend removes the draft once sent. */
   draftId?: string
+  /** attachments is the draft's whole file list: files on the server draft that aren't in it are deleted. */
+  attachmentsComplete?: boolean
 }
 
 export type LabelSource = 'user' | 'provider' | 'system'

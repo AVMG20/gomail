@@ -113,6 +113,11 @@ type EventInput struct {
 	// no field for it: it goes into the location when that is empty, else
 	// "Join: <url>" is put in front of the description.
 	MeetingURL string `json:"meetingUrl"`
+	// RemoveMeetingURL removes the event's current meeting link (UpdateEvent):
+	// a typed link is taken out of the location/description, a Google Meet
+	// conference is detached. Teams meetings can't be removed (Microsoft
+	// keeps them once created). With MeetingURL set, the link is replaced.
+	RemoveMeetingURL bool `json:"removeMeetingUrl"`
 }
 
 // Event change scopes for UpdateEvent / DeleteEvent.
