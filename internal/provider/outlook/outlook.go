@@ -1242,7 +1242,8 @@ func (c *Client) EmptyFolder(ctx context.Context, folder mail.Folder) error {
 // DeleteFolder moves a custom folder's mail to Deleted Items, then deletes
 // the empty folder for good (a plain delete would only move it, with its
 // name, under Deleted Items). It checks on the server that the folder is
-// empty first, so nothing is deleted with it.
+// empty first, so nothing is deleted with it (except mail an Outlook rule
+// files into it in the moment between that check and the delete).
 func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
 	if folder.Kind != models.FolderCustom || folder.RemoteID == "" {
 		return errors.New("only your own folders can be deleted")
@@ -1273,7 +1274,7 @@ func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
 			return err
 		}
 		if info.TotalItemCount > 0 || info.ChildFolderCount > 0 {
-			return errors.New("not all of its mail could be moved to Deleted Items; the folder was kept")
+			return errors.New("not all of its mail could be moved to Deleted Items yet, so the folder was kept; delete it again to finish")
 		}
 	}
 	err := c.api.JSON(ctx, http.MethodPost, path+"/permanentDelete", map[string]any{}, nil)

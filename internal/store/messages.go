@@ -667,6 +667,25 @@ func refreshJunk(tx *sql.Tx, ids []string, now int64) error {
 
 // Summaries returns summaries for the given ids (missing ids are skipped),
 // in no particular order.
+// AllLabelIDs returns every label on a message, hidden imported labels
+// included (SetHideProviderLabels).
+func (s *Store) AllLabelIDs(id string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT label_id FROM message_labels WHERE message_id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Summaries(ids []string) ([]models.MessageSummary, error) {
 	out := make([]models.MessageSummary, 0, len(ids))
 	for _, chunk := range chunks(ids, 500) {
@@ -1308,6 +1327,45 @@ type ClassifyInput struct {
 }
 
 // ClassifyInputs loads classifier inputs for the given ids.
+// MessagePlace is the mailbox of a message and the kinds of the folders
+// it is in.
+type MessagePlace struct {
+	AccountID string
+	Kinds     []string
+}
+
+// FolderKinds returns where each message is (from the denormalized
+// folder_kinds bits: no body or folder rows read).
+func (s *Store) FolderKinds(ids []string) (map[string]MessagePlace, error) {
+	out := make(map[string]MessagePlace, len(ids))
+	for _, chunk := range chunks(ids, 500) {
+		rows, err := s.db.Query(`SELECT id, account_id, folder_kinds FROM messages WHERE id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id, account string
+			var bits int
+			if err := rows.Scan(&id, &account, &bits); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			kinds := []string{}
+			for k, b := range kindBits {
+				if bits&b != 0 {
+					kinds = append(kinds, k)
+				}
+			}
+			out[id] = MessagePlace{account, kinds}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 	var out []ClassifyInput
 	for _, chunk := range chunks(ids, 500) {

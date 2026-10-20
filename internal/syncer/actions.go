@@ -693,8 +693,8 @@ func (e *Engine) EmptyFolder(folderID string) error {
 }
 
 // DeleteFolder deletes a custom folder on the server (its mail goes to
-// Trash). Locally its mail moves to Trash and the folder goes away; the
-// sync that follows catches up with the server.
+// Trash). Locally its mail moves to Trash and the folder goes away; a sync
+// follows either way (a failed delete may have moved part of the mail).
 func (e *Engine) DeleteFolder(folderID string) error {
 	f, err := e.cfg.Store.Folder(folderID)
 	if err != nil {
@@ -703,6 +703,24 @@ func (e *Engine) DeleteFolder(folderID string) error {
 	if f.Kind != models.FolderCustom {
 		return errors.New("only your own folders can be deleted")
 	}
+	// A sync already running may have listed the folder before it went:
+	// sync again after it.
+	resync := e.Syncing(f.AccountID)
+	defer func() {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			defer safe.Recover("sync after deleting a folder")
+			ctx, cancel := context.WithTimeout(e.ctx, 5*time.Minute)
+			defer cancel()
+			for i := 0; i < 1 || (resync && i < 2); i++ {
+				if err := e.SyncNow(ctx, f.AccountID); err != nil {
+					slog.Debug("sync after deleting a folder", "err", err)
+					return
+				}
+			}
+		}()
+	}()
 	a, _ := e.cfg.Store.Account(f.AccountID)
 	p, err := e.cfg.Provider(f.AccountID)
 	if err == nil {
@@ -714,8 +732,12 @@ func (e *Engine) DeleteFolder(folderID string) error {
 		return fmt.Errorf("couldn't delete %s: %s", f.Name, HumanError(a, err))
 	}
 	ids, err := e.cfg.Store.FolderMessageIDs(f.ID, false)
-	if err == nil && len(ids) > 0 {
-		old, _ := e.cfg.Store.MessageFolders(ids)
+	if err != nil {
+		ids = nil
+	}
+	done := e.local.begin(changeFolders, ids)
+	defer done()
+	if old, err := e.cfg.Store.MessageFolders(ids); err == nil && len(ids) > 0 {
 		trash, terr := e.cfg.Store.FolderByKind(f.AccountID, models.FolderTrash)
 		next := map[string][]string{}
 		for _, id := range ids {
@@ -744,15 +766,5 @@ func (e *Engine) DeleteFolder(folderID string) error {
 		slog.Warn("delete folder: removing it locally", "err", err)
 	}
 	e.changed(f.AccountID)
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		defer safe.Recover("sync after deleting a folder")
-		ctx, cancel := context.WithTimeout(e.ctx, 5*time.Minute)
-		defer cancel()
-		if err := e.SyncNow(ctx, f.AccountID); err != nil {
-			slog.Debug("sync after deleting a folder", "err", err)
-		}
-	}()
 	return nil
 }

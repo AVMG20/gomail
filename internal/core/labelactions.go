@@ -1,18 +1,22 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"time"
 
 	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/store"
 )
 
-// Label actions: a label's "When added" (Label.Then) moves mail that gets
-// that label from a rule, Jev or the user: to the archive (skips the
-// inbox), Junk or Trash. Junk and Trash mark the mail read; archived mail keeps its unread
+// Label actions: a label's "When added" (Label.Then) moves mail that a
+// rule or Jev gives that label (new mail, or mail the user asked Jev to
+// label; labels added by hand too with Settings.ManualLabelActions): to
+// the archive (skips the inbox), Junk or Trash. Junk and Trash mark the mail read; archived mail keeps its unread
 // state. Jev never trashes: a wrong guess would delete real mail, so its
 // Trash picks go to Junk.
 
@@ -20,14 +24,19 @@ import (
 // "sorted for you" review).
 type labelMoves map[string]labelMove
 
-type labelMove struct{ kind, why string }
+type labelMove struct {
+	kind, why string
+	junk      bool // from the built-in Junk label (see Settings.JunkStaysPut)
+}
 
 // moveRank orders the destinations when labels disagree: the strongest wins.
 var moveRank = map[string]int{models.FolderArchive: 1, models.FolderSpam: 2, models.FolderTrash: 3}
 
-func (m labelMoves) add(id, kind, why string) {
-	if kind != "" && moveRank[kind] > moveRank[m[id].kind] {
-		m[id] = labelMove{kind, why}
+func (m labelMoves) add(id string, l models.Label, kind, why string) {
+	junk := l.ID == config.JunkLabelID
+	cur := m[id]
+	if kind != "" && (moveRank[kind] > moveRank[cur.kind] || (moveRank[kind] == moveRank[cur.kind] && cur.junk && !junk)) {
+		m[id] = labelMove{kind, why, junk}
 	}
 }
 
@@ -62,9 +71,12 @@ func thenKind(l models.Label, byAI bool) string {
 	return ""
 }
 
-// applyLabelMoves moves the messages, skipping mail already where it goes
-// (and archiving only from the inbox). It returns the moved ids.
-func (s *Service) applyLabelMoves(moves labelMoves, what string) []string {
+// applyLabelMoves moves the messages, skipping mail already where it goes,
+// archiving only from the inbox, and never moving sent mail, drafts or
+// mail in Trash (a label is about received mail; Trash is the user's own
+// choice). It stops between batches when ctx ends. It returns the moved
+// ids: kind -> ids.
+func (s *Service) applyLabelMoves(ctx context.Context, moves labelMoves, what string) map[string][]string {
 	if len(moves) == 0 {
 		return nil
 	}
@@ -72,55 +84,108 @@ func (s *Service) applyLabelMoves(moves labelMoves, what string) []string {
 	for id := range moves {
 		ids = append(ids, id)
 	}
-	inputs, err := s.store.ClassifyInputs(ids)
+	places, err := s.store.FolderKinds(ids)
 	if err != nil {
 		slog.Warn(what+": lookup failed", "err", err)
 		return nil
 	}
+	junkStays := s.Settings().JunkStaysPut
 	byKind := map[string][]string{}
 	var readFirst []string // Junk and Trash moves
-	for _, in := range inputs {
-		kind := moves[in.ID].kind
-		if slices.Contains(in.FolderKinds, kind) || (kind == models.FolderArchive && !slices.Contains(in.FolderKinds, models.FolderInbox)) {
+	for _, id := range ids {
+		p, ok := places[id]
+		in, kind := p.Kinds, moves[id].kind
+		if !ok || (moves[id].junk && slices.Contains(junkStays, p.AccountID)) || slices.Contains(in, kind) || slices.Contains(in, models.FolderSent) || slices.Contains(in, models.FolderDrafts) ||
+			slices.Contains(in, models.FolderTrash) || (kind == models.FolderArchive && !slices.Contains(in, models.FolderInbox)) {
 			continue
 		}
-		byKind[kind] = append(byKind[kind], in.ID)
+		byKind[kind] = append(byKind[kind], id)
 		if kind != models.FolderArchive {
-			readFirst = append(readFirst, in.ID)
+			readFirst = append(readFirst, id)
 		}
 	}
 	unread, err := s.unreadOf(readFirst)
 	if err != nil {
 		slog.Warn(what+": lookup failed", "err", err)
 	}
-	var moved []string
+	isUnread := make(map[string]bool, len(unread))
+	for _, id := range unread {
+		isUnread[id] = true
+	}
+	unreadIn := func(ids []string) []string {
+		var out []string
+		for _, id := range ids {
+			if isUnread[id] {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	moved := map[string][]string{}
 	// Junk and Trash: read first, then move.
-	junked, _ := s.junkRead(filterIn(unread, byKind[models.FolderSpam]), byKind[models.FolderSpam], what)
-	moved = append(moved, junked...)
+	if ctx.Err() == nil {
+		junked, _ := s.junkRead(unreadIn(byKind[models.FolderSpam]), byKind[models.FolderSpam], what)
+		if len(junked) > 0 {
+			moved[models.FolderSpam] = junked
+		}
+	}
 	for _, kind := range []string{models.FolderTrash, models.FolderArchive} {
 		if kind == models.FolderTrash {
-			for _, b := range batches(filterIn(unread, byKind[kind]), ruleBatch) {
+			for _, b := range batches(unreadIn(byKind[kind]), ruleBatch) {
 				if err := s.engine.MarkRead(b, true); err != nil {
 					slog.Warn(what+": mark read failed", "err", err)
 				}
 			}
 		}
 		for _, b := range batches(byKind[kind], ruleBatch) {
+			if ctx.Err() != nil {
+				break
+			}
 			if err := s.engine.MoveToKind(b, kind); err != nil {
 				slog.Warn(what+": move failed", "to", kind, "err", err)
 				continue
 			}
-			moved = append(moved, b...)
+			moved[kind] = append(moved[kind], b...)
 		}
 	}
-	var logged []string // moves without a reason were the user's own
-	for _, id := range moved {
-		if moves[id].why != "" {
-			logged = append(logged, id)
-		}
-	}
-	s.logAutoMoves(logged, func(id string) (string, string) { return moves[id].kind, moves[id].why })
+	s.logAutoMoves(movedIDs(moved), func(id string) (string, string) { return moves[id].kind, moves[id].why })
 	return moved
+}
+
+// ApplyLabelAction does a label's "When added" once for the mail that
+// already has it (set after the fact), and returns how many messages
+// moved. Sent mail, drafts and Trash stay put; Archive only takes mail
+// from the inbox.
+func (s *Service) ApplyLabelAction(labelID string) (int, error) {
+	l, err := s.label(labelID)
+	if err != nil {
+		return 0, err
+	}
+	kind := thenKind(l, false)
+	if kind == "" || l.ID == config.JunkLabelID || len(l.AccountIDs) != 1 {
+		return 0, errors.New("this label doesn’t move mail")
+	}
+	ids, err := s.store.ResolveIDs(models.ListQuery{AccountID: l.AccountIDs[0], Labels: []string{l.ID}},
+		store.FilterOptions{ExcludeFolderKinds: []string{models.FolderSent, models.FolderDrafts, models.FolderTrash, kind}}, provider.MaxFolderOp)
+	if err != nil {
+		return 0, err
+	}
+	moves := labelMoves{}
+	for _, id := range ids {
+		moves.add(id, l, kind, "Labeled “"+l.Name+"”")
+	}
+	moved := movedIDs(s.applyLabelMoves(s.ctx, moves, "label action"))
+	s.messagesChanged(moved)
+	return len(moved), nil
+}
+
+// movedIDs flattens applyLabelMoves' result.
+func movedIDs(moved map[string][]string) []string {
+	var out []string
+	for _, ids := range moved {
+		out = append(out, ids...)
+	}
+	return out
 }
 
 // logAutoMoves records what an automation moved, for the "sorted for you"
@@ -151,15 +216,4 @@ func (s *Service) AutoMoves(accountID, kind string, hours int) ([]models.AutoMov
 		hours = 24
 	}
 	return s.store.AutoMoves(accountID, kind, time.Now().Add(-time.Duration(hours)*time.Hour), 500)
-}
-
-// filterIn returns the ids of a that are in b.
-func filterIn(a, b []string) []string {
-	var out []string
-	for _, id := range a {
-		if slices.Contains(b, id) {
-			out = append(out, id)
-		}
-	}
-	return out
 }

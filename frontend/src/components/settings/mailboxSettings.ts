@@ -1,8 +1,10 @@
 // Per-mailbox settings that live in the global Settings object, keyed by account id:
 // new-mail notifications (mutedMailboxes: a muted mailbox also shows no unread count), quiet
-// labels (quietLabels), Jev auto-labeling (autoLabelAccounts) and AI corrections of imported labels (aiCorrectsOff).
+// labels (quietLabels), Jev auto-labeling (autoLabelAccounts), AI corrections of imported labels (aiCorrectsOff)
+// and whether the Junk label moves mail to Junk (junkStaysPut).
 // Shared by the overview lists and each mailbox's own settings page.
 import { computed } from 'vue'
+import { labelsForAccount } from '@/lib/labelScope'
 import { useSettingsStore } from '@/stores/settings'
 
 const JUNK = 'junk'
@@ -13,6 +15,7 @@ export function useMailboxSettings() {
   const muted = computed(() => new Set(settings.settings?.mutedMailboxes ?? []))
   const autoOn = computed(() => new Set(settings.settings?.autoLabelAccounts ?? []))
   const correctsOff = computed(() => new Set(settings.settings?.aiCorrectsOff ?? []))
+  const junkStays = computed(() => new Set(settings.settings?.junkStaysPut ?? []))
 
   // ---- notifications
   const notifies = (accountId: string) => !muted.value.has(accountId)
@@ -38,8 +41,8 @@ export function useMailboxSettings() {
   }
 
   // ---- quiet labels. Junk never notifies, so it's left out of the editable list.
-  /** Labels the user can make quiet in a mailbox: that mailbox's labels, without Junk. */
-  const quietOptions = (accountId: string) => settings.labelsForAccount(accountId).filter((l) => l.id !== JUNK)
+  /** Labels the user can make quiet in a mailbox: that mailbox's labels (hidden imported ones too: they still keep mail quiet), without Junk. */
+  const quietOptions = (accountId: string) => labelsForAccount(settings.labels, accountId).filter((l) => l.id !== JUNK)
   /** The mailbox's quiet labels that still exist there, without Junk (shown separately). */
   function quietList(accountId: string): string[] {
     const valid = new Set(quietOptions(accountId).map((l) => l.id))
@@ -71,5 +74,14 @@ export function useMailboxSettings() {
     void settings.update({ aiCorrectsOff: [...next] }, 0)
   }
 
-  return { notifies, setNotify, isMuted, setMuted, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel, autoLabels, setAutoLabel, corrects, setCorrects }
+  // ---- the Junk label moves mail to Junk (default), or only labels it (junkStaysPut).
+  const junkMoves = (accountId: string) => !junkStays.value.has(accountId)
+  function setJunkMoves(accountId: string, on: boolean) {
+    const next = new Set(junkStays.value)
+    if (on) next.delete(accountId)
+    else next.add(accountId)
+    void settings.update({ junkStaysPut: [...next] }, 0)
+  }
+
+  return { notifies, setNotify, isMuted, setMuted, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel, autoLabels, setAutoLabel, corrects, setCorrects, junkMoves, setJunkMoves }
 }

@@ -3,7 +3,7 @@
 // (General, Notifications, Labels & rules, Jev, Calendar). App-wide settings stay on the App
 // pages; the overviews there (Notifications, AI, Calendar) edit the same per-mailbox values.
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
-import { BellOffIcon, KeyRoundIcon, LoaderIcon, OctagonAlertIcon, RefreshCwIcon, SparklesIcon, Trash2Icon } from '@lucide/vue'
+import { BellOffIcon, KeyRoundIcon, LoaderIcon, RefreshCwIcon, SparklesIcon, Trash2Icon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -56,14 +56,7 @@ function askDelete(f: Folder) {
 }
 async function deleteFolder() {
   const f = deleting.value
-  if (!f) return
-  try {
-    await accounts.deleteFolder(f.id)
-    if (mail.mailbox.folderId === f.id) mail.goToKind('inbox')
-    toast(`Folder “${f.name}” deleted`)
-  } catch (e) {
-    toast.error(`Couldn’t delete ${f.name}`, { description: errorMessage(e) })
-  }
+  if (f && (await accounts.deleteFolder(f.id)) && mail.mailbox.folderId === f.id) mail.goToKind('inbox')
 }
 
 // Three tabs: the mailbox itself, how its mail gets sorted, its calendar. Older tab ids
@@ -270,8 +263,8 @@ function labelAll() {
           <SettingRow title="Let AI correct Gmail/Outlook labels" :description="s.aiCorrectsProviderLabels ? 'Removes imported labels it’s sure don’t apply.' : 'Off for all mailboxes in AI settings.'">
             <Switch :model-value="s.aiCorrectsProviderLabels && mb.corrects(a.id)" :disabled="!s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => mb.setCorrects(a!.id, v)" />
           </SettingRow>
-          <SettingRow title="Junk goes to the Junk folder" description="Mail that gets the Junk label, from Jev, a rule or you, is marked read and moved to Junk, so it never clutters the inbox. Move it back to teach Jev otherwise.">
-            <OctagonAlertIcon class="text-muted-foreground size-4" aria-hidden="true" />
+          <SettingRow title="Junk goes to the Junk folder" description="Mail Jev or a rule labels Junk is marked read and moved to Junk. Move it back to teach Jev otherwise.">
+            <Switch :model-value="mb.junkMoves(a.id)" aria-label="Move Junk-labeled mail to the Junk folder" @update:model-value="(v: boolean) => mb.setJunkMoves(a!.id, v)" />
           </SettingRow>
           <SettingRow title="Label existing mail" description="Run Jev once on mail already downloaded here.">
             <div class="flex items-center gap-2">
@@ -307,7 +300,7 @@ function labelAll() {
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete the folder “{{ deleting?.name }}”?</AlertDialogTitle>
-          <AlertDialogDescription>{{ deleting?.total ? `Its ${deleting.total.toLocaleString()} message${deleting.total === 1 ? '' : 's'} move to Trash first. ` : '' }}The folder is deleted in {{ providerName(a) }} too, for good.</AlertDialogDescription>
+          <AlertDialogDescription>{{ deleting?.total ? `Its ${deleting.total.toLocaleString()} message${deleting.total === 1 ? '' : 's'} move to Trash first. ` : '' }}The folder is deleted in {{ a ? providerName(a) : 'your mailbox' }} too, for good.</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

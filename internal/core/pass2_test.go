@@ -83,7 +83,7 @@ func TestConversationRowsAndActions(t *testing.T) {
 			t.Fatal("conversation not fully unread")
 		}
 	}
-	if err := s.AddLabel([]string{row.ConversationID}, "important"); err != nil {
+	if _, err := s.AddLabel([]string{row.ConversationID}, "important"); err != nil {
 		t.Fatal(err)
 	}
 	sums, _ = s.store.Summaries(idsOf(thread))

@@ -36,6 +36,8 @@ export const useAiStore = defineStore('ai', () => {
     if (!settings.aiReady) return needsSetup()
     labeling.value = new Set([...labeling.value, ...ids])
     try {
+      // Where the mail was, for Undo of a label's "When added" move (read before Jev runs).
+      const wasIn = new Map(ids.map((id) => [id, mail.byId.get(id)?.folderIds ?? []]))
       const results = await api.classifyMessages(ids)
       const nextScores = { ...scores.value }
       const before = new Map(ids.map((id) => [id, mail.byId.get(id)?.labels ?? []]))
@@ -67,6 +69,8 @@ export const useAiStore = defineStore('ai', () => {
           if (added.length) parts.push(`Added ${added.length} label${added.length === 1 ? '' : 's'}`)
           if (removed.length) parts.push(`removed ${removed.length}`)
         }
+        const moved = results.filter((r) => r.moved)
+        if (moved.length) parts.push(`${moved.length} moved, as ${moved.length === 1 ? 'its label says' : 'their labels say'}`)
         toast(parts.join(' · '), {
           action: {
             label: 'Undo',
@@ -74,8 +78,15 @@ export const useAiStore = defineStore('ai', () => {
               for (const r of results) {
                 const prev = before.get(r.messageId) ?? []
                 for (const l of r.added) if (!prev.includes(l)) await api.removeLabel([r.messageId], l)
-                for (const l of r.removed) await api.addLabel([r.messageId], l)
+                for (const l of r.removed) await api.restoreLabel([r.messageId], l)
+                // Back where it was: the folder it left (the inbox when it was there).
+                if (!r.moved) continue
+                const from = (wasIn.get(r.messageId) ?? []).map((id) => accounts.folderMap.get(id)).filter((f) => !!f && f.kind !== r.moved)
+                const accountId = mail.byId.get(r.messageId)?.accountId ?? (ids.length === 1 ? mail.byId.get(ids[0])?.accountId : undefined)
+                const back = from.find((f) => f!.kind === 'inbox') ?? from[0] ?? (accountId ? accounts.folderOf(accountId, 'inbox') : undefined)
+                if (back) await api.moveToFolder([r.messageId], back.id)
               }
+              accounts.refreshCounts()
               void mail.softRefresh()
             },
           },

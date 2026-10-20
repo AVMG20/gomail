@@ -176,14 +176,8 @@ function del() {
     action: 'Delete folder',
     destructive: true,
     run: async () => {
-      try {
-        await accounts.deleteFolder(f.id)
-        if (mail.mailbox.folderId === f.id) mail.goToKind('inbox')
-        toast(`Folder “${props.name}” deleted`)
-      } catch (e) {
-        toast.error(`Couldn’t delete ${props.name}`, { description: errorMessage(e) })
-      }
-      refresh()
+      // Closes the dialog right away: the progress toast follows the delete.
+      void accounts.deleteFolder(f.id).then((ok) => { if (ok && mail.mailbox.folderId === f.id) mail.goToKind('inbox') })
     },
   })
 }

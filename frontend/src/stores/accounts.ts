@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
-import { api, hasMethod, readLocal, writeLocal } from '@/lib/api'
+import { toast } from 'vue-sonner'
+import { api, errorMessage, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import type { Account, Folder, LabelCount, SyncProgress } from '@/lib/types'
 
 export interface LabelScope {
@@ -69,12 +70,26 @@ export const useAccountsStore = defineStore('accounts', () => {
     folders.value = next
   }
 
-  /** Deletes one of the user's own folders on the server; its mail goes to Trash. */
-  async function deleteFolder(id: string) {
+  /** Deletes one of the user's own folders on the server (its mail goes to Trash first), with a
+   *  progress toast: a big folder takes a while. Reports whether it went. */
+  const deletingFolders = new Set<string>()
+  async function deleteFolder(id: string): Promise<boolean> {
     const f = folderMap.value.get(id)
-    await api.deleteFolder(id)
-    if (f) await loadFolders([f.accountId])
-    refreshCounts()
+    if (!f || deletingFolders.has(id)) return false
+    deletingFolders.add(id)
+    const t = toast.loading(`Deleting “${f.name}”…`)
+    try {
+      await api.deleteFolder(id)
+      toast.success(`Folder “${f.name}” deleted`, { id: t })
+      return true
+    } catch (e) {
+      toast.error(`Couldn’t delete “${f.name}”`, { id: t, description: errorMessage(e) })
+      return false
+    } finally {
+      deletingFolders.delete(id)
+      await loadFolders([f.accountId])
+      refreshCounts()
+    }
   }
 
   async function loadLabelCounts(scope: LabelScope = labelScope.value) {

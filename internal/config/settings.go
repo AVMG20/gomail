@@ -264,6 +264,7 @@ func Normalize(s *models.Settings) {
 	s.AutoLabelAccounts = uniqueTrimmed(s.AutoLabelAccounts)
 	s.AutoClassify = len(s.AutoLabelAccounts) > 0 // for older versions
 	s.AICorrectsOff = uniqueTrimmed(s.AICorrectsOff)
+	s.JunkStaysPut = uniqueTrimmed(s.JunkStaysPut)
 }
 
 // AutoClassifies reports whether new mail of accountID is AI-labeled

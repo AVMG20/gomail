@@ -111,7 +111,7 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 		for _, id := range added {
 			changed[id] = true
 			if !slices.Contains(act.junk, id) { // a Junk rule already moves it
-				moves.add(id, thenKind(l, false), labelWhy(l, false))
+				moves.add(id, l, thenKind(l, false), labelWhy(l, false))
 			}
 		}
 		if l.Source == config.LabelSourceProvider {
@@ -126,7 +126,7 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 	}
 	moved, moveErr := s.junkRead(unread, act.junk, "junk rule")
 	s.logAutoMoves(moved, func(id string) (string, string) { return models.FolderSpam, act.junkWhy[id] })
-	moved = append(moved, s.applyLabelMoves(moves, "label action")...)
+	moved = append(moved, movedIDs(s.applyLabelMoves(s.ctx, moves, "label action"))...)
 	for _, id := range moved {
 		changed[id] = true
 	}
@@ -240,7 +240,14 @@ func (s *Service) quietMessage(accountID string, m models.MessageSummary) bool {
 		return true
 	}
 	quiet := config.QuietLabels(st, accountID)
-	for _, l := range m.Labels {
+	labels := m.Labels
+	if !st.ImportProviderLabels {
+		// Hidden imported labels still keep mail quiet.
+		if all, err := s.store.AllLabelIDs(m.ID); err == nil {
+			labels = all
+		}
+	}
+	for _, l := range labels {
 		if l == config.JunkLabelID || slices.Contains(quiet, l) {
 			return true
 		}

@@ -272,10 +272,10 @@ func TestAddLabelAcrossMailboxes(t *testing.T) {
 	s := e.s
 	setLabels(t, s, models.Label{Name: "Gmail Things", AccountIDs: []string{demo.GmailAccountID}})
 	g, o := firstMessage(t, s, demo.GmailAccountID), firstMessage(t, s, demo.OutlookAccountID)
-	if err := s.AddLabel([]string{o}, "gmail-things"); err == nil {
+	if _, err := s.AddLabel([]string{o}, "gmail-things"); err == nil {
 		t.Fatal("label added to mail of another mailbox")
 	}
-	if err := s.AddLabel([]string{g, o}, "gmail-things"); err != nil {
+	if _, err := s.AddLabel([]string{g, o}, "gmail-things"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := labelOf(t, s.store, g, "gmail-things"); !ok {
@@ -285,7 +285,7 @@ func TestAddLabelAcrossMailboxes(t *testing.T) {
 		t.Fatal("outlook message labeled")
 	}
 	gp, op := mailboxLabel(t, s, demo.GmailAccountID, "Personal"), mailboxLabel(t, s, demo.OutlookAccountID, "Personal")
-	if err := s.AddLabel([]string{g, o}, gp); err != nil {
+	if _, err := s.AddLabel([]string{g, o}, gp); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := labelOf(t, s.store, o, op); !ok {

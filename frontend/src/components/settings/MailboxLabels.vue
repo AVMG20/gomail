@@ -3,9 +3,9 @@
 // labels: nothing here changes another mailbox. Its Gmail labels / Outlook categories are listed
 // apart: their names follow Gmail/Outlook, the rest (color, description, action) is ours.
 import { computed, nextTick, ref } from 'vue'
-import { ArrowDownIcon, ArrowUpIcon, CopyIcon, DownloadIcon, EyeOffIcon, PlusIcon, SparklesIcon, Trash2Icon, UploadIcon } from '@lucide/vue'
+import { ArrowDownIcon, ArrowUpIcon, CopyIcon, DownloadIcon, EyeOffIcon, PlayIcon, PlusIcon, SparklesIcon, Trash2Icon, UploadIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
-import { api } from '@/lib/api'
+import { api, errorMessage, hasMethod } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -50,6 +50,35 @@ const THEN: { value: string; label: string; chip: string }[] = [
   { value: 'trash', label: 'Move to Trash (Jev: Junk)', chip: '→ Trash' },
 ]
 const thenOf = (l: Label) => THEN.find((t) => t.value === l.then) ?? THEN[0]
+
+const THEN_PLACE: Record<string, string> = { archive: 'the archive', junk: 'Junk', trash: 'Trash' }
+/** Choosing what a label does offers to do it for the mail that already has it. */
+function setThen(l: Label, v: string) {
+  const then = v === 'keep' ? '' : v
+  patch(l.id, { then })
+  if (!then || !hasMethod('ApplyLabelAction') || accounts.labelTotals.get(l.id)?.total === 0) return
+  toast(`“${l.name}” now goes to ${THEN_PLACE[then]}`, {
+    description: 'Mail that already has it stays where it is.',
+    action: { label: 'Move it too', onClick: () => void applyThen(l) },
+  })
+}
+const applying = ref(new Set<string>())
+async function applyThen(l: Label) {
+  if (applying.value.has(l.id)) return
+  applying.value = new Set([...applying.value, l.id])
+  try {
+    await settings.flush()
+    const n = await api.applyLabelAction(l.id)
+    toast(n ? `${n.toLocaleString()} message${n === 1 ? '' : 's'} moved` : `Nothing to move: mail with “${l.name}” is already there`)
+    accounts.refreshCounts()
+  } catch (e) {
+    toast.error('Couldn’t move the mail', { description: errorMessage(e) })
+  } finally {
+    const next = new Set(applying.value)
+    next.delete(l.id)
+    applying.value = next
+  }
+}
 
 function setLabels(next: Label[]) {
   void settings.update({ labels: next }, 500)
@@ -203,7 +232,7 @@ function labelAll() {
         <div class="min-w-0 flex-1 space-y-1.5">
           <div class="flex items-center gap-2">
             <Input :model-value="l.name" class="h-8 max-w-56 text-[13px] font-medium" aria-label="Label name" :data-label-name="l.id" @update:model-value="(v) => patch(l.id, { name: String(v) })" @blur="onNameBlur(l)" />
-            <Select :model-value="thenOf(l).value" @update:model-value="(v) => patch(l.id, { then: v === 'keep' ? '' : String(v) })">
+            <Select :model-value="thenOf(l).value" @update:model-value="(v) => setThen(l, String(v))">
               <SelectTrigger
                 size="sm"
                 :class="['h-6 shrink-0 gap-1 rounded-full px-2 text-xs data-[size=sm]:h-6', thenOf(l).chip ? 'bg-muted text-foreground border-transparent' : 'text-muted-foreground border-dashed']"
@@ -212,7 +241,7 @@ function labelAll() {
                 {{ thenOf(l).chip || 'When added…' }}
               </SelectTrigger>
               <SelectContent>
-                <div class="text-muted-foreground px-2 py-1.5 text-xs">When you, Jev or a rule adds it</div>
+                <div class="text-muted-foreground px-2 py-1.5 text-xs">When Jev or a rule adds it</div>
                 <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
               </SelectContent>
             </Select>
@@ -220,6 +249,7 @@ function labelAll() {
           <Textarea :model-value="l.description" rows="1" :aria-label="`Description for ${l.name}`" placeholder="When should this label apply? e.g. “Invoices, receipts and bank statements”" class="min-h-8 resize-none py-1.5 text-xs" @update:model-value="(v) => patch(l.id, { description: String(v) })" />
         </div>
         <div class="flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+          <Button v-if="l.then && hasMethod('ApplyLabelAction')" variant="ghost" size="icon-xs" :disabled="applying.has(l.id)" :title="`Move mail that already has “${l.name}” to ${THEN_PLACE[l.then]}`" :aria-label="`Move mail that already has ${l.name} to ${THEN_PLACE[l.then]}`" @click="applyThen(l)"><PlayIcon /></Button>
           <Button variant="ghost" size="icon-xs" aria-label="Move up" :disabled="i === 0" @click="move(l.id, -1)"><ArrowUpIcon /></Button>
           <Button variant="ghost" size="icon-xs" aria-label="Move down" :disabled="i === userLabels.length - 1" @click="move(l.id, 1)"><ArrowDownIcon /></Button>
           <Button variant="ghost" size="icon-xs" class="hover:text-destructive" :aria-label="`Delete ${l.name}`" @click="askRemove(l)"><Trash2Icon /></Button>
@@ -271,7 +301,7 @@ function labelAll() {
             <div class="flex h-8 items-center gap-2">
               <span class="truncate text-[13px] font-medium" :title="`The name comes from ${providerName}`">{{ l.name }}</span>
               <span class="bg-muted text-muted-foreground shrink-0 rounded-full px-1.5 py-0.5 text-[10.5px]">From {{ providerName }}</span>
-              <Select :model-value="thenOf(l).value" @update:model-value="(v) => patch(l.id, { then: v === 'keep' ? '' : String(v) })">
+              <Select :model-value="thenOf(l).value" @update:model-value="(v) => setThen(l, String(v))">
                 <SelectTrigger
                   size="sm"
                   :class="['h-6 shrink-0 gap-1 rounded-full px-2 text-xs data-[size=sm]:h-6', thenOf(l).chip ? 'bg-muted text-foreground border-transparent' : 'text-muted-foreground border-dashed']"
@@ -280,7 +310,7 @@ function labelAll() {
                   {{ thenOf(l).chip || 'When added…' }}
                 </SelectTrigger>
                 <SelectContent>
-                  <div class="text-muted-foreground px-2 py-1.5 text-xs">When you, Jev or a rule adds it</div>
+                  <div class="text-muted-foreground px-2 py-1.5 text-xs">When Jev or a rule adds it</div>
                   <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
                 </SelectContent>
               </Select>

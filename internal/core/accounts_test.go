@@ -108,7 +108,7 @@ func TestAccountsLifecycleWithFakeProviders(t *testing.T) {
 	}
 
 	// Remove/add a label locally (user label: not pushed).
-	if err := s.AddLabel(ids[:1], "work"); err != nil {
+	if _, err := s.AddLabel(ids[:1], "work"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RemoveLabel(ids[:1], "work"); err != nil {

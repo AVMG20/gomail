@@ -825,13 +825,33 @@ func (m *MailService) DeleteFolder(folderID string) error {
 
 // ---- Labels ----
 
-// AddLabel assigns a label manually.
-func (m *MailService) AddLabel(ids []string, labelID string) error {
+// AddLabel assigns a label manually and returns how many messages its
+// "When added" moved (only with the manual label actions setting).
+func (m *MailService) AddLabel(ids []string, labelID string) (int, error) {
+	s, err := m.ready()
+	if err != nil {
+		return 0, err
+	}
+	return uiResult(s.AddLabel(ids, labelID))
+}
+
+// ApplyLabelAction does a label's "When added" once for the mail that
+// already has it, and returns how many messages moved.
+func (m *MailService) ApplyLabelAction(labelID string) (int, error) {
+	s, err := m.ready()
+	if err != nil {
+		return 0, err
+	}
+	return uiResult(s.ApplyLabelAction(labelID))
+}
+
+// RestoreLabel puts a label back without its "When added" (Undo).
+func (m *MailService) RestoreLabel(ids []string, labelID string) error {
 	s, err := m.ready()
 	if err != nil {
 		return err
 	}
-	return uiError(s.AddLabel(ids, labelID))
+	return uiError(s.RestoreLabel(ids, labelID))
 }
 
 // RemoveLabel removes a label from messages.

@@ -642,6 +642,7 @@ func (s *Service) remapRestoredAccounts(f backupFile, before models.Settings, id
 			{&st.MutedMailboxes, before.MutedMailboxes},
 			{&st.AutoLabelAccounts, before.AutoLabelAccounts},
 			{&st.AICorrectsOff, before.AICorrectsOff},
+			{&st.JunkStaysPut, before.JunkStaysPut},
 		} {
 			next := []string{}
 			for _, a := range append(slices.Clone(*l.cur), l.had...) {

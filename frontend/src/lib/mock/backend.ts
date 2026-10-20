@@ -1135,7 +1135,12 @@ class MockBackend {
     return l && labelInMailbox(this.allLabels(), l, m.accountId)?.id
   }
 
-  async AddLabel(ids: string[], labelId: string): Promise<void> {
+  async AddLabel(ids: string[], labelId: string): Promise<number> {
+    await this.RestoreLabel(ids, labelId)
+    return 0 // the mock doesn't do label actions
+  }
+
+  async RestoreLabel(ids: string[], labelId: string): Promise<void> {
     await latency(30, 90)
     this.mutate(ids, (m) => {
       const id = this.mailboxLabel(m, labelId)
@@ -1143,6 +1148,25 @@ class MockBackend {
       if (!m.labels.includes(id)) m.labels = [...m.labels, id]
       m.labelDetails = [...(m.labelDetails ?? []).filter((d) => d.labelId !== id), { labelId: id, source: 'manual', confidence: 1 }]
     })
+  }
+
+  async ApplyLabelAction(labelId: string): Promise<number> {
+    await latency(80, 200)
+    const l = this.settings.labels.find((x) => x.id === labelId)
+    const kind = l?.then === 'junk' ? 'spam' : l?.then
+    if (!l || !kind) throw new Error('this label doesn’t move mail')
+    let n = 0
+    for (const m of this.messages.values()) {
+      if (!m.labels.includes(labelId)) continue
+      const folders = this.folders.get(m.accountId) ?? []
+      const dest = folders.find((f) => f.kind === kind)
+      const kinds = m.folderIds.map((id) => folders.find((f) => f.id === id)?.kind)
+      if (!dest || kinds.some((k) => k === kind || k === 'sent' || k === 'drafts' || k === 'trash') || (kind === 'archive' && !kinds.includes('inbox'))) continue
+      m.folderIds = [dest.id]
+      n++
+    }
+    if (n) this.changed('')
+    return n
   }
 
   async RemoveLabel(ids: string[], labelId: string): Promise<void> {

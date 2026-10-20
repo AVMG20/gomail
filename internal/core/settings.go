@@ -440,6 +440,7 @@ func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
 	st.MutedMailboxes = slices.Clone(st.MutedMailboxes)
 	st.AutoLabelAccounts = slices.Clone(st.AutoLabelAccounts)
 	st.AICorrectsOff = slices.Clone(st.AICorrectsOff)
+	st.JunkStaysPut = slices.Clone(st.JunkStaysPut)
 	st.QuietLabels = maps.Clone(st.QuietLabels)
 	if !fn(&st) {
 		s.settingsMu.Unlock()
@@ -530,7 +531,7 @@ func (s *Service) labelsLoseAccount(accountID string) {
 		}
 		st.Labels = out
 		// The mailbox's per-mailbox choices go with it.
-		for _, list := range []*[]string{&st.AutoLabelAccounts, &st.AICorrectsOff} {
+		for _, list := range []*[]string{&st.AutoLabelAccounts, &st.AICorrectsOff, &st.JunkStaysPut} {
 			if i := slices.Index(*list, accountID); i >= 0 {
 				*list = slices.Delete(slices.Clone(*list), i, i+1)
 				changed = true

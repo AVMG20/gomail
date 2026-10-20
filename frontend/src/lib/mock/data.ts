@@ -51,6 +51,8 @@ export const SEED_SETTINGS: Settings = {
   autoClassify: true,
   autoLabelAccounts: ['acc_personal', 'acc_work', 'acc_side'],
   aiCorrectsOff: [],
+  junkStaysPut: [],
+  manualLabelActions: false,
   labels: SEED_MAILBOXES.flatMap((acc) => SEED_LABELS.map((l) => ({ ...l, id: mockLabelId(l.id, acc), source: 'user', accountIds: [acc] }))),
   importProviderLabels: true,
   notifications: true,

@@ -286,34 +286,56 @@ func (s *Service) label(id string) (models.Label, error) {
 }
 
 // AddLabel assigns a label manually (pushed to Gmail/Outlook for
-// provider-sourced labels). Like a rule, it moves the mail where the
-// label's "When added" says (Junk moves it to Junk).
-func (s *Service) AddLabel(ids []string, labelID string) error {
-	return s.changeLabel(ids, labelID, true)
+// provider-sourced labels). With Settings.ManualLabelActions it also moves
+// the mail where the label's "When added" says (Junk: to Junk); it returns
+// how many messages moved.
+func (s *Service) AddLabel(ids []string, labelID string) (int, error) {
+	return s.changeLabel(ids, labelID, true, s.Settings().ManualLabelActions)
+}
+
+// RestoreLabel puts a label back without its "When added" (undoing a
+// removal).
+func (s *Service) RestoreLabel(ids []string, labelID string) error {
+	_, err := s.changeLabel(ids, labelID, true, false)
+	return err
 }
 
 // RemoveLabel removes a label (whatever assigned it).
 func (s *Service) RemoveLabel(ids []string, labelID string) error {
-	return s.changeLabel(ids, labelID, false)
+	_, err := s.changeLabel(ids, labelID, false, false)
+	return err
 }
 
-func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
+func (s *Service) changeLabel(ids []string, labelID string, add, act bool) (int, error) {
 	l, err := s.label(labelID)
 	if err != nil {
-		return err
+		return 0, err
+	}
+	// The label goes on the whole conversation; only the messages of the
+	// box on screen move (replies in Sent stay where they are).
+	var inBox map[string]bool
+	if act {
+		boxIDs, err := s.expand(ids, store.ExpandFolder)
+		if err != nil {
+			return 0, err
+		}
+		inBox = make(map[string]bool, len(boxIDs))
+		for _, id := range boxIDs {
+			inBox[id] = true
+		}
 	}
 	if ids, err = s.expand(ids, store.ExpandThread); err != nil {
-		return err
+		return 0, err
 	}
 	if len(ids) > syncer.MaxBulk {
-		return fmt.Errorf("too many messages selected (max %d)", syncer.MaxBulk)
+		return 0, fmt.Errorf("too many messages selected (max %d)", syncer.MaxBulk)
 	}
 	groups, byID, err := s.mailboxLabels(ids, l)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if add && len(groups) == 0 {
-		return fmt.Errorf("this mailbox has no label “%s”", l.Name)
+		return 0, fmt.Errorf("this mailbox has no label “%s”", l.Name)
 	}
 	var changed []string
 	moves := labelMoves{}
@@ -325,23 +347,23 @@ func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
 			err = s.store.RemoveLabels(gids, ml.ID)
 		}
 		if err != nil {
-			return err
+			return 0, err
 		}
 		changed = append(changed, gids...)
 		if ml.Source == config.LabelSourceProvider {
 			s.engine.PushLabel(gids, ml.Name, add)
 		}
-		if add {
+		if act {
 			for _, id := range gids {
-				// No reason: the user did it, so it isn't in the "sorted
-				// for you" review.
-				moves.add(id, thenKind(ml, false), "")
+				if inBox[id] {
+					moves.add(id, ml, thenKind(ml, false), "You labeled it “"+ml.Name+"”")
+				}
 			}
 		}
 	}
-	s.applyLabelMoves(moves, "label action")
+	moved := movedIDs(s.applyLabelMoves(s.ctx, moves, "label action"))
 	s.messagesChanged(changed)
-	return nil
+	return len(moved), nil
 }
 
 // mailboxLabels groups messages by the id of the label they get for l: every

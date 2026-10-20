@@ -319,10 +319,10 @@ func TestLabelsSendAndNewMail(t *testing.T) {
 	page, _ := s.ListMessages(models.ListQuery{AccountID: demo.OutlookAccountID, FolderKind: models.FolderInbox})
 	id := page.Messages[0].ID
 	important := mailboxLabel(t, s, demo.OutlookAccountID, "Important") // Outlook's own copy
-	if err := s.AddLabel([]string{id}, important); err != nil {
+	if _, err := s.AddLabel([]string{id}, important); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddLabel([]string{id}, "nope"); err == nil {
+	if _, err := s.AddLabel([]string{id}, "nope"); err == nil {
 		t.Fatal("unknown label accepted")
 	}
 	p, _ := s.ListMessages(models.ListQuery{Labels: []string{important}})

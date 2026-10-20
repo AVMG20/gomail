@@ -40,6 +40,12 @@ async function setConversation(v: boolean) {
       </SettingRow>
     </SettingSection>
 
+    <SettingSection title="Labels" all-mailboxes>
+      <SettingRow title="Labels you add follow “When added”" description="Jev and rules always do. Off: adding a label yourself only labels the mail.">
+        <Switch :model-value="settings.settings.manualLabelActions ?? false" @update:model-value="(v: boolean) => settings.update({ manualLabelActions: v }, 0)" />
+      </SettingRow>
+    </SettingSection>
+
     <SettingSection title="Writing" all-mailboxes>
       <SettingRow title="Undo send" description="Waits a few seconds before sending, so you can take it back.">
         <Select :model-value="String(settings.settings.undoSendSeconds ?? 5)" @update:model-value="(v) => settings.update({ undoSendSeconds: Number(v) })">

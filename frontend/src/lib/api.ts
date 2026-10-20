@@ -127,7 +127,7 @@ export const USED_METHODS = [
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
 export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'RestoreLabel', 'ApplyLabelAction', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -302,6 +302,8 @@ export function normSettings(s: Settings): Settings {
     hiddenFolders: s.hiddenFolders ?? [],
     autoLabelAccounts: s.autoLabelAccounts ?? [],
     aiCorrectsOff: s.aiCorrectsOff ?? [],
+    junkStaysPut: s.junkStaysPut ?? [],
+    manualLabelActions: s.manualLabelActions ?? false,
     // Not (yet) in the Go Settings struct: fall back to the locally stored value.
     showInTray: s.showInTray ?? readLocal('showInTray', true),
     closeToTray: s.closeToTray ?? readLocal('closeToTray', false),
@@ -521,7 +523,11 @@ export const api = {
       const scores = r.scores ?? (legacy.label ? { [legacy.label]: legacy.confidence ?? 0 } : {})
       return { messageId: r.messageId, added, removed: r.removed ?? [], scores, cost: r.cost ?? 0, error: r.error ?? '', skipped: !!r.skipped }
     }),
-  addLabel: (ids: string[], labelId: string) => call<void>('AddLabel', ids, labelId),
+  /** Returns how many messages the label's "When added" moved (older backends: nothing). */
+  addLabel: async (ids: string[], labelId: string) => (await call<number | void>('AddLabel', ids, labelId)) ?? 0,
+  /** Puts a label back without its "When added" (Undo). Older backends: AddLabel. */
+  restoreLabel: (ids: string[], labelId: string) => (hasMethod('RestoreLabel') ? call<void>('RestoreLabel', ids, labelId) : call<void>('AddLabel', ids, labelId)),
+  applyLabelAction: (labelId: string) => call<number>('ApplyLabelAction', labelId),
   removeLabel: (ids: string[], labelId: string) => call<void>('RemoveLabel', ids, labelId),
   getLabelCounts: async (accountId: string) => (await call<LabelCount[] | null>('GetLabelCounts', accountId)) ?? [],
   /** Label counts within the box a list query shows (older backends: the whole mailbox). */

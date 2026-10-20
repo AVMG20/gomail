@@ -400,6 +400,10 @@ export interface Settings {
   autoLabelAccounts?: string[]
   /** Account ids where the AI never removes imported labels (aiCorrectsProviderLabels is the switch for all mailboxes). */
   aiCorrectsOff?: string[]
+  /** Mailboxes where the Junk label only labels (elsewhere it moves mail to Junk). */
+  junkStaysPut?: string[]
+  /** Labels added by hand also do their "When added" (off: they only label). */
+  manualLabelActions?: boolean
   /** Import Gmail labels / Outlook categories as labels. */
   importProviderLabels: boolean
   /** Native desktop notifications for new mail (backend shows them). */
@@ -472,6 +476,8 @@ export interface ClassificationResult {
   error?: string
   /** Unchanged since the last AI run: stored scores, no cost. */
   skipped?: boolean
+  /** Folder kind a label's "When added" moved it to ('' = it stayed). */
+  moved?: string
 }
 
 export interface LabelCount {

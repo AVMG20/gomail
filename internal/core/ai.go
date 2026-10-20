@@ -379,12 +379,13 @@ func (s *Service) ClassifyMessages(ids []string) ([]models.ClassificationResult,
 		if r.Error != "" {
 			return nil, errors.New(r.Error)
 		}
-		s.moveAILabeled([]models.ClassificationResult{r})
+		results := []models.ClassificationResult{r}
+		s.moveAILabeled(ctx, results)
 		s.messagesChanged(ids)
-		return []models.ClassificationResult{r}, nil
+		return results, nil
 	}
 	results, final := s.runClassification(ctx, selectionJobID, ids, false)
-	s.moveAILabeled(results)
+	s.moveAILabeled(ctx, results)
 	s.emit(models.EventClassifyFinished, final)
 	if final.Error != "" && final.Failed == len(ids) {
 		return results, errors.New(final.Error)
@@ -426,12 +427,14 @@ func (s *Service) ClassifyQuery(q models.ListQuery, onlyUnlabeled, includeAllFol
 	s.goBG(func() {
 		defer cancel()
 		results, final := s.runClassification(ctx, j.id, ids, false)
-		s.moveAILabeled(results)
+		// Moves can take a while on a big job: Cancel still stops them
+		// (ctx), but the job no longer blocks a new one.
 		s.jobs.mu.Lock()
 		if s.jobs.current == j {
 			s.jobs.current = nil
 		}
 		s.jobs.mu.Unlock()
+		s.moveAILabeled(ctx, results)
 		slog.Info("labeling job finished", "job", j.id, "done", final.Done, "labeled", final.Labeled, "failed", final.Failed, "cost", final.Cost)
 		s.emit(models.EventClassifyFinished, final)
 	})
@@ -561,7 +564,7 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 			s.jobs.mu.Unlock()
 		}()
 		results, final := s.runClassification(ctx, autoJobID, todo, true)
-		s.moveAILabeled(results)
+		s.moveAILabeled(ctx, results)
 		s.emit(models.EventClassifyFinished, final)
 	})
 }
@@ -571,7 +574,8 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 // "When added: Junk") moves it to Junk, read; other label actions archive
 // it (see labelactions.go). It only acts on labels Jev added in this run:
 // mail the user took out of Junk isn't moved back by a later run.
-func (s *Service) moveAILabeled(results []models.ClassificationResult) {
+// It sets each result's Moved.
+func (s *Service) moveAILabeled(ctx context.Context, results []models.ClassificationResult) {
 	labels := map[string]models.Label{}
 	for _, l := range s.Settings().Labels {
 		labels[l.ID] = l
@@ -583,13 +587,24 @@ func (s *Service) moveAILabeled(results []models.ClassificationResult) {
 		}
 		for _, id := range r.Added {
 			if l, ok := labels[id]; ok {
-				moves.add(r.MessageID, thenKind(l, true), labelWhy(l, true))
+				moves.add(r.MessageID, l, thenKind(l, true), labelWhy(l, true))
 			}
 		}
 	}
-	if moved := s.applyLabelMoves(moves, "AI label action"); len(moved) > 0 {
-		s.messagesChanged(moved)
+	moved := s.applyLabelMoves(ctx, moves, "AI label action")
+	if len(moved) == 0 {
+		return
 	}
+	kindOf := map[string]string{}
+	for kind, ids := range moved {
+		for _, id := range ids {
+			kindOf[id] = kind
+		}
+	}
+	for i := range results {
+		results[i].Moved = kindOf[results[i].MessageID]
+	}
+	s.messagesChanged(movedIDs(moved))
 }
 
 // mergeIDs returns a followed by the ids of b not in a, at most limit.

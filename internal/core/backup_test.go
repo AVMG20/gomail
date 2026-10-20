@@ -118,7 +118,7 @@ func seedBackupData(t *testing.T, s *Service) seeded {
 			out.aiID, out.aiRemote = m.ID, m.RemoteID
 		}
 	}
-	if err := s.AddLabel([]string{out.manualID}, "side-project"); err != nil {
+	if _, err := s.AddLabel([]string{out.manualID}, "side-project"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RemoveLabel([]string{out.removedID}, out.removedLabel); err != nil {
@@ -287,7 +287,7 @@ func TestBackupMergeIntoExistingInstall(t *testing.T) {
 	if err := dst.s.SaveSettings(st); err != nil {
 		t.Fatal(err)
 	}
-	if err := dst.s.AddLabel([]string{seed.aiID}, "local-only"); err != nil {
+	if _, err := dst.s.AddLabel([]string{seed.aiID}, "local-only"); err != nil {
 		t.Fatal(err)
 	}
 	if err := dst.s.UpdateAccount(demo.GmailAccountID, "My Gmail", "#000000"); err != nil {

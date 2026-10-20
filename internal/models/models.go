@@ -283,9 +283,10 @@ type Label struct {
 	// settings from older versions, which shared labels between mailboxes
 	// (config.SplitLabels gives each mailbox its own copy).
 	AccountIDs []string `json:"accountIds"`
-	// Then is what happens to mail that gets the label (from a rule, Jev
-	// or the user): "" (stays where it is), "archive", "junk" or "trash".
-	// Not used for Junk, which always moves mail to Junk.
+	// Then is what happens to mail that a rule or Jev gives the label (and
+	// the user, with Settings.ManualLabelActions): "" (stays where it is),
+	// "archive", "junk" or "trash". Not used for Junk, which always moves
+	// mail to Junk.
 	Then string `json:"then"`
 }
 
@@ -357,6 +358,13 @@ type Settings struct {
 	AICorrectsProviderLabels bool    `json:"aiCorrectsProviderLabels"` // allow those removals (default true)
 	ClassifyInstructions     string  `json:"classifyInstructions"`     // per-label question template; "" = default. "{label}" is replaced by the label name
 	GrammarSystemPrompt      string  `json:"grammarSystemPrompt"`      // "" = built-in default (see GetDefaultPrompts)
+
+	// JunkStaysPut lists account ids where the built-in Junk label only
+	// labels mail; elsewhere (the default) it moves it to Junk, read.
+	JunkStaysPut []string `json:"junkStaysPut"`
+	// ManualLabelActions: a label added by hand (not by Jev or a rule) also
+	// does what its "When added" says (default off: it only labels).
+	ManualLabelActions bool `json:"manualLabelActions"`
 
 	// LabelRules label (or junk) new mail by simple conditions, without AI.
 	LabelRules []LabelRule `json:"labelRules"`
@@ -453,6 +461,9 @@ type ClassificationResult struct {
 	Cost      float64            `json:"cost"`    // USD
 	Error     string             `json:"error"`   // per-message failure, "" on success
 	Skipped   bool               `json:"skipped"` // unchanged since the last AI run: scores are the stored ones, no cost
+	// Moved is the folder kind a label's "When added" moved the message
+	// to ("" = it stayed), so Undo can move it back.
+	Moved string `json:"moved"`
 }
 
 // Event names emitted to the frontend.

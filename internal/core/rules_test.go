@@ -322,10 +322,10 @@ func TestMutedMailbox(t *testing.T) {
 	}
 }
 
-// Labeling by hand does what the label's "When added" says, like a rule:
-// the built-in Junk label and a label set to Junk move the mail to Junk,
-// read; a label without an action leaves it. The user's own moves aren't
-// in the "sorted for you" review.
+// A label added by hand only labels, unless "Labels you add yourself
+// follow When added" is on: then the built-in Junk label and a label set
+// to Junk move the mail to Junk, read, and a label without an action
+// leaves it. A mailbox where Junk stays put keeps Junk-labeled mail.
 func TestManualLabelMovesMail(t *testing.T) {
 	e := newEnv(t, "")
 	s := e.s
@@ -333,30 +333,91 @@ func TestManualLabelMovesMail(t *testing.T) {
 	saveRules(t, s, nil,
 		models.Label{ID: "spammy", Name: "Spammy", Color: "#f97316", Source: "user", AccountIDs: []string{acct}, Then: "junk"},
 		models.Label{ID: "plain", Name: "Plain", Color: "#22c55e", Source: "user", AccountIDs: []string{acct}})
-	for _, subj := range []string{"By junk label", "By junk action", "No action"} {
+	for _, subj := range []string{"Off by default", "By junk label", "By junk action", "No action", "Junk stays"} {
 		e.demos[acct].Deliver(subj, "someone@example.com")
 	}
 	if err := s.SyncNow(acct); err != nil {
 		t.Fatal(err)
 	}
 	spam, _ := s.store.FolderByKind(acct, models.FolderSpam)
-	for subj, label := range map[string]string{"By junk label": "junk", "By junk action": "spammy", "No action": "plain"} {
+	label := func(subj, label string, wantMoved bool) {
+		t.Helper()
 		m, ok := labelsOf(t, e, acct, subj)
 		if !ok {
 			t.Fatalf("%q not synced", subj)
 		}
-		if err := s.AddLabel([]string{m.ID}, label); err != nil {
+		n, err := s.AddLabel([]string{m.ID}, label)
+		if err != nil {
 			t.Fatal(err)
 		}
 		m, _ = labelsOf(t, e, acct, subj)
-		if inSpam := has(m.FolderIDs, spam.ID); inSpam != (label != "plain") {
-			t.Fatalf("%q with %s: in Junk %v (%v)", subj, label, inSpam, m.FolderIDs)
+		if inSpam := has(m.FolderIDs, spam.ID); inSpam != wantMoved || (n == 1) != wantMoved {
+			t.Fatalf("%q with %s: in Junk %v, moved %d", subj, label, inSpam, n)
 		}
-		if label != "plain" && m.Unread {
+		if wantMoved && m.Unread {
 			t.Fatalf("%q moved to Junk unread", subj)
 		}
 	}
-	if moves, _ := s.AutoMoves(acct, models.FolderSpam, 24); len(moves) != 0 {
-		t.Fatalf("manual moves in the review: %+v", moves)
+	label("Off by default", "junk", false)
+
+	st := s.Settings()
+	st.ManualLabelActions = true
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	label("By junk label", "junk", true)
+	label("By junk action", "spammy", true)
+	label("No action", "plain", false)
+
+	st = s.Settings()
+	st.JunkStaysPut = []string{acct}
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	label("Junk stays", "junk", false)
+}
+
+// A label's "When added" set after the fact can be applied to the mail
+// that already has it, once.
+func TestApplyLabelAction(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	acct := demo.OutlookAccountID
+	saveRules(t, s, nil, models.Label{ID: "promo", Name: "Promo", Color: "#f97316", Source: "user", AccountIDs: []string{acct}})
+	for _, subj := range []string{"Sale one", "Sale two"} {
+		e.demos[acct].Deliver(subj, "shop@example.com")
+	}
+	if err := s.SyncNow(acct); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, subj := range []string{"Sale one", "Sale two"} {
+		m, _ := labelsOf(t, e, acct, subj)
+		ids = append(ids, m.ID)
+	}
+	if _, err := s.AddLabel(ids, "promo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyLabelAction("promo"); err == nil {
+		t.Fatal("applied a label without an action")
+	}
+	st := s.Settings()
+	for i := range st.Labels {
+		if st.Labels[i].ID == "promo" {
+			st.Labels[i].Then = "junk"
+		}
+	}
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.ApplyLabelAction("promo"); err != nil || n != 2 {
+		t.Fatalf("applied to %d (%v), want 2", n, err)
+	}
+	spam, _ := s.store.FolderByKind(acct, models.FolderSpam)
+	if m, _ := labelsOf(t, e, acct, "Sale two"); !has(m.FolderIDs, spam.ID) {
+		t.Fatalf("not in Junk: %v", m.FolderIDs)
+	}
+	if n, _ := s.ApplyLabelAction("promo"); n != 0 {
+		t.Fatalf("second run moved %d", n)
 	}
 }
