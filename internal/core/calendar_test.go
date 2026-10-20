@@ -579,7 +579,6 @@ func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
 		return n
 	}
 	old := nowFunc
-	defer func() { nowFunc = old }()
 	remindAt := func(ev models.CalendarEvent) {
 		nowFunc = func() time.Time { return ev.Start.Add(-9 * time.Minute) }
 		s.checkReminders()
@@ -663,7 +662,9 @@ func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
 	if _, err := s.CreateEvent(models.EventInput{AccountID: demo.OutlookAccountID, Title: "x", Start: time.Now()}); err == nil {
 		t.Fatal("created an event in a disabled calendar")
 	}
-	// Re-enabling syncs right away.
+	// Re-enabling syncs right away (in the background: restore the clock
+	// first).
+	nowFunc = old
 	if err := s.SetAccountCalendarEnabled(demo.OutlookAccountID, true); err != nil {
 		t.Fatal(err)
 	}

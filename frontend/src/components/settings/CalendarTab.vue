@@ -3,11 +3,17 @@ import { computed } from 'vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { DURATION_CHOICES, formatReminder, localeWeekStart, REMINDER_CHOICES } from '@/lib/calendar'
+import AccountAvatar from '@/components/common/AccountAvatar.vue'
+import { Button } from '@/components/ui/button'
+import { useAccountsStore } from '@/stores/accounts'
+import { useCalendarStore } from '@/stores/calendar'
 import { useSettingsStore } from '@/stores/settings'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 
 const settings = useSettingsStore()
+const accounts = useAccountsStore()
+const cal = useCalendarStore()
 const s = computed(() => settings.settings!)
 const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US'
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -66,6 +72,28 @@ const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floo
       <SettingRow title="Event reminders" description="Show a desktop notification before events start.">
         <Switch :model-value="s.calendarNotifications !== false" @update:model-value="(v: boolean) => settings.update({ calendarNotifications: v })" />
       </SettingRow>
+    </SettingSection>
+    <SettingSection title="Mailboxes" description="A disabled calendar doesn’t sync and sends no reminders; turning reminders off keeps its events visible.">
+      <div v-for="a in accounts.accounts" :key="a.id" class="flex items-center gap-3 py-2">
+        <AccountAvatar :account="a" :size="22" :glyph="false" />
+        <span class="min-w-0 flex-1 truncate text-sm" :title="a.email">{{ a.email }}</span>
+        <Button v-if="a.calendarConsent === false" variant="outline" size="sm" :disabled="cal.connecting === a.id" @click="cal.connect(a.id)">Connect</Button>
+        <template v-else>
+          <label class="text-muted-foreground flex items-center gap-2 text-xs">
+            Enabled
+            <Switch :model-value="a.calendarEnabled !== false" :aria-label="`Calendar enabled for ${a.email}`" @update:model-value="(v: boolean) => cal.setAccountEnabled(a.id, v, false)" />
+          </label>
+          <label class="text-muted-foreground flex items-center gap-2 text-xs">
+            Reminders
+            <Switch
+              :model-value="!a.calendarMuted"
+              :disabled="a.calendarEnabled === false"
+              :aria-label="`Reminders for ${a.email}`"
+              @update:model-value="(v: boolean) => cal.setAccountMuted(a.id, !v)"
+            />
+          </label>
+        </template>
+      </div>
     </SettingSection>
   </div>
 </template>
