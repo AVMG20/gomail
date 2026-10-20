@@ -1,23 +1,34 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { ArchiveIcon, MailIcon, MailOpenIcon, OctagonAlertIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, TagsIcon } from '@lucide/vue'
+import { computed, onBeforeUnmount } from 'vue'
+import { ArchiveIcon, InboxIcon, MailIcon, MailOpenIcon, OctagonAlertIcon, SparklesIcon, StarIcon, TagIcon, Trash2Icon, XIcon, TagsIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import Tip from '@/components/common/Tip.vue'
 import LabelMenuItems from './LabelMenuItems.vue'
 import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
+import { useSettingsStore } from '@/stores/settings'
+import { useUiStore } from '@/stores/ui'
 
 const mail = useMailStore()
 const ai = useAiStore()
+const ui = useUiStore()
+const settings = useSettingsStore()
 
 // "Select all in this view" covers rows that never loaded: go by the view's unread count.
 const anyUnread = computed(() => (mail.selectAllQuery ? mail.viewUnreadCount > 0 : [...mail.selection].some((id) => mail.byId.get(id)?.unread)))
-// Unloaded rows' stars are unknown: with "all in this view" offer Star, except in Starred itself.
-const allStarred = computed(() => (mail.selectAllQuery ? mail.mailbox.kind === 'starred' : mail.selection.size > 0 && [...mail.selection].every((id) => mail.byId.get(id)?.starred)))
+// Star unless every selected row is starred (see mail.shouldStar).
+const star = computed(() => mail.shouldStar([...mail.selection], mail.selectAllQuery))
+// The "Add label" menu's open state lives in the ui store (shortcut "l"): don't reopen it with the next selection.
+onBeforeUnmount(() => (ui.bulkLabelOpen = false))
+/** "Remove label" offers the labels the selected mail has (every label for "all in this view"). */
+const presentLabels = computed(() => {
+  if (mail.selectAllQuery) return null
+  const have = new Set([...mail.selection].flatMap((id) => mail.byId.get(id)?.labels ?? []))
+  return settings.labels.filter((l) => have.has(l.id))
+})
 
-
-// run() clears the selection before fn runs, so toggles capture anyUnread/allStarred at click time.
+// run() clears the selection before fn runs, so toggles capture anyUnread/star at click time.
 async function run(fn: (ids: string[]) => Promise<void> | void) {
   const ids = await mail.targetIds()
   mail.clearSelection()
@@ -33,17 +44,6 @@ function toggleRead(read: boolean) {
   return run((ids) => mail.setRead(ids, read))
 }
 
-async function labelWithAi() {
-  if (mail.selectAllQuery) {
-    ai.requestBulk({ query: { ...mail.query, cursor: '' }, ids: [], title: `${mail.total.toLocaleString()} messages in ${mail.mailboxName}` })
-  } else {
-    const ids = [...mail.selection]
-    if (ids.length <= 3) {
-      mail.clearSelection()
-      await ai.labelMessages(ids)
-    } else ai.requestBulk({ query: null, ids, title: `${ids.length} selected messages` })
-  }
-}
 </script>
 
 <template>
@@ -52,16 +52,17 @@ async function labelWithAi() {
     <span class="mr-1 shrink-0 pl-1 text-sm font-medium whitespace-nowrap tabular-nums @[480px]:mr-2">{{ mail.selectionCount.toLocaleString() }}<span class="sr-only @[480px]:not-sr-only"> selected</span></span>
     <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="run(mail.archive)"><ArchiveIcon /></Button></Tip>
     <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="run(mail.trash)"><Trash2Icon /></Button></Tip>
-    <Tip v-if="mail.mailbox.kind !== 'spam'" label="Move to Junk"><Button variant="ghost" size="icon-sm" aria-label="Move to Junk" @click="run(mail.junk)"><OctagonAlertIcon /></Button></Tip>
-    <Tip :label="anyUnread ? 'Mark as read' : 'Mark as unread'">
+    <Tip v-if="mail.mailbox.kind !== 'spam'" label="Move to Junk" shortcut="!"><Button variant="ghost" size="icon-sm" aria-label="Move to Junk" @click="run(mail.junk)"><OctagonAlertIcon /></Button></Tip>
+    <Tip v-else label="Not junk" shortcut="!"><Button variant="ghost" size="icon-sm" aria-label="Not junk" @click="run(mail.notJunk)"><InboxIcon /></Button></Tip>
+    <Tip :label="anyUnread ? 'Mark as read' : 'Mark as unread'" :shortcut="anyUnread ? 'shift+i' : 'u'">
       <Button variant="ghost" size="icon-sm" :aria-label="anyUnread ? 'Mark as read' : 'Mark as unread'" @click="toggleRead(anyUnread)">
         <MailOpenIcon v-if="anyUnread" /><MailIcon v-else />
       </Button>
     </Tip>
-    <Tip :label="allStarred ? 'Unstar' : 'Star'"><Button variant="ghost" size="icon-sm" aria-label="Star" @click="((star) => run((ids) => mail.setStarred(ids, star)))(!allStarred)"><StarIcon /></Button></Tip>
-    <DropdownMenu>
+    <Tip :label="star ? 'Star' : 'Unstar'" shortcut="s"><Button variant="ghost" size="icon-sm" :aria-label="star ? 'Star' : 'Unstar'" @click="((on) => run((ids) => mail.setStarred(ids, on)))(star)"><StarIcon :class="!star && 'fill-amber-400 text-amber-400'" /></Button></Tip>
+    <DropdownMenu v-model:open="ui.bulkLabelOpen">
       <DropdownMenuTrigger as-child>
-        <Tip label="Add label"><Button variant="ghost" size="icon-sm" aria-label="Add label"><TagIcon /></Button></Tip>
+        <Tip label="Add label" shortcut="l"><Button variant="ghost" size="icon-sm" aria-label="Add label"><TagIcon /></Button></Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" class="w-52">
         <DropdownMenuLabel class="text-muted-foreground text-xs">Add label</DropdownMenuLabel>
@@ -74,11 +75,11 @@ async function labelWithAi() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" class="w-52">
         <DropdownMenuLabel class="text-muted-foreground text-xs">Remove label</DropdownMenuLabel>
-        <LabelMenuItems :account-ids="mail.selectionAccountIds" @pick="(id) => run((ids) => mail.removeLabel(ids, id))" />
+        <LabelMenuItems :account-ids="mail.selectionAccountIds" :only="presentLabels ?? undefined" empty-text="No labels on this mail" @pick="(id) => run((ids) => mail.removeLabel(ids, id))" />
       </DropdownMenuContent>
     </DropdownMenu>
     <Tip label="Label with AI">
-      <Button variant="ghost" size="sm" class="gap-1.5 px-2" aria-label="Label with AI" @click="labelWithAi">
+      <Button variant="ghost" size="sm" class="gap-1.5 px-2" aria-label="Label with AI" @click="ai.labelSelection()">
         <SparklesIcon class="text-violet-500" /> <span class="hidden text-xs @[460px]:inline">Label with AI</span>
       </Button>
     </Tip>

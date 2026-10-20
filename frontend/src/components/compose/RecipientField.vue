@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api, hasMethod } from '@/lib/api'
 import { XIcon } from '@lucide/vue'
-import { displayName, isEmail, parseAddress, splitAddressList } from '@/lib/format'
+import { displayName, formatAddress, isEmail, parseAddress, splitAddressList } from '@/lib/format'
 import type { Address } from '@/lib/types'
 import { useMailStore } from '@/stores/mail'
 
@@ -44,8 +44,11 @@ onBeforeUnmount(() => {
   // Minimising the window (Esc) or opening another one unmounts the field: keep what was typed.
   if (text.value.trim()) commit()
 })
+/** Esc hid the suggestions; typing shows them again. */
+const dismissed = ref(false)
+watch(text, () => (dismissed.value = false))
 const suggestions = computed(() => {
-  if (!text.value.trim()) return []
+  if (!text.value.trim() || dismissed.value) return []
   const taken = new Set(model.value.map((a) => a.email.toLowerCase()))
   const seen = new Set<string>()
   return [...remote.value, ...mail.suggestAddresses(text.value, 7)].filter((a) => {
@@ -119,8 +122,9 @@ function onKey(e: KeyboardEvent) {
   } else if (e.key === 'Backspace' && !text.value && model.value.length) {
     model.value = model.value.slice(0, -1)
   } else if (e.key === 'Escape' && suggestions.value.length) {
+    // Close the suggestions, keep what was typed (a second Esc minimises the window).
     e.stopPropagation()
-    text.value = ''
+    dismissed.value = true
   }
 }
 
@@ -141,6 +145,15 @@ function onBlur() {
   }, 150)
 }
 
+/** Double-click a chip to correct it: it goes back into the text box. */
+function editChip(a: Address) {
+  if (text.value.trim()) commit()
+  model.value = model.value.filter((x) => x !== a)
+  // A name with a comma is quoted, so it isn't split into two addresses again.
+  text.value = !a.name ? a.email : /[,;"]/.test(a.name) ? `"${a.name.replace(/"/g, '')}" <${a.email}>` : formatAddress(a)
+  input.value?.focus()
+}
+
 /** Turn typed text into chips now (before send/save, which only read chips). */
 defineExpose({ focus: () => input.value?.focus(), commit })
 </script>
@@ -152,7 +165,8 @@ defineExpose({ focus: () => input.value?.focus(), commit })
       v-for="a in model"
       :key="a.email"
       :class="['bg-muted inline-flex h-6 max-w-60 items-center gap-1 rounded-full pr-1 pl-2.5 text-xs', !isEmail(a.email) && 'bg-destructive/10 text-destructive ring-destructive/30 ring-1']"
-      :title="isEmail(a.email) ? a.email : `${a.email} is not a valid address`"
+      :title="isEmail(a.email) ? `${a.email} · double-click to edit` : `${a.email} is not a valid address · double-click to fix it`"
+      @dblclick.stop="editChip(a)"
     >
       <span class="truncate">{{ displayName(a) }}</span>
       <button type="button" class="text-muted-foreground hover:text-foreground rounded-full p-0.5" :aria-label="`Remove ${a.email}`" @click.stop="model = model.filter((x) => x !== a)">

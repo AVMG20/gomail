@@ -23,7 +23,7 @@ import { AiPending, clearArrived, clearPending, markArrived, pendingRange, setPe
 import { Signature, setSignature } from './signature'
 
 const props = defineProps<{ modelValue: string; version: number; placeholder?: string }>()
-const emit = defineEmits<{ 'update:modelValue': [html: string]; submit: [] }>()
+const emit = defineEmits<{ 'update:modelValue': [html: string]; submit: []; files: [files: File[]] }>()
 const settings = useSettingsStore()
 function openAiSettings() {
   void import('@/stores/ui').then((m) => m.useUiStore().openSettings('ai'))
@@ -54,6 +54,14 @@ const editor = useEditor({
         return true
       }
       return false
+    },
+    // Pasted files (a screenshot, files copied in the file manager) are attached: the editor
+    // can't hold images. Rich text that comes with a picture of itself (Word) pastes as text.
+    handlePaste(_view, e) {
+      const files = Array.from(e.clipboardData?.files ?? [])
+      if (!files.length || e.clipboardData?.types.includes('text/html')) return false
+      emit('files', files)
+      return true
     },
   },
   onUpdate({ editor: ed }) {
