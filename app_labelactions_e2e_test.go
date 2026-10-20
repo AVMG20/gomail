@@ -81,17 +81,23 @@ func TestLabelActionsMoveNewMail(t *testing.T) {
 	if e.graph.FolderOf(plain) != "inbox" {
 		t.Errorf("plain mail moved to %s", e.graph.FolderOf(plain))
 	}
-	// The review lists what was sorted where, and why.
+	// The review lists what was sorted where, and why (Jev's background run
+	// records its moves just after making them).
 	reasons := map[string]string{}
-	for _, kind := range []string{models.FolderArchive, models.FolderSpam, models.FolderTrash} {
-		moves, err := m.AutoMoves(oa.ID, kind, 24)
-		if err != nil {
-			t.Fatal(err)
+	review := func() map[string]string {
+		reasons = map[string]string{}
+		for _, kind := range []string{models.FolderArchive, models.FolderSpam, models.FolderTrash} {
+			moves, err := m.AutoMoves(oa.ID, kind, 24)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, mv := range moves {
+				reasons[mv.Subject] = mv.To + ": " + mv.Reason
+			}
 		}
-		for _, mv := range moves {
-			reasons[mv.Subject] = mv.To + ": " + mv.Reason
-		}
+		return reasons
 	}
+	eventually(t, "moves in the review", func() bool { return len(review()) >= 3 })
 	want := map[string]string{
 		"Weekly digest":    "archive: Your rule labeled it “Newsletters”",
 		"Coupons":          "trash: Your rule labeled it “Promotions”",
