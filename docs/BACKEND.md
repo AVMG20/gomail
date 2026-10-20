@@ -377,10 +377,12 @@ so their `<style>` rules cannot affect the app.
 
 ## Calendar
 
-One unified calendar shows the events of every account. Each account has a
-toggle (`SetAccountCalendarEnabled`, stored as `Account.calendarEnabled`,
-default true), and each calendar has its own (`SetCalendarVisible`). Turning
-an account off hides its events and stops syncing its calendars.
+One unified calendar shows the events of every account. Each calendar
+has a visibility switch (`SetCalendarVisible`). `ListEvents` lists the
+visible calendars of accounts with calendar access. Hidden calendars keep
+syncing so showing them again is instant. The exception is an account with
+every calendar hidden: it isn't synced, and showing one of its calendars
+syncs the account right away.
 
 **Access.** New sign-ins request calendar access as well: Google
 `https://www.googleapis.com/auth/calendar` and Microsoft
@@ -422,6 +424,20 @@ is a full fetch.
   - pop-up reminders (Google calendar defaults are applied);
   - `canEdit`.
 - Cancelled events are removed.
+- **Video calls**: `Calendar.videoCallProvider` is `meet`, `teams`,
+  `skype` (personal Microsoft accounts that only allow Skype) or `""`.
+  - With `EventInput.addVideoCall`, Google gets a Meet link
+    (`conferenceData.createRequest`, `hangoutsMeet`,
+    `conferenceDataVersion=1`) and Graph gets an online meeting
+    (`isOnlineMeeting` with `teamsForBusiness`/`skypeForConsumer`, from
+    the calendar's `allowedOnlineMeetingProviders`). An existing call is
+    kept. Without a provider, the request is refused.
+  - A typed `EventInput.meetingUrl` (https only) goes into the location
+    when that is empty; otherwise "Join: <url>" is put in front of the
+    description.
+  - `meetingUrl` is read from conference data, or else detected in the
+    location or description (Zoom, Meet, Teams, Webex, GoTo, Whereby,
+    Jitsi, Chime, BlueJeans).
 
 **Changes** are optimistic, like mail: the local cache changes first and is
 restored if the provider refuses.
@@ -459,8 +475,7 @@ restored if the provider refuses.
 
 **Reminders.**
 - With `calendarNotifications` (default true), a desktop notification
-  appears for each reminder of upcoming events of enabled accounts and
-  visible calendars. The event's own reminders are used, else
+  appears for each reminder of upcoming events of visible calendars. The event's own reminders are used, else
   `calendarDefaultReminder` (default 10 minutes).
 - Declined and cancelled events are skipped. All-day events count from
   local midnight.

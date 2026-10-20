@@ -38,6 +38,7 @@ const currentAccount = computed(() => (current.value ? accounts.accountMap.get(c
           <span class="flex items-center gap-2">
             <span class="size-2.5 shrink-0 rounded-full" :style="{ background: c.color }" />
             {{ c.name }}
+            <span v-if="!c.visible" class="text-muted-foreground text-[11px]">hidden</span>
           </span>
         </SelectItem>
       </SelectGroup>

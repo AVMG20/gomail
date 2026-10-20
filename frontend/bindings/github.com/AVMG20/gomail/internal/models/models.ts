@@ -85,12 +85,6 @@ export interface Account {
      * Accounts added before calendar support need EnableCalendar.
      */
     "calendarConsent": boolean;
-
-    /**
-     * CalendarEnabled is the per-account calendar toggle (default true).
-     * Events are shown and synced only with consent and this on.
-     */
-    "calendarEnabled": boolean;
 }
 
 /**
@@ -188,6 +182,13 @@ export interface Calendar {
      * shown in the unified view (SetCalendarVisible)
      */
     "visible": boolean;
+
+    /**
+     * VideoCallProvider is what EventInput.addVideoCall creates here:
+     * "meet" (Google Meet), "teams" (Microsoft Teams), "skype" (personal
+     * Microsoft accounts that only allow Skype) or "" (not supported).
+     */
+    "videoCallProvider": string;
 }
 
 /**
@@ -475,6 +476,19 @@ export interface EventInput {
      * nil = calendar default
      */
     "reminderMinutes": number[] | null;
+
+    /**
+     * AddVideoCall creates a meeting link with the calendar's
+     * videoCallProvider (Meet/Teams); an existing one is kept.
+     */
+    "addVideoCall": boolean;
+
+    /**
+     * MeetingURL is a link the user typed (Zoom, Webex, ...). Providers have
+     * no field for it: it goes into the location when that is empty, else
+     * "Join: <url>" is put in front of the description.
+     */
+    "meetingUrl": string;
 }
 
 /**

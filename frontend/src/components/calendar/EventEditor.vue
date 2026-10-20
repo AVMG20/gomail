@@ -2,7 +2,7 @@
 // Full event editor: title, all-day, start/end, time zone (collapsed), repeat,
 // location, meeting link, guests, reminders, description and calendar.
 import { computed, ref, watch } from 'vue'
-import { BellIcon, ChevronDownIcon, ClockIcon, GlobeIcon, LinkIcon, MapPinIcon, RepeatIcon, TextIcon, UsersIcon, XIcon } from '@lucide/vue'
+import { BellIcon, ChevronDownIcon, ClockIcon, GlobeIcon, LinkIcon, MapPinIcon, RepeatIcon, TextIcon, UsersIcon, VideoIcon, XIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -58,6 +58,11 @@ const defaultReminder = settings.settings?.calendarDefaultReminder ?? 10
 const reminders = ref<number[]>(base.reminders ? [...base.reminders] : defaultReminder >= 0 ? [defaultReminder] : [])
 const description = ref(base.description ?? '')
 const calendarId = ref(base.calendarId && cal.writableCalendars.some((c) => c.id === base.calendarId) ? base.calendarId : cal.defaultCalendar)
+const addVideo = ref(false)
+const videoProvider = computed(() => cal.calendarMap.get(calendarId.value)?.videoCallProvider ?? '')
+const videoLabel = computed(() => (videoProvider.value === 'teams' ? 'Teams meeting' : videoProvider.value === 'meet' ? 'Google Meet' : 'video call'))
+/** The event already has a Meet/Teams link from the provider. */
+const providerLink = computed(() => /^https:\/\/(meet\.google\.com|teams\.microsoft\.com|teams\.live\.com)\//i.test(meetingUrl.value.trim()))
 const saving = ref(false)
 const error = ref('')
 
@@ -109,8 +114,8 @@ function buildInput(): EventInput | null {
     location: location.value.trim(),
     description: description.value,
     attendees: guests.value.map((g) => ({ name: g.name, email: g.email, response: keep.get(g.email.toLowerCase()) ?? 'needsAction' })),
-    // Unchanged links of existing events stay where the provider keeps them (conference data).
-    meetingUrl: !isNew && meetingUrl.value.trim() === (ev?.meetingUrl ?? '') ? '' : meetingUrl.value.trim(),
+    meetingUrl: meetingUrl.value.trim(),
+    addVideoCall: addVideo.value && !!videoProvider.value && !providerLink.value,
     recurrence: buildRRule({ freq: freq.value, until: until.value, byDay: rule0.freq === freq.value ? rule0.byDay : undefined }),
     reminders: [...reminders.value].sort((a, b) => a - b),
   }
@@ -247,9 +252,21 @@ function addReminder(v: unknown) {
           <MapPinIcon class="text-muted-foreground size-4 shrink-0" />
           <Input v-model="location" placeholder="Add a location" aria-label="Location" class="h-8 text-sm" :disabled="readOnly" />
         </div>
+        <!-- Video call: the calendar's own provider (Meet/Teams) as a toggle; any other link as text. -->
+        <div v-if="videoProvider && !providerLink" class="flex items-center gap-3">
+          <VideoIcon class="text-muted-foreground size-4 shrink-0" />
+          <label class="flex items-center gap-2 text-sm"><Switch v-model="addVideo" :disabled="readOnly" :aria-label="`Add ${videoLabel}`" /> Add {{ videoLabel }}</label>
+        </div>
         <div class="flex items-center gap-3">
           <LinkIcon class="text-muted-foreground size-4 shrink-0" />
-          <Input v-model="meetingUrl" type="url" placeholder="Meeting link (Teams, Meet, Zoom…)" aria-label="Meeting link" class="h-8 text-sm" :disabled="readOnly" />
+          <Input
+            v-model="meetingUrl"
+            type="url"
+            :placeholder="videoProvider ? 'Other meeting link (Zoom, Webex…)' : 'Meeting link (Zoom, Teams, Meet…)'"
+            aria-label="Meeting link"
+            class="h-8 text-sm"
+            :disabled="readOnly || (addVideo && !providerLink)"
+          />
         </div>
 
         <!-- Guests -->

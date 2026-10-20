@@ -11,6 +11,7 @@ import (
 	"github.com/AVMG20/gomail/internal/httpx"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/secrets"
+	"github.com/AVMG20/gomail/internal/store"
 )
 
 func findEvent(evs []models.CalendarEvent, title string) (models.CalendarEvent, bool) {
@@ -83,22 +84,52 @@ func TestDemoCalendarSyncAndViews(t *testing.T) {
 		}
 	}
 	_ = s.SetCalendarVisible(work.ID, true)
-	if err := s.SetAccountCalendarEnabled(demo.OutlookAccountID, false); err != nil {
-		t.Fatal(err)
+	// All calendars of an account hidden: nothing listed, no calendar sync;
+	// showing one again syncs right away.
+	var outlookCals []models.Calendar
+	for _, c := range cals {
+		if c.AccountID == demo.OutlookAccountID {
+			outlookCals = append(outlookCals, c)
+			if err := s.SetCalendarVisible(c.ID, false); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	evs3, _ := s.ListEvents(from, to)
 	for _, ev := range evs3 {
 		if ev.AccountID == demo.OutlookAccountID {
-			t.Fatal("disabled account's events listed")
+			t.Fatal("hidden account's events listed")
 		}
 	}
-	if a, _ := s.store.Account(demo.OutlookAccountID); a.CalendarEnabled {
-		t.Fatal("not stored")
+	if !s.allHidden(demo.OutlookAccountID) || s.allHidden(demo.GmailAccountID) {
+		t.Fatal("allHidden")
 	}
-	if _, err := s.CreateEvent(models.EventInput{AccountID: demo.OutlookAccountID, Title: "x", Start: time.Now()}); err == nil {
-		t.Fatal("created an event on a disabled calendar")
+	var team models.Calendar
+	for _, c := range outlookCals {
+		if !c.Primary {
+			team = c
+		}
 	}
-	_ = s.SetAccountCalendarEnabled(demo.OutlookAccountID, true)
+	// Remove the team calendar's events locally; only a sync brings them back.
+	teamRow, _ := s.store.Calendar(team.ID)
+	_, _ = s.store.ApplyEvents(teamRow, store.EventChanges{Replace: true, Start: from.AddDate(-1, 0, 0), End: to.AddDate(1, 0, 0)})
+	_ = s.syncCalendars(context.Background(), demo.OutlookAccountID) // skipped: all hidden
+	if n := countCal(t, s, team.ID, from, to); n != 0 {
+		t.Fatalf("hidden account synced: %d", n)
+	}
+	if err := s.SetCalendarVisible(team.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for countCal(t, s, team.ID, from, to) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("showing a calendar didn't sync the account")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for _, c := range outlookCals {
+		_ = s.SetCalendarVisible(c.ID, true)
+	}
 	if _, err := s.ListEvents(to, from); err == nil {
 		t.Fatal("inverted range accepted")
 	}
@@ -476,5 +507,56 @@ func TestCalendarOptimisticReverts(t *testing.T) {
 	}
 	if a, _ := s.store.Account(din.AccountID); a.CalendarConsent {
 		t.Fatal("consent kept")
+	}
+}
+
+func countCal(t *testing.T, s *Service, calID string, from, to time.Time) int {
+	t.Helper()
+	evs, err := s.ListEvents(from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, ev := range evs {
+		if ev.CalendarID == calID {
+			n++
+		}
+	}
+	return n
+}
+
+func TestDemoVideoCalls(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	cals, _ := s.ListCalendars()
+	for _, c := range cals {
+		want := "meet"
+		if c.AccountID == demo.OutlookAccountID {
+			want = "teams"
+		}
+		if c.VideoCallProvider != want {
+			t.Fatalf("%s provider %q", c.Name, c.VideoCallProvider)
+		}
+	}
+	start := time.Now().Add(24 * time.Hour).Truncate(time.Hour)
+	ev, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, Title: "Meet me", Start: start, AddVideoCall: true})
+	if err != nil || !strings.HasPrefix(ev.MeetingURL, "https://meet.google.com/") {
+		t.Fatalf("meet %+v %v", ev, err)
+	}
+	ev, err = s.CreateEvent(models.EventInput{AccountID: demo.OutlookAccountID, Title: "Teams", Start: start, AddVideoCall: true})
+	if err != nil || !strings.HasPrefix(ev.MeetingURL, "https://teams.microsoft.com/") {
+		t.Fatalf("teams %+v %v", ev, err)
+	}
+	// A typed link: in the location when that is empty, read back as the meeting URL.
+	ev, err = s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, Title: "Zoom", Start: start, MeetingURL: "https://zoom.us/j/42"})
+	if err != nil || ev.MeetingURL != "https://zoom.us/j/42" || ev.Location != "https://zoom.us/j/42" {
+		t.Fatalf("zoom %+v %v", ev, err)
+	}
+	up, err := s.UpdateEvent(ev.ID, models.EventInput{Title: "Zoom", Start: start, Location: "Room 2", MeetingURL: "https://zoom.us/j/42"}, models.ScopeThis)
+	if err != nil || up.Location != "Room 2" || !strings.HasPrefix(up.Description, "Join: https://zoom.us/j/42") || up.MeetingURL != "https://zoom.us/j/42" {
+		t.Fatalf("zoom update %+v %v", up, err)
+	}
+	if _, err := s.CreateEvent(models.EventInput{AccountID: demo.GmailAccountID, Title: "bad", Start: start, MeetingURL: "http://zoom.us/j/1"}); err == nil {
+		t.Fatal("http link accepted")
 	}
 }

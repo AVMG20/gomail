@@ -1,6 +1,7 @@
 package calendar
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -123,5 +124,40 @@ func TestAttendeeValidation(t *testing.T) {
 		if NormalizeInput(&in) == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestMeetingLinks(t *testing.T) {
+	ev := FromInput(models.EventInput{Title: "x", MeetingURL: "https://zoom.us/j/123"})
+	if ev.Location != "https://zoom.us/j/123" || ev.Description != "" || ev.MeetingURL != "https://zoom.us/j/123" {
+		t.Fatalf("empty location: %+v", ev)
+	}
+	ev = FromInput(models.EventInput{Title: "x", Location: "Room 1", Description: "Agenda", MeetingURL: "https://zoom.us/j/123"})
+	if ev.Location != "Room 1" || ev.Description != "Join: https://zoom.us/j/123\n\nAgenda" {
+		t.Fatalf("with location: %+v", ev)
+	}
+	ev = FromInput(models.EventInput{Title: "x", Location: "Room 1", Description: "Join: https://zoom.us/j/123", MeetingURL: "https://zoom.us/j/123"})
+	if strings.Count(ev.Description, "zoom.us") != 1 {
+		t.Fatalf("duplicated link: %q", ev.Description)
+	}
+	for _, bad := range []string{"http://zoom.us/j/1", "javascript:alert(1)", "https://x y", "zoom.us/j/1"} {
+		in := models.EventInput{Start: time.Now(), MeetingURL: bad}
+		if NormalizeInput(&in) == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	for text, want := range map[string]string{
+		"Join: https://us02web.zoom.us/j/8765?pwd=abc.":                                         "https://us02web.zoom.us/j/8765?pwd=abc",
+		"Click https://teams.microsoft.com/l/meetup-join/19%3a, or dial":                        "https://teams.microsoft.com/l/meetup-join/19%3a",
+		"(https://acme.webex.com/meet/bob)":                                                     "https://acme.webex.com/meet/bob",
+		"https://meet.google.com/abc-defg-hij":                                                  "https://meet.google.com/abc-defg-hij",
+		"see https://example.com/zoom.us/j/1 and http://zoom.us/j/2 or https://evilzoom.us/j/3": "",
+	} {
+		if got := DetectMeetingURL("", text); got != want {
+			t.Errorf("DetectMeetingURL(%q) = %q, want %q", text, got, want)
+		}
+	}
+	if DetectMeetingURL("https://zoom.us/j/1", "https://meet.google.com/x") != "https://zoom.us/j/1" {
+		t.Fatal("location first")
 	}
 }

@@ -377,13 +377,6 @@ export function SendMessage(req: models$0.ComposeRequest): $CancellablePromise<v
 }
 
 /**
- * SetAccountCalendarEnabled turns an account's calendars on or off.
- */
-export function SetAccountCalendarEnabled(accountID: string, enabled: boolean): $CancellablePromise<void> {
-    return $Call.ByID(3272576564, accountID, enabled);
-}
-
-/**
  * SetCalendarVisible shows or hides one calendar in the unified view.
  */
 export function SetCalendarVisible(calendarID: string, visible: boolean): $CancellablePromise<void> {

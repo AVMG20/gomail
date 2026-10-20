@@ -77,6 +77,8 @@ class MockBackend {
       if (work) work.needsReauth = true
     }
     for (const a of this.accounts) this.remoteOlder.set(a.id, 2)
+    // Test flag for the "Connect calendar" flow: ?calconsent=none
+    if (this.cal.noConsentFlag()) for (const a of this.accounts) a.calendarConsent = false
   }
 
   // ---------------------------------------------------------------- events
@@ -568,28 +570,18 @@ class MockBackend {
     this.cal.setVisible(id, visible)
   }
 
-  async SetAccountCalendarEnabled(accountId: string, enabled: boolean): Promise<void> {
-    await latency(20, 60)
-    const a = this.accounts.find((x) => x.id === accountId)
-    if (!a) throw new Error('account not found')
-    a.calendarEnabled = enabled
-    this.emit('accounts:changed', { accountId })
-    this.emit('calendar:changed', { accountId })
-  }
-
   async EnableCalendar(accountId: string): Promise<void> {
     await sleep(1200) // the OAuth round trip
     const a = this.accounts.find((x) => x.id === accountId)
     if (!a) throw new Error('account not found')
     a.calendarConsent = true
-    a.calendarEnabled = true
     this.cal.connect(accountId)
     this.emit('accounts:changed', { accountId })
   }
 
   async ListEvents(start: string, end: string): Promise<CalendarEvent[]> {
     await latency(60, 160)
-    const ok = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent && a.calendarEnabled).map((a) => a.id))
+    const ok = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent).map((a) => a.id))
     return this.cal.list(start, end, ok)
   }
 

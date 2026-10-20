@@ -130,7 +130,7 @@ func TestMigrateFromEveryVersion(t *testing.T) {
 				t.Fatalf("search after upgrade: %d %v", len(res), err)
 			}
 			// Calendars work on the upgraded database.
-			if a, _ := s.Account("a"); !a.CalendarEnabled || a.CalendarConsent {
+			if a, _ := s.Account("a"); a.CalendarConsent {
 				t.Fatalf("calendar defaults after upgrade %+v", a)
 			}
 			if err := s.ReplaceCalendars("a", []calendar.Calendar{{RemoteID: "c", Name: "C", CanEdit: true}}); err != nil {

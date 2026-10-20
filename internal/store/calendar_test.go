@@ -10,7 +10,7 @@ import (
 
 func TestCalendarStorePermissionsAndDeletion(t *testing.T) {
 	s := openTest(t)
-	if err := s.InsertAccount(models.Account{ID: "a1", Provider: models.ProviderGmail, Email: "a@x.com", CalendarConsent: true, CalendarEnabled: true}); err != nil {
+	if err := s.InsertAccount(models.Account{ID: "a1", Provider: models.ProviderGmail, Email: "a@x.com", CalendarConsent: true}); err != nil {
 		t.Fatal(err)
 	}
 	cals := []calendar.Calendar{{RemoteID: "main", Name: "Main", Primary: true, CanEdit: true}, {RemoteID: "shared", Name: "Shared", CanEdit: true}}
@@ -54,11 +54,16 @@ func TestCalendarStorePermissionsAndDeletion(t *testing.T) {
 	if _, err := s.Event(ids[0]); err == nil {
 		t.Fatal("events of a deleted calendar kept")
 	}
-	// Turning the account off hides everything.
+	// Hidden calendars aren't listed; losing consent hides the account.
 	main, _ := s.Calendar(CalendarID("a1", "main"))
 	s.ApplyEvents(main, EventChanges{Upserts: []calendar.Event{{RemoteID: "m1", Start: day, End: day.Add(time.Hour)}}})
-	s.SetCalendarEnabled("a1", false)
+	s.SetCalendarVisible(main.ID, false)
 	if evs, _ := s.Events(day, day.AddDate(0, 0, 1), true); len(evs) != 0 {
-		t.Fatal("disabled account listed")
+		t.Fatal("hidden calendar listed")
+	}
+	s.SetCalendarVisible(main.ID, true)
+	s.SetCalendarConsent("a1", false)
+	if evs, _ := s.Events(day, day.AddDate(0, 0, 1), true); len(evs) != 0 {
+		t.Fatal("account without consent listed")
 	}
 }

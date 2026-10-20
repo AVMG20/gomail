@@ -63,8 +63,9 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 		switch {
 		case r.URL.Path == "/me/calendars":
 			write(map[string]any{"value": []any{
-				map[string]any{"id": "cal-main", "name": "Calendar", "color": "lightBlue", "hexColor": "", "isDefaultCalendar": true, "canEdit": true},
-				map[string]any{"id": "cal-team", "name": "Team", "hexColor": "#c239b3", "canEdit": false},
+				map[string]any{"id": "cal-main", "name": "Calendar", "color": "lightBlue", "hexColor": "", "isDefaultCalendar": true, "canEdit": true,
+					"allowedOnlineMeetingProviders": []string{"teamsForBusiness"}},
+				map[string]any{"id": "cal-team", "name": "Team", "hexColor": "#c239b3", "canEdit": false, "allowedOnlineMeetingProviders": []string{"skypeForConsumer"}},
 			}})
 		case r.URL.Path == "/me/calendarView/delta":
 			if q.Get("$deltatoken") != "" {
@@ -290,5 +291,36 @@ func TestAllDayZonesMoveAndConflicts(t *testing.T) {
 	}
 	if got := f.requests[n:]; len(got) != 2 || !strings.HasPrefix(got[0], "POST /me/calendars/cal-main/events") || !strings.HasPrefix(got[1], "DELETE /me/events/e1") {
 		t.Fatalf("move requests %v", got)
+	}
+}
+
+func TestVideoCalls(t *testing.T) {
+	c, f := newTest(t)
+	ctx := context.Background()
+	cals, _ := c.Calendars(ctx)
+	if cals[0].VideoCallProvider != "teams" || cals[1].VideoCallProvider != "skype" || videoProvider(nil) != "" ||
+		videoProvider([]string{"unknown"}) != "" {
+		t.Fatalf("providers %q %q", cals[0].VideoCallProvider, cals[1].VideoCallProvider)
+	}
+	ev := calendar.Event{Title: "Call", AddVideoCall: true, Start: time.Now(), End: time.Now().Add(time.Hour)}
+	if _, err := c.Create(ctx, cals[0], ev); err != nil {
+		t.Fatal(err)
+	}
+	b := f.bodies[len(f.bodies)-1]
+	if b["isOnlineMeeting"] != true || b["onlineMeetingProvider"] != "teamsForBusiness" {
+		t.Fatalf("body %v", b)
+	}
+	none := cals[0]
+	none.VideoCallProvider = ""
+	c.Create(ctx, none, ev)
+	if _, ok := f.bodies[len(f.bodies)-1]["isOnlineMeeting"]; ok {
+		t.Fatal("online meeting without a provider")
+	}
+	got := toEvent(gEvent{ID: "w", Body: &struct {
+		ContentType string `json:"contentType"`
+		Content     string `json:"content"`
+	}{"text", "Join: https://acme.webex.com/meet/bob"}, Start: gTime{DateTime: "2026-10-20T10:00:00"}, End: gTime{DateTime: "2026-10-20T11:00:00"}}, cals[0])
+	if got.MeetingURL != "https://acme.webex.com/meet/bob" {
+		t.Fatalf("detected %q", got.MeetingURL)
 	}
 }

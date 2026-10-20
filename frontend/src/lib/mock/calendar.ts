@@ -45,9 +45,14 @@ export class MockCalendar {
     this.seed()
   }
 
-  /** Mailbox defaults: Pixelforge has no calendar consent yet ("Connect calendar"). */
+  /** Pixelforge has no calendar consent yet ("Connect"). */
   decorateAccount(a: Account): Account {
-    return { ...a, calendarEnabled: a.calendarEnabled ?? a.id !== 'acc_side', calendarConsent: a.calendarConsent ?? a.id !== 'acc_side' }
+    return { ...a, calendarConsent: a.calendarConsent ?? a.id !== 'acc_side' }
+  }
+
+  /** Test flag (?calconsent=none): every mailbox starts without calendar access. */
+  noConsentFlag(): boolean {
+    return typeof location !== 'undefined' && new URLSearchParams(location.search).get('calconsent') === 'none'
   }
 
   // ---------------------------------------------------------------- seed

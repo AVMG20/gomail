@@ -34,8 +34,6 @@ export interface Account {
   needsReauth?: boolean
   /** Per-account HTML signature (backend pass 3). */
   signature?: string
-  /** The mailbox's calendars are shown (Calendar sidebar switch). */
-  calendarEnabled?: boolean
   /** OAuth grant includes calendar scopes; false = show "Connect calendar" (EnableCalendar). */
   calendarConsent?: boolean
 }

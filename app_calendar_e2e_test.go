@@ -43,8 +43,8 @@ func TestEndToEndCalendar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ga.CalendarConsent || !oa.CalendarConsent || !oa.CalendarEnabled {
-		t.Fatalf("consent gmail=%v outlook=%v/%v", ga.CalendarConsent, oa.CalendarConsent, oa.CalendarEnabled)
+	if ga.CalendarConsent || !oa.CalendarConsent {
+		t.Fatalf("consent gmail=%v outlook=%v", ga.CalendarConsent, oa.CalendarConsent)
 	}
 	if err := m.SyncNow(""); err != nil {
 		t.Fatal(err)
@@ -171,9 +171,12 @@ func TestEndToEndCalendar(t *testing.T) {
 			t.Fatalf("event %q of an account without consent listed", title)
 		}
 	}
-	// The toggle hides an account too.
-	if err := m.SetAccountCalendarEnabled(oa.ID, false); err != nil {
-		t.Fatal(err)
+	// Hiding every calendar hides everything.
+	cals, _ = m.ListCalendars()
+	for _, c := range cals {
+		if err := m.SetCalendarVisible(c.ID, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if n := len(titles()); n != 0 {
 		t.Fatalf("%d events with every calendar off", n)

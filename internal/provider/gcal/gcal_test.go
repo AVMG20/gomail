@@ -50,7 +50,8 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 		case r.URL.Path == "/users/me/calendarList":
 			write(map[string]any{"items": []any{
 				map[string]any{"id": "me@gmail.com", "summary": "Me", "backgroundColor": "#9fe1e7", "primary": true, "accessRole": "owner",
-					"timeZone": "Europe/Amsterdam", "defaultReminders": []any{map[string]any{"method": "popup", "minutes": 30}}},
+					"timeZone": "Europe/Amsterdam", "defaultReminders": []any{map[string]any{"method": "popup", "minutes": 30}},
+					"conferenceProperties": map[string]any{"allowedConferenceSolutionTypes": []string{"eventHangout", "hangoutsMeet"}}},
 				map[string]any{"id": "holidays", "summary": "Holidays", "summaryOverride": "Dutch holidays", "accessRole": "reader"},
 				map[string]any{"id": "gone", "summary": "Gone", "deleted": true},
 			}})
@@ -101,8 +102,8 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 			write(map[string]any{"id": "single", "attendees": []any{map[string]any{"email": "boss@x.com", "organizer": true},
 				map[string]any{"email": "me@gmail.com", "self": true, "responseStatus": "needsAction"}}})
 		case r.URL.Path == "/calendars/me@gmail.com/events" && r.Method == "POST":
-			if q.Get("sendUpdates") != "all" {
-				t.Error("invitations not sent")
+			if q.Get("sendUpdates") != "all" || q.Get("conferenceDataVersion") != "1" {
+				t.Errorf("insert query %v", q)
 			}
 			body["id"], body["organizer"] = "created", map[string]any{"email": "me@gmail.com", "self": true}
 			write(body)
@@ -315,5 +316,39 @@ func TestMoveEtagDSTAndEscaping(t *testing.T) {
 	}
 	if _, err := c.Move(ctx, me, calendar.Calendar{RemoteID: "ro"}, "single", ev); !errors.Is(err, calendar.ErrReadOnly) {
 		t.Fatalf("move to read-only %v", err)
+	}
+}
+
+func TestVideoCalls(t *testing.T) {
+	c, f := newTest(t)
+	ctx := context.Background()
+	cals, _ := c.Calendars(ctx)
+	if cals[0].VideoCallProvider != "meet" || cals[1].VideoCallProvider != "" {
+		t.Fatalf("providers %q %q", cals[0].VideoCallProvider, cals[1].VideoCallProvider)
+	}
+	me := cals[0]
+	ev := calendar.Event{Title: "Call", AddVideoCall: true, Start: time.Now(), End: time.Now().Add(time.Hour)}
+	if _, err := c.Create(ctx, me, ev); err != nil {
+		t.Fatal(err)
+	}
+	cd := f.bodies[len(f.bodies)-1]["conferenceData"].(map[string]any)["createRequest"].(map[string]any)
+	if cd["conferenceSolutionKey"].(map[string]any)["type"] != "hangoutsMeet" || len(cd["requestId"].(string)) < 16 {
+		t.Fatalf("createRequest %v", cd)
+	}
+	first := cd["requestId"]
+	c.Create(ctx, me, ev)
+	if again := f.bodies[len(f.bodies)-1]["conferenceData"].(map[string]any)["createRequest"].(map[string]any)["requestId"]; again == first {
+		t.Fatal("requestId reused")
+	}
+	// A calendar without Meet: no conference request.
+	me.VideoCallProvider = ""
+	c.Create(ctx, me, ev)
+	if _, ok := f.bodies[len(f.bodies)-1]["conferenceData"]; ok {
+		t.Fatal("conference requested without Meet")
+	}
+	// Links in the location are detected when there's no conference data.
+	got := c.toEvent(gEvent{ID: "z", Location: "https://us02web.zoom.us/j/123", Start: gTime{DateTime: "2026-10-20T10:00:00Z"}, End: gTime{DateTime: "2026-10-20T11:00:00Z"}}, me)
+	if got.MeetingURL != "https://us02web.zoom.us/j/123" {
+		t.Fatalf("detected %q", got.MeetingURL)
 	}
 }
