@@ -8,8 +8,6 @@
 		<string>gomail desktop mail client</string>
 		<key>CFBundleIconFile</key>
 		<string>icons</string>
-		<key>CFBundleIconName</key>
-		<string>appicon</string>
 		<key>CFBundleIdentifier</key>
 		<string>com.avmg20.gomail</string>
 		<key>CFBundleName</key>
