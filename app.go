@@ -217,6 +217,25 @@ func (u desktopUI) Notify(title, body string, open models.NotificationOpen) {
 	}
 }
 
+// ensureNotificationPermission asks macOS for notification permission when
+// notifications are on. Without it macOS drops every notification silently;
+// after the first answer the call returns the stored choice without a prompt.
+func (m *MailService) ensureNotificationPermission() {
+	if m.notifier == nil || runtime.GOOS != "darwin" {
+		return
+	}
+	s, err := m.ready()
+	if err != nil || !s.Settings().Notifications {
+		return
+	}
+	go func() {
+		ok, err := m.notifier.RequestNotificationAuthorization()
+		if err != nil || !ok {
+			slog.Info("notifications not allowed by macOS", "err", err)
+		}
+	}()
+}
+
 // onNotification opens the app at the message of a clicked notification.
 func (m *MailService) onNotification(r notifications.NotificationResult) {
 	defer safe.Recover("notification click")
@@ -733,7 +752,14 @@ func (m *MailService) SaveSettings(st models.Settings) error {
 	if err != nil {
 		return err
 	}
-	return uiError(s.SaveSettings(st))
+	before := s.Settings().Notifications
+	if err := s.SaveSettings(st); err != nil {
+		return uiError(err)
+	}
+	if st.Notifications && !before {
+		m.ensureNotificationPermission()
+	}
+	return nil
 }
 
 // SetOpenRouterKey stores the key securely ("" removes it). The key is

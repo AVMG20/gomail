@@ -1,16 +1,41 @@
-// Tiptap block node for the per-account signature, so it can be swapped when
-// the From account changes without touching the rest of the message.
-import { mergeAttributes, Node } from '@tiptap/core'
+// Tiptap node for the per-account signature, so it can be swapped when the From
+// account changes without touching the rest of the message. It is an atom that
+// keeps the signature's HTML verbatim: custom signatures (tables, images, inline
+// styles) would otherwise be flattened by the editor's schema. Edit it in
+// Settings → Accounts.
+import { Node } from '@tiptap/core'
 import type { Editor } from '@tiptap/core'
+import DOMPurify from 'dompurify'
 import { signatureBlock } from '@/lib/format'
+
+/** Signatures are the user's own HTML, but never let pasted markup run script in the app. */
+export function cleanSignature(html: string): string {
+  return DOMPurify.sanitize(html, { FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe'], FORBID_ATTR: ['id'] })
+}
+
+function signatureDom(html: string): HTMLElement {
+  const el = document.createElement('div')
+  el.setAttribute('data-signature', '')
+  el.className = 'gm-signature'
+  el.innerHTML = cleanSignature(html)
+  return el
+}
 
 export const Signature = Node.create({
   name: 'signature',
   group: 'block',
-  content: 'block+',
-  defining: true,
-  parseHTML: () => [{ tag: 'div[data-signature]' }],
-  renderHTML: ({ HTMLAttributes }) => ['div', mergeAttributes(HTMLAttributes, { 'data-signature': '', class: 'gm-signature' }), 0],
+  atom: true,
+  selectable: true,
+  draggable: false,
+  addAttributes: () => ({ html: { default: '' } }),
+  parseHTML: () => [{ tag: 'div[data-signature]', getAttrs: (el) => ({ html: (el as HTMLElement).innerHTML }) }],
+  renderHTML: ({ node }) => signatureDom(node.attrs.html as string),
+  addNodeView: () => ({ node }) => {
+    const dom = signatureDom(node.attrs.html as string)
+    dom.contentEditable = 'false'
+    dom.title = 'Signature · edit it in Settings → Accounts'
+    return { dom }
+  },
 })
 
 

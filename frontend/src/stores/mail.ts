@@ -172,6 +172,11 @@ export const useMailStore = defineStore('mail', () => {
 
   /** Unread count of a filtered/searched view (the folder counters don't apply then); null = use the folder's. */
   const viewUnread = ref<number | null>(null)
+  /** Unread mail in the current view: the filtered count, else the folder's counter. */
+  const viewUnreadCount = computed(() => viewUnread.value ?? (mailbox.value.accountId
+    // folderId can be empty when the mailbox was chosen before the account's folders synced.
+    ? (mailbox.value.folderId ? accounts.folderMap.get(mailbox.value.folderId) : accounts.folderOf(mailbox.value.accountId, mailbox.value.kind))?.unread ?? 0
+    : accounts.unifiedUnread(mailbox.value.kind)))
   let unreadSeq = 0
   async function refreshViewUnread() {
     const seq = ++unreadSeq
@@ -808,7 +813,7 @@ export const useMailStore = defineStore('mail', () => {
   return {
     mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
-    labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
+    labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,

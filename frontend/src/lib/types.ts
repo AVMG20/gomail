@@ -344,6 +344,8 @@ export interface Settings {
   conversationView?: boolean
   /** When opening a message marks it read. Frontend preference (stored locally). */
   markReadMode?: 'immediate' | 'delay' | 'manual'
+  /** How replies quote the original: with "On … wrote:", quote only, or not at all. */
+  replyQuote?: 'header' | 'plain' | 'none'
   /** "right" = three panes; "off" = full-width list, message opens in the main area. */
   readingPane?: 'right' | 'off'
   /** Dark mode: "auto" renders simple emails with theme colors; "light" always uses a light card. */

@@ -432,7 +432,7 @@ const consentMissing = computed(() => accounts.accounts.filter((a) => a.calendar
     <div v-if="ui.narrow && sidebarOpen" class="absolute inset-y-0 right-0 left-14 z-20 bg-black/10" @click="sidebarOpen = false" />
 
     <section class="bg-background flex min-w-0 flex-1 flex-col" aria-label="Calendar">
-      <header data-drag class="border-border flex h-[calc(52px+var(--titlebar))] shrink-0 items-center gap-1.5 border-b px-3 pt-[var(--titlebar)]">
+      <header data-drag class="border-border flex h-[52px] shrink-0 items-center gap-1.5 border-b px-3">
         <Tip label="Toggle sidebar" shortcut="mod+b">
           <Button variant="ghost" size="icon-sm" class="text-muted-foreground" aria-label="Toggle calendar sidebar" @click="sidebarOpen = !sidebarOpen"><PanelLeftIcon /></Button>
         </Tip>

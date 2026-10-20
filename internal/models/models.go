@@ -261,6 +261,9 @@ type Settings struct {
 	UndoSendSeconds     int     `json:"undoSendSeconds"`  // send delay handled by the UI (default 5, 0..30)
 	MarkReadMode        string  `json:"markReadMode"`     // "immediate" | "delay" | "manual" (default "immediate")
 	ReadingPane         string  `json:"readingPane"`      // "right" | "off" (default "right")
+	// ReplyQuote is how replies quote the original: "header" (On … wrote: + quote),
+	// "plain" (quote only) or "none" (default "header").
+	ReplyQuote string `json:"replyQuote"`
 	// EmailBackground is "auto" (follow the theme, dark bodies in dark mode
 	// where the email allows it) or "light" (always render emails on white).
 	EmailBackground string `json:"emailBackground"` // default "auto"

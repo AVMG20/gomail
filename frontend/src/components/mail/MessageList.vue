@@ -249,10 +249,7 @@ const subtitle = computed(() => {
   if (mail.status === 'loading') return ''
   const n = mail.total
   // A label filter or search narrows the view: count its unread, not the whole folder's.
-  const unread = mail.viewUnread ?? (mail.mailbox.accountId
-    // folderId can be empty when the mailbox was chosen before the account's folders synced.
-    ? (mail.mailbox.folderId ? accounts.folderMap.get(mail.mailbox.folderId) : accounts.folderOf(mail.mailbox.accountId, mail.mailbox.kind))?.unread ?? 0
-    : accounts.unifiedUnread(mail.mailbox.kind))
+  const unread = mail.viewUnreadCount
   const parts = [`${n.toLocaleString()} ${n === 1 ? 'message' : 'messages'}`]
   if (unread && !mail.unreadOnly) parts.push(`${unread.toLocaleString()} unread`)
   return parts.join(' · ')
@@ -276,7 +273,7 @@ const emptyState = computed(() => {
 <template>
   <section class="bg-background flex h-full min-w-0 flex-col" aria-label="Messages">
     <!-- Header -->
-    <header data-drag class="border-border @container shrink-0 border-b px-3 pt-[calc(var(--titlebar)+0.75rem)] pb-2">
+    <header data-drag class="border-border @container shrink-0 border-b px-3 pt-3 pb-2">
       <div class="flex h-9 items-center gap-1">
         <template v-if="mail.selection.size || mail.selectAllQuery">
           <BulkBar class="flex-1" />

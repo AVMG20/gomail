@@ -137,10 +137,11 @@ func main() {
 		URL:              "/",
 		BackgroundColour: application.NewRGB(27, 38, 54),
 		Hidden:           svc.startMinimized, // shown again unless the tray is available
+		// Standard-height hidden title bar: the UI draws a matching strip
+		// (--titlebar, App.vue) for the traffic lights and dragging.
 		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHiddenInset,
+			Backdrop: application.MacBackdropTranslucent,
+			TitleBar: application.MacTitleBarHidden,
 		},
 	})
 	svc.attach(app, window)
@@ -157,7 +158,10 @@ func main() {
 	tray.SetMenu(menu)
 	tray.OnClick(func() { svc.showWindow() })
 	svc.tray = tray
-	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { svc.applyTray() })
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		svc.applyTray()
+		svc.ensureNotificationPermission()
+	})
 	// macOS delivers mailto: links as an "open URL" event, not as arguments.
 	app.Event.OnApplicationEvent(events.Common.ApplicationLaunchedWithUrl, func(e *application.ApplicationEvent) {
 		svc.showWindow()

@@ -6,6 +6,7 @@ import Tip from '@/components/common/Tip.vue'
 import { displayName, formatAddress, listDate, longDate, parseMailto } from '@/lib/format'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
+import { useAccountsStore } from '@/stores/accounts'
 import { useComposeStore } from '@/stores/compose'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -21,6 +22,8 @@ const emit = defineEmits<{ toggle: []; reply: []; loadImages: [] }>()
 const showDetails = ref(false)
 const confirmUnsub = ref(false)
 const compose = useComposeStore()
+const accounts = useAccountsStore()
+const isDraft = computed(() => !!props.message.isDraft || props.message.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts'))
 
 async function unsubscribe() {
   const u = props.message.unsubscribe
@@ -61,7 +64,7 @@ const recipients = computed(() => {
       @click="emit('toggle')"
     >
       <SenderAvatar :address="message.from" :size="28" />
-      <span class="w-40 shrink-0 truncate text-[13px] font-medium">{{ displayName(message.from) }}</span>
+      <span class="w-40 shrink-0 truncate text-[13px] font-medium">{{ displayName(message.from) }}<span v-if="isDraft" class="text-destructive ml-1.5 font-normal">Draft</span></span>
       <span class="text-muted-foreground min-w-0 flex-1 truncate text-[13px]">{{ message.snippet }}</span>
       <PaperclipIcon v-if="message.attachments.length" class="text-muted-foreground size-3.5 shrink-0" />
       <span class="text-muted-foreground shrink-0 text-xs">{{ listDate(message.date) }}</span>
@@ -74,6 +77,7 @@ const recipients = computed(() => {
         <div class="min-w-0 flex-1">
           <div class="flex items-baseline gap-2">
             <span class="selectable truncate text-[14px] font-semibold">{{ displayName(message.from) }}</span>
+            <span v-if="isDraft" class="text-destructive shrink-0 text-xs font-medium">Draft</span>
             <span class="text-muted-foreground selectable truncate text-xs">{{ message.from.email }}</span>
             <button
               v-if="message.unsubscribe && (message.unsubscribe.url || message.unsubscribe.mailto)"

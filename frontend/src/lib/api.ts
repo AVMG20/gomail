@@ -299,6 +299,7 @@ export function normSettings(s: Settings): Settings {
     closeToTray: s.closeToTray ?? readLocal('closeToTray', false),
     conversationView: s.conversationView ?? readLocal('conversationView', true),
     markReadMode: s.markReadMode ?? readLocal('markReadMode', 'immediate'),
+    replyQuote: s.replyQuote || readLocal('replyQuote', 'header'),
     readingPane: s.readingPane ?? readLocal('readingPane', 'right'),
     zoom: typeof s.zoom === 'number' && s.zoom > 0 ? s.zoom : readLocal('zoom', 1),
     emailBackground: s.emailBackground === 'light' ? 'light' : 'auto',
@@ -415,6 +416,10 @@ export const api = {
   searchContacts: async (query: string, limit = 8): Promise<Contact[]> => (await call<Contact[] | null>('SearchContacts', query, limit)) ?? [],
   emptyFolder: (folderId: string) => call<void>('EmptyFolder', folderId),
   markFolderRead: (folderId: string) => call<void>('MarkFolderRead', folderId),
+  /** Double-click on the macOS title bar strip. */
+  async toggleMaximise() {
+    if (isWails() && runtime) await runtime.Window.ToggleMaximise()
+  },
   /** UI zoom: native webview zoom in Wails, CSS zoom in the browser. */
   async setZoom(z: number) {
     if (isWails() && runtime) {

@@ -198,7 +198,19 @@ async function moveTo(folderId: string) {
   if (m) await mail.moveToFolder([m.id], folderId)
 }
 
-const isDraft = computed(() => !!newest.value?.isDraft || newest.value?.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts'))
+const isDraftMsg = (m: Message) => !!m.isDraft || m.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts')
+const isDraft = computed(() => !!newest.value && isDraftMsg(newest.value))
+/** The thread minus drafts still being written: autosave stores them on the server, and a half-typed
+ *  reply must not look like a sent message. Gmail gives each save a new id, so while a composer replies
+ *  into this thread every draft in it is hidden. */
+const shownThread = computed(() => {
+  const ids = new Set(thread.value.map((m) => m.id))
+  const open = compose.drafts.filter((d) => !d.queued)
+  const openIds = new Set(open.map((d) => d.remoteId).filter(Boolean))
+  const replying = open.some((d) => d.replyToId && ids.has(d.replyToId))
+  const list = thread.value.filter((m) => !openIds.has(m.id) && !(replying && isDraftMsg(m)))
+  return list.length ? list : thread.value
+})
 function editDraft() {
   if (newest.value) void compose.editDraft(newest.value)
 }
@@ -208,7 +220,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
 
 <template>
   <section class="bg-background relative flex h-full min-w-0 flex-col" aria-label="Reading pane">
-    <div v-if="!mail.openId" data-drag class="absolute inset-x-0 top-0 h-[calc(52px+var(--titlebar))]" aria-hidden="true" />
+    <div v-if="!mail.openId" data-drag class="absolute inset-x-0 top-0 h-[52px]" aria-hidden="true" />
     <!-- Empty -->
     <div v-if="!mail.openId" class="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       <div class="bg-muted/70 flex size-14 items-center justify-center rounded-2xl">
@@ -222,7 +234,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
 
     <template v-else>
       <!-- Toolbar -->
-      <div data-drag class="border-border flex h-[calc(52px+var(--titlebar))] shrink-0 items-center gap-0.5 border-b px-3 pt-[var(--titlebar)]">
+      <div data-drag class="border-border flex h-[52px] shrink-0 items-center gap-0.5 border-b px-3">
         <template v-if="showBack">
           <Tip label="Back to list" shortcut="esc"><Button variant="ghost" size="icon-sm" aria-label="Back to list" @click="mail.open(null)"><ArrowLeftIcon /></Button></Tip>
           <div class="bg-border mx-1.5 h-5 w-px" />
@@ -293,7 +305,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
                 <span class="size-2 rounded-full" :style="{ background: account.color }" /> {{ account.displayName || account.email }}
               </span>
               <LabelPill v-for="p in labelPills" :key="p.label.id" :label="p.label" :detail="p.detail" size="sm" removable @remove="mail.removeLabel(ids(), p.label.id, true)" />
-              <span v-if="thread.length > 1" class="text-muted-foreground text-xs">{{ thread.length }} messages</span>
+              <span v-if="shownThread.length > 1" class="text-muted-foreground text-xs">{{ shownThread.length }} messages</span>
             </div>
           </div>
 
@@ -311,7 +323,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
 
           <div class="border-border/70 border-t">
             <ThreadMessage
-              v-for="m in thread"
+              v-for="m in shownThread"
               :key="m.id"
               :message="m"
               :expanded="expanded.has(m.id)"

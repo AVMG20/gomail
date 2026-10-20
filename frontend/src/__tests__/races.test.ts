@@ -189,3 +189,18 @@ describe('AI labeling of a selection', () => {
     expect(ai.job).toMatchObject({ done: 60, total: 60, finished: true })
   })
 })
+
+describe('select all in this view', () => {
+  it('offers Mark as read from the view unread count, not just the loaded rows', async () => {
+    const { useAccountsStore } = await import('@/stores/accounts')
+    const mail = useMailStore()
+    const accounts = useAccountsStore()
+    accounts.folders = { a: [{ id: 'a:inbox', accountId: 'a', kind: 'inbox', name: 'Inbox', unread: 217, total: 285 } as never] }
+    mail.mailbox = { accountId: 'a', folderId: 'a:inbox', kind: 'inbox' }
+    mail.messages = [row('m1', { unread: false }), row('m2', { unread: false })]
+    expect(mail.viewUnreadCount).toBe(217)
+    // The bulk bar and row menu go by this when "all 285" is selected.
+    mail.selectAllQuery = true
+    expect(mail.selectAllQuery && mail.viewUnreadCount > 0).toBe(true)
+  })
+})

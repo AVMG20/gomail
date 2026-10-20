@@ -73,6 +73,7 @@ func DefaultSettings() models.Settings {
 		UndoSendSeconds:          5,
 		MarkReadMode:             "immediate",
 		ReadingPane:              "right",
+		ReplyQuote:               "header",
 		EmailBackground:          "auto",
 		CalendarWeekStart:        "auto",
 		CalendarTimeFormat:       "auto",
@@ -117,6 +118,11 @@ func Normalize(s *models.Settings) {
 	case "immediate", "delay", "manual":
 	default:
 		s.MarkReadMode = "immediate"
+	}
+	switch s.ReplyQuote {
+	case "header", "plain", "none":
+	default:
+		s.ReplyQuote = "header"
 	}
 	if s.EmailBackground != "light" {
 		s.EmailBackground = "auto"

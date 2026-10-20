@@ -102,14 +102,27 @@ const showCalendar = computed(() => ui.mainView === 'calendar' && hasMethod('Lis
 const accountColor = computed(() => mail.mailboxAccount?.color ?? 'var(--muted-foreground)')
 const toasterTheme = computed(() => (settings.settings?.theme === 'light' || settings.settings?.theme === 'dark' ? settings.settings.theme : 'system') as 'light' | 'dark' | 'system')
 
+const windowTitle = computed(() => {
+  if (showCalendar.value) return 'Calendar'
+  const a = mail.mailboxAccount
+  return [mail.mailboxName, a?.email].filter(Boolean).join(' — ') || 'gomail'
+})
 watch([() => mail.mailboxName, showCalendar], ([name, cal]) => {
   document.title = cal ? 'Calendar — gomail' : name ? `${name} — gomail` : 'gomail'
 }, { immediate: true })
 </script>
 
 <template>
-  <div class="contents">
-    <div class="relative flex h-full w-full overflow-hidden" :style="{ '--account': accountColor }">
+  <div class="flex h-full w-full flex-col" :style="{ '--account': accountColor }">
+    <!-- macOS: a real title bar for the traffic lights, so pane headers line up below it. -->
+    <header
+      data-drag
+      class="titlebar bg-sidebar border-sidebar-border text-muted-foreground relative hidden h-[var(--titlebar)] shrink-0 items-center justify-center border-b px-20 text-xs font-medium select-none"
+      @dblclick="api.toggleMaximise()"
+    >
+      <span class="truncate">{{ windowTitle }}</span>
+    </header>
+    <div class="relative flex min-h-0 w-full flex-1 overflow-hidden">
       <AccountRail />
 
       <div v-if="!booted" class="flex flex-1">
@@ -144,12 +157,13 @@ watch([() => mail.mailboxName, showCalendar], ([name, cal]) => {
           <MessageList v-show="!mail.openId" />
           <ErrorBoundary v-if="mail.openId" name="reading pane" :reset-key="mail.openId"><ReadingPane show-back /></ErrorBoundary>
         </div>
-        <ResizablePanelGroup v-else direction="horizontal" auto-save-id="gomail.panes.v1" class="min-w-0 flex-1">
-          <ResizablePanel :default-size="42" :min-size="30" :max-size="65" class="min-w-0">
+        <!-- Pixel limits keep the list toolbar (and the bulk bar) from clipping its buttons. -->
+        <ResizablePanelGroup v-else direction="horizontal" auto-save-id="gomail.panes.v2" class="min-w-0 flex-1">
+          <ResizablePanel size-unit="px" :default-size="480" :min-size="400" :max-size="760" class="min-w-0">
             <MessageList />
           </ResizablePanel>
           <ResizableHandle />
-          <ResizablePanel :default-size="58" :min-size="35" class="min-w-0">
+          <ResizablePanel size-unit="px" :min-size="380" class="min-w-0">
             <ErrorBoundary name="reading pane" :reset-key="mail.openId ?? ''"><ReadingPane /></ErrorBoundary>
           </ResizablePanel>
         </ResizablePanelGroup>

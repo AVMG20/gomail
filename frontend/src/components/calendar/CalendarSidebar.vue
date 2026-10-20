@@ -36,7 +36,7 @@ const busyDays = computed(() => {
 
 <template>
   <aside class="bg-sidebar text-sidebar-foreground border-sidebar-border flex h-full w-full flex-col border-r" aria-label="Calendars">
-    <div data-drag class="px-3 pt-[calc(var(--titlebar)+0.75rem)] pb-3">
+    <div data-drag class="px-3 pt-3 pb-3">
       <Button class="w-full justify-start gap-2" @click="emit('create')"><PlusIcon /> New event <span class="ml-auto text-[11px] opacity-70">N</span></Button>
     </div>
     <div class="thin-scroll min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-4">

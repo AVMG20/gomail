@@ -8,6 +8,7 @@ import { uid } from '@/lib/platform'
 import type { Address, ComposeMode, Message } from '@/lib/types'
 import { useAccountsStore } from './accounts'
 import { useMailStore } from './mail'
+import { useSettingsStore } from './settings'
 import { useUiStore } from './ui'
 
 export interface DraftAttachment {
@@ -266,11 +267,14 @@ export const useComposeStore = defineStore('compose', () => {
         cc = [...m.to, ...m.cc].filter((a) => notMe(a) && !seen.has(a.email.toLowerCase()) && (seen.add(a.email.toLowerCase()), true))
       }
     }
+    // Settings → General → Quote the original in replies; forwards always carry the message.
+    const quoting = mode === 'forward' ? 'header' : useSettingsStore().settings?.replyQuote || 'header'
     const header = mode === 'forward'
       ? `<p>---------- Forwarded message ----------<br>From: ${escapeHtml(formatAddress(m.from))}<br>Date: ${escapeHtml(longDate(m.date))}<br>Subject: ${escapeHtml(m.subject)}<br>To: ${escapeHtml(m.to.map(formatAddress).join(', '))}</p>`
-      : `<p>On ${escapeHtml(longDate(m.date))}, ${escapeHtml(displayName(m.from))} wrote:</p>`
+      : quoting === 'header' ? `<p>On ${escapeHtml(longDate(m.date))}, ${escapeHtml(displayName(m.from))} wrote:</p>` : ''
     const sig = accounts.accountMap.get(m.accountId)?.signature ?? ''
-    const html = `<p></p>${signatureBlock(sig)}<p></p>${header}<blockquote>${await quotedBody(m)}</blockquote>`
+    const quote = quoting === 'none' ? '' : `<p></p>${header}<blockquote>${await quotedBody(m)}</blockquote>`
+    const html = `<p></p>${signatureBlock(sig)}${quote}`
     // Forwards carry the original's files (attached by the backend), minus images embedded by Content-ID.
     const forwarded = mode === 'forward' ? (m.attachments ?? []).filter((a) => !(a.inline && a.contentId)).map((a) => ({ filename: a.filename, size: a.size })) : undefined
     const d = create({

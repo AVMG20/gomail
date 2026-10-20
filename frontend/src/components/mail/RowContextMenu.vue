@@ -52,8 +52,9 @@ function moveTo(folderId: string) {
 }
 
 // Like the bulk bar: the toggles follow the whole selection, not just the clicked row.
-const anyUnread = computed(() => ctxIds.value.some((id) => mail.byId.get(id)?.unread))
-const allStarred = computed(() => ctxIds.value.every((id) => mail.byId.get(id)?.starred))
+// "All N in this view" covers rows that never loaded: go by the view's unread count.
+const anyUnread = computed(() => (mail.selectAllQuery && mail.selection.has(props.messageId) ? mail.viewUnreadCount > 0 : ctxIds.value.some((id) => mail.byId.get(id)?.unread)))
+const allStarred = computed(() => (mail.selectAllQuery && mail.selection.has(props.messageId) ? mail.mailbox.kind === 'starred' : ctxIds.value.every((id) => mail.byId.get(id)?.starred)))
 const labelState = (labelId: string) => ctxIds.value.every((id) => mail.byId.get(id)?.labels.includes(labelId))
 
 function toggleCtxLabel(labelId: string) {

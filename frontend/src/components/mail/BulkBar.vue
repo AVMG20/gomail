@@ -11,8 +11,10 @@ import { useMailStore } from '@/stores/mail'
 const mail = useMailStore()
 const ai = useAiStore()
 
-const anyUnread = computed(() => [...mail.selection].some((id) => mail.byId.get(id)?.unread))
-const allStarred = computed(() => mail.selection.size > 0 && [...mail.selection].every((id) => mail.byId.get(id)?.starred))
+// "Select all in this view" covers rows that never loaded: go by the view's unread count.
+const anyUnread = computed(() => (mail.selectAllQuery ? mail.viewUnreadCount > 0 : [...mail.selection].some((id) => mail.byId.get(id)?.unread)))
+// Unloaded rows' stars are unknown: with "all in this view" offer Star, except in Starred itself.
+const allStarred = computed(() => (mail.selectAllQuery ? mail.mailbox.kind === 'starred' : mail.selection.size > 0 && [...mail.selection].every((id) => mail.byId.get(id)?.starred)))
 
 
 // run() clears the selection before fn runs, so toggles capture anyUnread/allStarred at click time.
@@ -37,7 +39,8 @@ async function labelWithAi() {
 
 <template>
   <div class="flex h-full items-center gap-1">
-    <span class="mr-2 pl-1 text-sm font-medium whitespace-nowrap tabular-nums">{{ mail.selectionCount.toLocaleString() }} selected</span>
+    <!-- Narrow list: just the number, so every action (and Clear) still fits. -->
+    <span class="mr-1 shrink-0 pl-1 text-sm font-medium whitespace-nowrap tabular-nums @[480px]:mr-2">{{ mail.selectionCount.toLocaleString() }}<span class="sr-only @[480px]:not-sr-only"> selected</span></span>
     <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="run(mail.archive)"><ArchiveIcon /></Button></Tip>
     <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="run(mail.trash)"><Trash2Icon /></Button></Tip>
     <Tip v-if="mail.mailbox.kind !== 'spam'" label="Move to Junk"><Button variant="ghost" size="icon-sm" aria-label="Move to Junk" @click="run(mail.junk)"><OctagonAlertIcon /></Button></Tip>

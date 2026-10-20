@@ -231,6 +231,8 @@
   margin: .75em 0 .5em;
   font-size: 13px;
 }
+.compose-editor .ProseMirror .gm-signature img { max-width: 100%; height: auto; }
+.compose-editor .ProseMirror .gm-signature.ProseMirror-selectednode { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
 .compose-editor .ProseMirror blockquote {
   border-left: 2px solid var(--border);
   margin: .5em 0;
@@ -287,10 +289,11 @@ mark {
 .mail-text.gm-light-card details.gm-quote > summary { color: #57606a; }
 .mail-text.gm-light-card details.gm-quote > summary { background: #eef0f3; }
 
-/* Window chrome. macOS uses a hidden inset title bar: reserve room for the traffic
-   lights and make the pane headers drag the window (interactive controls opt out). */
+/* Window chrome. macOS hides the native title bar; a full-width strip (App.vue) holds the
+   traffic lights, and it plus the pane headers drag the window (interactive controls opt out). */
 :root { --titlebar: 0px; }
 html[data-chrome='mac'] { --titlebar: 28px; }
+html[data-chrome='mac'] .titlebar { display: flex; }
 html[data-chrome='mac'] [data-drag] { --wails-draggable: drag; }
 html[data-chrome='mac'] [data-drag] :is(button, a, input, textarea, select, label, summary, [role='button'], [role='tab'], [role='checkbox'], [role='menuitem'], [role='combobox'], [role='listbox'], [role='option'], [contenteditable='true'], [data-no-drag]) {
   --wails-draggable: no-drag;

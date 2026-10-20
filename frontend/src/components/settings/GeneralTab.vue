@@ -100,6 +100,16 @@ async function setConversation(v: boolean) {
       </SettingRow>
     </SettingSection>
     <SettingSection title="Sending">
+      <SettingRow title="Quote the original in replies" description="What a reply or reply-all starts with below your text. Forwards always include the message.">
+        <Select :model-value="settings.settings.replyQuote || 'header'" @update:model-value="(v) => settings.update({ replyQuote: v as 'header' | 'plain' | 'none' })">
+          <SelectTrigger class="w-48"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="header">With “On … wrote:”</SelectItem>
+            <SelectItem value="plain">Quote only</SelectItem>
+            <SelectItem value="none">Don’t quote</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
       <SettingRow title="Undo send" description="Wait a few seconds before sending so you can take it back.">
         <Select :model-value="String(settings.settings.undoSendSeconds ?? 5)" @update:model-value="(v) => settings.update({ undoSendSeconds: Number(v) })">
           <SelectTrigger class="w-40"><SelectValue /></SelectTrigger>
