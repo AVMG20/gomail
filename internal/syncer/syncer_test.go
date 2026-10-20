@@ -243,6 +243,17 @@ func TestSyncAnnounceAndIngest(t *testing.T) {
 		t.Fatalf("finished %+v", fin)
 	}
 
+	// Mail Gmail or Outlook filed as spam/junk is stored but never announced.
+	before := te.rec.count(models.EventNewMail)
+	te.provs[demo.GmailAccountID].DeliverTo(models.FolderSpam, "You won a prize", "spam@example.com")
+	te.provs[demo.OutlookAccountID].DeliverTo(models.FolderSpam, "Cheap watches", "junk@example.com")
+	if err := te.e.SyncNow(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := te.rec.count(models.EventNewMail); n != before {
+		t.Fatalf("spam announced as new mail (%d events)", n-before)
+	}
+
 	// Ingest (older pages) never announces.
 	n, err := te.e.Ingest(demo.GmailAccountID, []mail.Message{{RemoteID: "ingested-1", ThreadID: "ti", Subject: "Old",
 		Date: time.Now().Add(-400 * 24 * time.Hour), FolderRemoteIDs: []string{"INBOX"}, Labels: []string{"Travel"}}})

@@ -455,10 +455,16 @@ func (p *Provider) deliverRandom() {
 
 // Deliver adds a new incoming message now (tests).
 func (p *Provider) Deliver(subject, fromEmail string) string {
+	return p.DeliverTo(models.FolderInbox, subject, fromEmail)
+}
+
+// DeliverTo adds a new unread message to the folder of the given kind (tests:
+// mail the provider filed as spam).
+func (p *Provider) DeliverTo(kind, subject, fromEmail string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	t := template{fromName: fromEmail, fromEmail: fromEmail, subject: subject, paragraphs: []string{"Hello from the demo provider."}}
-	return p.add(t, p.me, time.Now(), p.folderSet(models.FolderInbox), true, false, nil)
+	return p.add(t, p.me, time.Now(), p.folderSet(kind), true, false, nil)
 }
 
 func (p *Provider) get(id string) (*message, error) {

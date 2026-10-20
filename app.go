@@ -201,6 +201,12 @@ func (u desktopUI) Notify(title, body string, open models.NotificationOpen) {
 	if m.notifier == nil {
 		return
 	}
+	// New mail notifies whenever the window isn't the focused one (hidden, minimised,
+	// or open behind another app); the list already shows it otherwise. Event
+	// reminders always notify.
+	if open.EventID == "" && m.window != nil && m.window.IsVisible() && m.window.IsFocused() {
+		return
+	}
 	id := fmt.Sprintf("gomail-%d", time.Now().UnixNano())
 	m.trayMu.Lock()
 	if m.notified == nil || len(m.notified) > 100 {

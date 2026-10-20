@@ -568,8 +568,14 @@ func (e *Engine) announce(accountID string, ids []string) {
 	if err != nil {
 		return
 	}
+	// Mail the provider filed as spam never notifies, even if it is also
+	// tagged with the inbox somehow.
+	spam, _ := e.cfg.Store.FolderByKind(accountID, models.FolderSpam)
 	var fresh []models.MessageSummary
 	for _, m := range sums {
+		if spam.ID != "" && contains(m.FolderIDs, spam.ID) {
+			continue
+		}
 		if m.Unread && contains(m.FolderIDs, inbox.ID) && time.Since(m.Date) < 7*24*time.Hour {
 			fresh = append(fresh, m)
 		}
