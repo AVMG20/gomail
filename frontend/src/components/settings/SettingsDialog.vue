@@ -78,7 +78,7 @@ const panelDomId = (id: string) => `settings-panel-${id.replace(/[^\w-]/g, '_')}
 
 <template>
   <Dialog v-model:open="ui.settingsOpen">
-    <DialogContent class="flex h-[min(720px,calc(100vh-2.5rem))] max-h-[calc(100vh-2.5rem)] gap-0 overflow-hidden p-0 sm:max-w-[880px]" :show-close-button="false">
+    <DialogContent class="flex h-[min(800px,calc(100vh-2.5rem))] max-h-[calc(100vh-2.5rem)] gap-0 overflow-hidden p-0 sm:max-w-[min(980px,calc(100vw-2.5rem))]" :show-close-button="false">
       <DialogTitle class="sr-only">Settings</DialogTitle>
       <DialogDescription class="sr-only">Configure gomail. Use the up and down arrow keys to move between pages.</DialogDescription>
       <nav ref="nav" class="bg-sidebar border-border thin-scroll flex w-52 shrink-0 flex-col overflow-y-auto border-r p-3" aria-label="Settings" @keydown="onTabKey">

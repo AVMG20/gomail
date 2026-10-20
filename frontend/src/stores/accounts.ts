@@ -18,7 +18,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   /** Label counts for the active scope (account id, or "" for all accounts). */
   const labelCounts = shallowRef<Map<string, LabelCount>>(new Map())
   /** The box the sidebar's label counts are for (the list on screen): clicking a label filters it. */
-  const labelScope = ref<LabelScope>({ accountId: '', folderId: '', folderKind: '' })
+  const labelScope = shallowRef<LabelScope>({ accountId: '', folderId: '', folderKind: '' })
   const loaded = ref(false)
   const syncing = ref<Set<string>>(new Set())
   /** Latest sync:progress per account (cleared when the sync finishes). */
@@ -72,7 +72,8 @@ export const useAccountsStore = defineStore('accounts', () => {
     const seq = ++countsSeq
     try {
       const counts = await api.getViewLabelCounts(scope)
-      if (scope !== labelScope.value || seq !== countsSeq) return
+      // Compare by value: a stale reply (another box) must not overwrite the counts.
+      if (JSON.stringify(scope) !== JSON.stringify(labelScope.value) || seq !== countsSeq) return
       labelCounts.value = new Map(counts.map((c) => [c.labelId, c]))
     } catch {
       /* optional binding */
