@@ -44,7 +44,7 @@ export function localeUses12h(locale = typeof navigator !== 'undefined' ? naviga
   }
 }
 
-// Settings → General → Time format ("auto" = null: follow the locale). A ref, so computed dates re-render on change.
+// Settings → Appearance → Time format ("auto" = null: follow the locale). A ref, so computed dates re-render on change.
 const clockPreference = ref<boolean | null>(null)
 export function setClockPreference(format: string | undefined) {
   clockPreference.value = format === '12h' ? true : format === '24h' ? false : null

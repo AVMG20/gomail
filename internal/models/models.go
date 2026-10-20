@@ -318,9 +318,12 @@ type Settings struct {
 	ClassifierModel  string `json:"classifierModel"`  // OpenRouter Decisions model, default "typesafe/jev-1.13"
 
 	// Labels and AI labeling.
-	Labels                   []Label `json:"labels"`
-	ImportProviderLabels     bool    `json:"importProviderLabels"`     // show Gmail labels / Outlook categories as labels (default true)
-	AutoClassify             bool    `json:"autoClassify"`             // AI-label new incoming mail
+	Labels               []Label `json:"labels"`
+	ImportProviderLabels bool    `json:"importProviderLabels"` // show Gmail labels / Outlook categories as labels (default true)
+	// AutoClassify is the old "AI-label new mail" switch for every mailbox.
+	// Deprecated: AutoLabelAccounts replaces it; it's kept in sync (on when
+	// any mailbox is auto-labeled) and read once to migrate old settings.
+	AutoClassify             bool    `json:"autoClassify"`
 	ClassifyThreshold        float64 `json:"classifyThreshold"`        // AI adds a label when P(yes) >= this (default 0.5)
 	ClassifyRemoveThreshold  float64 `json:"classifyRemoveThreshold"`  // AI removes provider/Junk labels when P(yes) < this (default 0.15)
 	AICorrectsProviderLabels bool    `json:"aiCorrectsProviderLabels"` // allow those removals (default true)
@@ -335,6 +338,14 @@ type Settings struct {
 	// MutedMailboxes lists account ids whose new mail never notifies
 	// (calendar reminders are separate: Account.CalendarMuted).
 	MutedMailboxes []string `json:"mutedMailboxes"`
+	// AutoLabelAccounts lists the account ids whose new mail Jev labels
+	// automatically. Missing (nil) in settings from before it existed: see
+	// config.MigrateAutoLabel.
+	AutoLabelAccounts []string `json:"autoLabelAccounts"`
+	// AICorrectsOff lists account ids where the AI never removes imported
+	// Gmail/Outlook labels. AICorrectsProviderLabels stays the switch for
+	// every mailbox; an empty list means all mailboxes.
+	AICorrectsOff []string `json:"aiCorrectsOff"`
 }
 
 // AIUsage summarizes OpenRouter spending recorded by gomail (local time).

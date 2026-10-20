@@ -2,7 +2,7 @@
 // account changes without touching the rest of the message. It is an atom that
 // keeps the signature's HTML verbatim: custom signatures (tables, images, inline
 // styles) would otherwise be flattened by the editor's schema. Edit it in
-// Settings → Accounts.
+// Settings → the mailbox's page.
 import { Node } from '@tiptap/core'
 import type { Editor } from '@tiptap/core'
 import DOMPurify from 'dompurify'
@@ -33,7 +33,7 @@ export const Signature = Node.create({
   addNodeView: () => ({ node }) => {
     const dom = signatureDom(node.attrs.html as string)
     dom.contentEditable = 'false'
-    dom.title = 'Signature · edit it in Settings → Accounts'
+    dom.title = 'Signature · edit it in Settings → Mailboxes'
     return { dom }
   },
 })

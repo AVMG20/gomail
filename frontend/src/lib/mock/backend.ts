@@ -276,8 +276,8 @@ class MockBackend {
   }
 
   async AddAccount(provider: string): Promise<Account> {
-    if (provider === 'gmail' && !this.settings.googleClientId) throw new Error('Google OAuth client ID is not configured. Add it in Settings → Accounts.')
-    if (provider === 'outlook' && !this.settings.microsoftClientId) throw new Error('Microsoft OAuth client ID is not configured. Add it in Settings → Accounts.')
+    if (provider === 'gmail' && !this.settings.googleClientId) throw new Error('Google OAuth client ID is not configured. Add it in Settings → Mailboxes.')
+    if (provider === 'outlook' && !this.settings.microsoftClientId) throw new Error('Microsoft OAuth client ID is not configured. Add it in Settings → Mailboxes.')
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(resolve, 3500)
       this.addAccountCancel = () => {
@@ -292,6 +292,9 @@ class MockBackend {
       displayName: provider === 'gmail' ? 'Gmail' : 'Outlook', color: ['#ef4444', '#8b5cf6', '#ec4899'][n % 3],
       createdAt: new Date().toISOString(), lastSyncAt: new Date().toISOString(), syncError: '', syncing: false, unreadCount: 1,
     }
+    // Like the backend: when Jev auto-labels every mailbox so far, it auto-labels the new one too.
+    const auto = this.settings.autoLabelAccounts ?? []
+    if (this.accounts.length && this.accounts.every((a) => auto.includes(a.id))) this.settings.autoLabelAccounts = [...auto, acc.id]
     this.accounts.push(acc)
     this.folders.set(acc.id, foldersFor(acc.id, provider))
     for (const m of buildWelcome(acc)) this.messages.set(m.id, m)
@@ -308,6 +311,12 @@ class MockBackend {
     await latency()
     this.accounts = this.accounts.filter((a) => a.id !== id)
     this.folders.delete(id)
+    // The mailbox's own settings go with it.
+    const s = this.settings
+    s.mutedMailboxes = (s.mutedMailboxes ?? []).filter((a) => a !== id)
+    s.autoLabelAccounts = (s.autoLabelAccounts ?? []).filter((a) => a !== id)
+    s.aiCorrectsOff = (s.aiCorrectsOff ?? []).filter((a) => a !== id)
+    if (s.quietLabels) delete s.quietLabels[id]
     for (const [mid, m] of this.messages) if (m.accountId === id) this.messages.delete(mid)
     this.emit('accounts:changed')
     this.changed()
@@ -782,7 +791,7 @@ class MockBackend {
           const tpl = asTemplateAccount(INCOMING[(this.incomingIdx / 2) % INCOMING.length], this.accounts.map((x) => x.id))
           if (tpl.acc === a.id || !accountId) {
             const msg = buildMessage({ ...tpl, acc: accountId ? a.id : tpl.acc }, Date.now())
-            if (!this.settings.autoClassify) { msg.labels = []; msg.labelDetails = [] }
+            if (!this.settings.autoLabelAccounts?.includes(msg.accountId)) { msg.labels = []; msg.labelDetails = [] }
             this.messages.set(msg.id, msg)
             newMessages = 1
             if (!this.quiet(msg)) this.emit('mail:new', { accountId: msg.accountId, count: 1, latest: this.summary(msg) })
@@ -819,6 +828,8 @@ class MockBackend {
     }
     const userLabels = incoming.labels.filter((l) => !l.source || l.source === 'user').map((l) => ({ ...l, source: 'user' }))
     this.settings = { ...incoming, labels: userLabels, openRouterKeySet: keySet }
+    this.settings.autoLabelAccounts = [...new Set(incoming.autoLabelAccounts ?? [])]
+    this.settings.autoClassify = this.settings.autoLabelAccounts.length > 0 // kept in sync, like the backend
     if (incoming.importProviderLabels !== undefined) this.settings.importProviderLabels = incoming.importProviderLabels
     this.emit('labels:changed', { accountId: '' })
     const valid = new Set([...this.settings.labels, ...this.providerLabels].map((l) => l.id))
@@ -908,7 +919,8 @@ class MockBackend {
       'gmail-receipts': ['receipt', 'invoice', 'statement', 'paid', 'total'],
     }
     const s = this.settings
-    const candidates = [...s.labels, ...(s.importProviderLabels && s.aiCorrectsProviderLabels ? this.providerLabels : [])]
+    const corrects = s.aiCorrectsProviderLabels && !s.aiCorrectsOff?.includes(m.accountId)
+    const candidates = [...s.labels, ...(s.importProviderLabels && corrects ? this.providerLabels : [])]
     const scores: Record<string, number> = {}
     for (const l of candidates) {
       const kw = [...(hints[l.id] ?? []), ...words(`${l.name} ${l.description}`).filter((w) => w.length > 4)]

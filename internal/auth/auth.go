@@ -140,7 +140,7 @@ func Config(provider string, c Credentials, redirectURL string) (*oauth2.Config,
 	case models.ProviderGmail:
 		if c.GoogleClientID == "" {
 			// Plain language: the user sees this in the Add account dialog.
-			return nil, fmt.Errorf("%w: Signing in with Gmail needs a one-time setup on this computer: create a free \"Desktop app\" sign-in client in the Google Cloud Console and paste its client ID in Settings → Accounts. The setup guide walks you through it in a few minutes",
+			return nil, fmt.Errorf("%w: Signing in with Gmail needs a one-time setup on this computer: create a free \"Desktop app\" sign-in client in the Google Cloud Console and paste its client ID in Settings → Mailboxes. The setup guide walks you through it in a few minutes",
 				ErrNotConfigured)
 		}
 		return &oauth2.Config{
@@ -149,7 +149,7 @@ func Config(provider string, c Credentials, redirectURL string) (*oauth2.Config,
 		}, nil
 	case models.ProviderOutlook:
 		if c.MicrosoftClientID == "" {
-			return nil, fmt.Errorf("%w: Signing in with Outlook needs a one-time setup on this computer: register a free app in the Microsoft Entra admin center and paste its application (client) ID in Settings → Accounts. The setup guide walks you through it in a few minutes",
+			return nil, fmt.Errorf("%w: Signing in with Outlook needs a one-time setup on this computer: register a free app in the Microsoft Entra admin center and paste its application (client) ID in Settings → Mailboxes. The setup guide walks you through it in a few minutes",
 				ErrNotConfigured)
 		}
 		tenant := c.MicrosoftTenant

@@ -298,6 +298,8 @@ export function normSettings(s: Settings): Settings {
     labelRules: s.labelRules ?? [],
     quietLabels: s.quietLabels ?? {},
     mutedMailboxes: s.mutedMailboxes ?? [],
+    autoLabelAccounts: s.autoLabelAccounts ?? [],
+    aiCorrectsOff: s.aiCorrectsOff ?? [],
     // Not (yet) in the Go Settings struct: fall back to the locally stored value.
     showInTray: s.showInTray ?? readLocal('showInTray', true),
     closeToTray: s.closeToTray ?? readLocal('closeToTray', false),

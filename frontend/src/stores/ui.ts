@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 
-export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'labels' | 'ai' | 'calendar' | 'about'
+/** Settings pages: app-wide pages, the mailbox overview ("accounts") and one page per mailbox. */
+export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'mail' | 'labels' | 'notifications' | 'calendar' | 'ai' | 'about' | `mailbox:${string}`
 
 function readMainView(): 'mail' | 'calendar' {
   try {
@@ -38,10 +39,12 @@ export const useUiStore = defineStore('ui', () => {
   /** Palette "New event": the calendar view opens the editor once it is mounted. */
   const newEventPending = ref(false)
 
-  /** Settings → Accounts: the account (and field) to focus when it opens (rail menu Rename / Change color). */
+  /** Settings → the mailbox's page: the field to focus when it opens (rail menu Rename / Change color / Remove). */
   const focusAccount = ref<{ id: string; field: 'name' | 'color' | 'remove' } | null>(null)
 
   function openSettings(tab: SettingsTab = 'general') {
+    // A mailbox's name, color and removal live on that mailbox's own page.
+    if (tab === 'accounts' && focusAccount.value) tab = `mailbox:${focusAccount.value.id}`
     settingsTab.value = tab
     settingsOpen.value = true
   }

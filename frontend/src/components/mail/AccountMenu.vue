@@ -13,7 +13,7 @@ const emit = defineEmits<{ labelAll: [] }>()
 const accounts = useAccountsStore()
 const ui = useUiStore()
 
-/** Settings → Accounts, at this account's name, color or remove confirmation. */
+/** Settings → this mailbox's page, at its name, color or remove confirmation. */
 function open(field: 'name' | 'color' | 'remove') {
   ui.focusAccount = { id: props.account.id, field }
   ui.openSettings('accounts')

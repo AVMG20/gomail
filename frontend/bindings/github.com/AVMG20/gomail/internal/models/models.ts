@@ -1281,7 +1281,9 @@ export interface Settings {
     "importProviderLabels": boolean;
 
     /**
-     * AI-label new incoming mail
+     * AutoClassify is the old "AI-label new mail" switch for every mailbox.
+     * Deprecated: AutoLabelAccounts replaces it; it's kept in sync (on when
+     * any mailbox is auto-labeled) and read once to migrate old settings.
      */
     "autoClassify": boolean;
 
@@ -1326,6 +1328,20 @@ export interface Settings {
      * (calendar reminders are separate: Account.CalendarMuted).
      */
     "mutedMailboxes": string[] | null;
+
+    /**
+     * AutoLabelAccounts lists the account ids whose new mail Jev labels
+     * automatically. Missing (nil) in settings from before it existed: see
+     * config.MigrateAutoLabel.
+     */
+    "autoLabelAccounts": string[] | null;
+
+    /**
+     * AICorrectsOff lists account ids where the AI never removes imported
+     * Gmail/Outlook labels. AICorrectsProviderLabels stays the switch for
+     * every mailbox; an empty list means all mailboxes.
+     */
+    "aiCorrectsOff": string[] | null;
 }
 
 /**

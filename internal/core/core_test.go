@@ -493,7 +493,7 @@ func TestClassification(t *testing.T) {
 	// Budget reached: automatic labeling pauses with an event.
 	st = s.GetSettings()
 	st.AIDailyBudgetUSD = 0.0001
-	st.AutoClassify = true
+	st.AutoLabelAccounts = []string{demo.GmailAccountID}
 	s.SaveSettings(st)
 	e.demos[demo.GmailAccountID].Deliver("Invoice for budget test", "billing@acme.example")
 	s.SyncNow(demo.GmailAccountID)

@@ -43,6 +43,8 @@ export const SEED_SETTINGS: Settings = {
   aiCorrectsProviderLabels: true,
   classifyInstructions: DEFAULT_CLASSIFY_INSTRUCTIONS,
   autoClassify: true,
+  autoLabelAccounts: ['acc_personal', 'acc_work', 'acc_side'],
+  aiCorrectsOff: [],
   labels: SEED_LABELS.map((l) => ({ ...l, source: 'user' })),
   importProviderLabels: true,
   notifications: true,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 
@@ -29,9 +30,11 @@ func (s *Service) loadSettings() error {
 		// field that still decodes, default the rest, and save a copy.
 		st = s.salvageSettings()
 	}
+	migrated := config.MigrateAutoLabel(&st, s.accountIDs())
 	config.Normalize(&st)
-	if s.scopeLabels(st.Labels) {
-		_ = s.persist(st) // labels from before labels were per mailbox
+	// Labels from before labels were per mailbox, or the old auto-label switch.
+	if s.scopeLabels(st.Labels) || migrated {
+		_ = s.persist(st)
 	}
 	s.settingsMu.Lock()
 	s.settings = st
@@ -278,6 +281,9 @@ func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
 	st.Labels = slices.Clone(st.Labels)
 	st.LabelRules = slices.Clone(st.LabelRules)
 	st.MutedMailboxes = slices.Clone(st.MutedMailboxes)
+	st.AutoLabelAccounts = slices.Clone(st.AutoLabelAccounts)
+	st.AICorrectsOff = slices.Clone(st.AICorrectsOff)
+	st.QuietLabels = maps.Clone(st.QuietLabels)
 	if !fn(&st) {
 		s.settingsMu.Unlock()
 		return
@@ -295,7 +301,8 @@ func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
 
 // labelsGainAccount runs when a mailbox is added: user labels that belonged
 // to every mailbox so far ("All") belong to the new one too, and labels
-// without a list get one.
+// without a list get one. Likewise, when Jev auto-labels every mailbox so
+// far, it auto-labels the new one too.
 func (s *Service) labelsGainAccount(accountID string) {
 	var others []string
 	for _, id := range s.accountIDs() {
@@ -321,6 +328,10 @@ func (s *Service) labelsGainAccount(accountID string) {
 				changed = true
 			}
 		}
+		if len(others) > 0 && !slices.Contains(st.AutoLabelAccounts, accountID) && allIn(others, st.AutoLabelAccounts) {
+			st.AutoLabelAccounts = append(st.AutoLabelAccounts, accountID)
+			changed = true
+		}
 		return s.scopeLabels(st.Labels) || changed
 	})
 }
@@ -343,6 +354,17 @@ func (s *Service) labelsLoseAccount(accountID string) {
 			out = append(out, l)
 		}
 		st.Labels = out
+		// The mailbox's own settings go with it.
+		if _, ok := st.QuietLabels[accountID]; ok {
+			delete(st.QuietLabels, accountID)
+			changed = true
+		}
+		for _, list := range []*[]string{&st.MutedMailboxes, &st.AutoLabelAccounts, &st.AICorrectsOff} {
+			if i := slices.Index(*list, accountID); i >= 0 {
+				*list = slices.Delete(*list, i, i+1)
+				changed = true
+			}
+		}
 		return s.scopeLabels(st.Labels) || changed
 	})
 }
@@ -372,4 +394,14 @@ func (s *Service) SetOpenRouterKey(key string) error {
 // DefaultPrompts returns the built-in prompts.
 func DefaultPrompts() models.DefaultPrompts {
 	return models.DefaultPrompts{Grammar: ai.DefaultGrammarPrompt, Classify: ai.DefaultClassifyInstructions}
+}
+
+// allIn reports whether every id of ids is in list.
+func allIn(ids, list []string) bool {
+	for _, id := range ids {
+		if !slices.Contains(list, id) {
+			return false
+		}
+	}
+	return true
 }

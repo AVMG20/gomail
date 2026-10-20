@@ -10,7 +10,7 @@ const control = ref<HTMLElement | null>(null)
 function label() {
   const root = control.value
   if (!root) return
-  const els = root.querySelectorAll<HTMLElement>('button, input, textarea, [role="switch"], [role="combobox"], [role="slider"]')
+  const els = root.querySelectorAll<HTMLElement>('button, input, textarea, [role="switch"], [role="combobox"], [role="slider"], [role="radiogroup"]')
   els.forEach((el) => {
     if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) return
     if (el.tagName === 'BUTTON' && el.textContent?.trim() && el.getAttribute('role') !== 'combobox' && el.getAttribute('role') !== 'switch') return

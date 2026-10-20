@@ -8,12 +8,14 @@ import { Button } from '@/components/ui/button'
 import { useAccountsStore } from '@/stores/accounts'
 import { useCalendarStore } from '@/stores/calendar'
 import { useSettingsStore } from '@/stores/settings'
+import { useUiStore } from '@/stores/ui'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 
 const settings = useSettingsStore()
 const accounts = useAccountsStore()
 const cal = useCalendarStore()
+const ui = useUiStore()
 const s = computed(() => settings.settings!)
 const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US'
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -23,7 +25,7 @@ const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floo
 
 <template>
   <div v-if="settings.settings">
-    <SettingSection title="View">
+    <SettingSection title="View" all-mailboxes>
       <SettingRow title="Week starts on" :description="`Follows your language and region by default (${localeDay}).`">
         <Select :model-value="s.calendarWeekStart || 'auto'" @update:model-value="(v) => settings.update({ calendarWeekStart: String(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
@@ -50,7 +52,7 @@ const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floo
         <Switch :model-value="!!s.calendarShowDeclined" @update:model-value="(v: boolean) => settings.update({ calendarShowDeclined: v })" />
       </SettingRow>
     </SettingSection>
-    <SettingSection title="New events">
+    <SettingSection title="New events" all-mailboxes>
       <SettingRow title="Default duration">
         <Select :model-value="String(s.calendarDefaultDuration ?? 30)" @update:model-value="(v) => settings.update({ calendarDefaultDuration: Number(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
@@ -68,26 +70,26 @@ const duration = (m: number) => (m < 60 ? `${m} minutes` : m % 60 ? `${Math.floo
         </Select>
       </SettingRow>
     </SettingSection>
-    <SettingSection title="Notifications">
-      <SettingRow title="Event reminders" description="Show a desktop notification before events start.">
-        <Switch :model-value="s.calendarNotifications !== false" @update:model-value="(v: boolean) => settings.update({ calendarNotifications: v })" />
-      </SettingRow>
-    </SettingSection>
-    <SettingSection title="Mailboxes" description="A disabled calendar doesn’t sync and sends no reminders; turning reminders off keeps its events visible.">
-      <div v-for="a in accounts.accounts" :key="a.id" class="flex items-center gap-3 py-2">
+    <SettingSection title="Per mailbox" description="Hidden calendars don’t sync. Muted ones still show their events.">
+      <p v-if="s.calendarNotifications === false" class="text-muted-foreground pb-2 text-xs">
+        Event reminders are off for all mailboxes.
+        <button type="button" class="text-foreground underline-offset-2 hover:underline" @click="ui.settingsTab = 'notifications'">Turn them on in Notifications</button>
+      </p>
+      <p v-if="!accounts.accounts.length" class="text-muted-foreground py-3.5 text-xs">Add an account to see its calendar here.</p>
+      <div v-for="a in accounts.accounts" :key="a.id" class="flex items-center gap-3 py-2.5">
         <AccountAvatar :account="a" :size="22" :glyph="false" />
-        <span class="min-w-0 flex-1 truncate text-sm" :title="a.email">{{ a.email }}</span>
+        <button type="button" class="hover:text-foreground min-w-0 flex-1 truncate text-left text-[13px] underline-offset-2 hover:underline" :title="`Open the settings of ${a.email}`" @click="ui.settingsTab = `mailbox:${a.id}`">{{ a.email }}</button>
         <Button v-if="a.calendarConsent === false" variant="outline" size="sm" :disabled="cal.connecting === a.id" @click="cal.connect(a.id)">Connect</Button>
         <template v-else>
           <label class="text-muted-foreground flex items-center gap-2 text-xs">
-            Enabled
-            <Switch :model-value="a.calendarEnabled !== false" :aria-label="`Calendar enabled for ${a.email}`" @update:model-value="(v: boolean) => cal.setAccountEnabled(a.id, v, false)" />
+            Show
+            <Switch :model-value="a.calendarEnabled !== false" :aria-label="`Show the calendar of ${a.email}`" @update:model-value="(v: boolean) => cal.setAccountEnabled(a.id, v, false)" />
           </label>
           <label class="text-muted-foreground flex items-center gap-2 text-xs">
             Reminders
             <Switch
-              :model-value="!a.calendarMuted"
-              :disabled="a.calendarEnabled === false"
+              :model-value="!a.calendarMuted && s.calendarNotifications !== false"
+              :disabled="a.calendarEnabled === false || s.calendarNotifications === false"
               :aria-label="`Reminders for ${a.email}`"
               @update:model-value="(v: boolean) => cal.setAccountMuted(a.id, !v)"
             />

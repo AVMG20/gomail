@@ -224,6 +224,38 @@ func Normalize(s *models.Settings) {
 	s.LabelRules = normalizeRules(s.LabelRules, labels)
 	s.QuietLabels = normalizeQuietLabels(s.QuietLabels, labels)
 	s.MutedMailboxes = uniqueTrimmed(s.MutedMailboxes)
+	s.AutoLabelAccounts = uniqueTrimmed(s.AutoLabelAccounts)
+	s.AutoClassify = len(s.AutoLabelAccounts) > 0 // for older versions
+	s.AICorrectsOff = uniqueTrimmed(s.AICorrectsOff)
+}
+
+// AutoClassifies reports whether new mail of accountID is AI-labeled
+// automatically.
+func AutoClassifies(s models.Settings, accountID string) bool {
+	return slices.Contains(s.AutoLabelAccounts, accountID)
+}
+
+// MigrateAutoLabel turns the old app-wide auto-label switch into the
+// per-mailbox list, once (AutoLabelAccounts is nil only in settings from
+// before it existed): on means every mailbox, off none. It must run
+// before Normalize, which makes the list non-nil. It reports whether it
+// changed s.
+func MigrateAutoLabel(s *models.Settings, accountIDs []string) bool {
+	if s.AutoLabelAccounts != nil {
+		return false
+	}
+	s.AutoLabelAccounts = []string{}
+	if s.AutoClassify {
+		s.AutoLabelAccounts = append(s.AutoLabelAccounts, accountIDs...)
+	}
+	return true
+}
+
+// AICorrects reports whether the AI may remove imported labels from mail
+// of accountID: AICorrectsProviderLabels is on and the mailbox isn't
+// turned off.
+func AICorrects(s models.Settings, accountID string) bool {
+	return s.AICorrectsProviderLabels && !slices.Contains(s.AICorrectsOff, accountID)
 }
 
 // NormalizeLabels validates label definitions: unique slug ids, unique
