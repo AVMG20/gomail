@@ -4,7 +4,7 @@
 import { parseSearch, type ParsedSearch } from '../searchQuery'
 import { fromWireInput, MockCalendar } from './calendar'
 import type {
-  Account, AIModel, AppInfo, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
+  Account, AIModel, AppInfo, BackupResult, RestoreSummary, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
   SearchQuery, SearchResult, Settings, Calendar, CalendarEvent, EventInput, RecurrenceScope, AttendeeResponse, EventDraft,
 } from '../types'
@@ -846,6 +846,28 @@ class MockBackend {
   async GetAppInfo(): Promise<AppInfo> {
     await latency(20, 50)
     return { version: '0.1.0-dev', dataDir: '~/.config/gomail', logFile: '~/.config/gomail/gomail.log', platform: 'browser/mock', os: 'browser', arch: 'wasm', demo: true }
+  }
+
+  // ---------------------------------------------------------------- backup
+  /** Pretends the save dialog picked ~/Downloads (nothing is written in the browser). */
+  async ExportBackup(includeSecrets: boolean): Promise<BackupResult> {
+    await sleep(500)
+    let marks = 0
+    for (const m of this.messages.values()) marks += (m.labelDetails ?? []).filter((d) => d.source === 'manual' || d.source === 'ai').length
+    const day = new Date().toISOString().slice(0, 10)
+    return { cancelled: false, path: `~/Downloads/gomail-backup-${day}.gomailbackup`, accounts: this.accounts.length, labels: this.allLabels().length, labelAssignments: marks, includesSecrets: includeSecrets }
+  }
+
+  /** Pretends a backup of this same install was picked: everything merges into the existing accounts. */
+  async ImportBackup(): Promise<RestoreSummary> {
+    await sleep(700)
+    const exp = await this.ExportBackup(false)
+    this.emit('accounts:changed', { accountId: '' })
+    this.emit('labels:changed', { accountId: '' })
+    return {
+      cancelled: false, path: exp.path, createdAt: new Date().toISOString(), labels: exp.labels, rules: 0, accountsAdded: 0, accountsReady: 0,
+      accountsMerged: exp.accounts, accountsSkipped: 0, labelAssignments: exp.labelAssignments, appliedNow: exp.labelAssignments, calendars: 0, secretsRestored: false,
+    }
   }
 
   /** Next backend pass. ?update=1 pretends a newer release exists (and emits update:available). */

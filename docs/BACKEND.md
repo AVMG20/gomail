@@ -518,6 +518,42 @@ meeting messages (`#microsoft.graph.eventMessage`) carry no ICS part.
 Their event is read with `$expand=microsoft.graph.eventMessage/event`
 (method from `meetingMessageType`), and `eventId` is linked the same way.
 
+## Backup and restore
+
+`ExportBackup(includeSecrets)` shows a save dialog and writes
+`gomail-backup-YYYY-MM-DD.gomailbackup`. The file is gzip-compressed JSON
+`{format: "gomail-backup", version: 1, createdAt, appVersion,
+includesSecrets, settings, extra, accounts, secrets?}`:
+
+- `settings` is the whole `models.Settings`, marshaled as is, so new
+  fields are included automatically. The OAuth app credentials are blanked.
+- `extra` holds other stored preferences (dismissed provider labels).
+- `accounts` holds the provider, email, name, color, signature and calendar
+  switches of each account, never its OAuth tokens. Each account also
+  carries `labelMarks` (`{remoteId, labelId, kind: manual|ai|rejected|
+  override|classified, confidence}`, keyed by the provider's message id)
+  and `calendars` (`{remoteId, visible, color}`). Provider and Junk labels
+  aren't included, because sync derives them again.
+- `secrets` is only written with `includeSecrets`. It holds the OpenRouter
+  key and the Google/Microsoft client id, secret and tenant.
+
+`ImportBackup()` shows an open dialog, validates `format` and `version`
+(a newer version is rejected), and merges the backup:
+
+- Every setting in the backup replaces the current one. Settings the
+  backup lacks keep their value. Labels are merged by id, and the backup
+  wins on a conflict. Credentials only change when the backup has secrets.
+- Missing accounts are recreated with their id, with `needsReauth` and a
+  "Restored from a backup" `syncError`, and `ReauthAccount` finishes them.
+  If a token for that id is still in the keychain, it is used. An account
+  that already exists (same provider and email) is kept unchanged. It only
+  gains the backup's label marks, its calendar choices, and its signature
+  if it has none.
+- Label marks and calendar choices go to `pending_labels` and
+  `pending_calendars`, keyed by provider, email and remote id. They are
+  applied right away to messages and calendars already present, and
+  otherwise on ingest (`ApplySync`, `ReplaceCalendars`).
+
 ## Data directory
 
 | OS      | Default                                   |

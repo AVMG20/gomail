@@ -171,6 +171,25 @@ export interface Attendee {
 }
 
 /**
+ * BackupResult describes a written backup (ExportBackup).
+ */
+export interface BackupResult {
+    /**
+     * the user closed the save dialog
+     */
+    "cancelled": boolean;
+    "path": string;
+    "accounts": number;
+    "labels": number;
+
+    /**
+     * label marks: manual/AI labels, removals, overrides
+     */
+    "labelAssignments": number;
+    "includesSecrets": boolean;
+}
+
+/**
  * Calendar is one calendar of an account (Google calendarList entry,
  * Outlook calendar).
  */
@@ -903,6 +922,72 @@ export interface OutgoingAttachment {
     "filename": string;
     "mimeType": string;
     "dataBase64": string;
+}
+
+/**
+ * RestoreSummary describes an imported backup (ImportBackup). Importing
+ * merges into the current install; nothing is deleted.
+ */
+export interface RestoreSummary {
+    /**
+     * the user closed the open dialog
+     */
+    "cancelled": boolean;
+    "path": string;
+
+    /**
+     * when the backup was made (RFC 3339)
+     */
+    "createdAt": string;
+
+    /**
+     * labels in the backup
+     */
+    "labels": number;
+
+    /**
+     * entries of the backup's "...rules" settings lists
+     */
+    "rules": number;
+
+    /**
+     * AccountsAdded were recreated and need a sign-in (Accounts with
+     * needsReauth; ReauthAccount finishes them). AccountsReady were
+     * recreated and could reuse a sign-in still stored on this device.
+     */
+    "accountsAdded": number;
+    "accountsReady": number;
+
+    /**
+     * AccountsMerged already existed here (same provider and email): kept
+     * as they are, with the backup's labels and calendar choices merged in.
+     */
+    "accountsMerged": number;
+
+    /**
+     * invalid entries
+     */
+    "accountsSkipped": number;
+
+    /**
+     * label marks restored
+     */
+    "labelAssignments": number;
+
+    /**
+     * of which applied right away (their messages are already here); the rest apply as mail syncs
+     */
+    "appliedNow": number;
+
+    /**
+     * calendar visibility/color choices restored
+     */
+    "calendars": number;
+
+    /**
+     * API keys / OAuth app credentials were in the file and restored
+     */
+    "secretsRestored": boolean;
 }
 
 /**

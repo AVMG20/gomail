@@ -495,6 +495,36 @@ export interface AppInfo {
   demo: boolean
 }
 
+/** ExportBackup result. */
+export interface BackupResult {
+  cancelled: boolean
+  path: string
+  accounts: number
+  labels: number
+  labelAssignments: number
+  includesSecrets: boolean
+}
+
+/** ImportBackup result: the backup is merged into this install. */
+export interface RestoreSummary {
+  cancelled: boolean
+  path: string
+  createdAt: string
+  labels: number
+  rules: number
+  /** Recreated, waiting for a sign-in (needsReauth). */
+  accountsAdded: number
+  /** Recreated with a sign-in still stored on this device. */
+  accountsReady: number
+  /** Already here: kept, the backup's labels merged in. */
+  accountsMerged: number
+  accountsSkipped: number
+  labelAssignments: number
+  appliedNow: number
+  calendars: number
+  secretsRestored: boolean
+}
+
 export interface UpdateInfo {
   current: string
   latest: string
