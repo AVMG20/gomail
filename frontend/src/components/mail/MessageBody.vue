@@ -197,20 +197,26 @@ let ro: ResizeObserver | null = null
 
 let fitScale = 1
 function measure() {
-  const doc = frame.value?.contentDocument
-  if (!doc?.body || !frame.value) return
+  const f = frame.value
+  const doc = f?.contentDocument
+  if (!doc?.body || !f) return
   // Fit wide newsletters to the pane (like Apple Mail) instead of scrolling sideways.
-  const avail = frame.value.clientWidth
-  const root = doc.documentElement as HTMLElement & { style: CSSStyleDeclaration & { zoom: string } }
-  const natural = Math.ceil(doc.body.scrollWidth * fitScale)
-  if (avail > 0 && natural > avail + 2) {
-    fitScale = Math.max(0.55, avail / natural)
-    root.style.zoom = String(fitScale)
-  } else if (fitScale < 1 && natural * (1 / fitScale) <= avail) {
-    fitScale = 1
-    root.style.zoom = ''
+  // Always measure the unscaled layout so the result never depends on the previous scale:
+  // feeding a zoomed measurement back in made narrow panes flip between two scales forever.
+  const root = doc.documentElement
+  root.style.transform = ''
+  root.style.width = ''
+  const avail = f.clientWidth
+  const natural = doc.body.scrollWidth
+  fitScale = avail > 0 && natural > avail + 2 ? Math.max(0.55, avail / natural) : 1
+  // Lay out at the content's natural width, then shrink it visually to the pane.
+  if (fitScale < 1) root.style.width = `${natural}px`
+  // offsetHeight (not scrollHeight) so the frame's current height is no floor and it can shrink again.
+  const h = Math.ceil(Math.max(root.offsetHeight, doc.body.scrollHeight) * fitScale)
+  if (fitScale < 1) {
+    root.style.transformOrigin = '0 0'
+    root.style.transform = `scale(${fitScale})`
   }
-  const h = Math.ceil(Math.max(root.scrollHeight, doc.body.scrollHeight) * (root.style.zoom ? fitScale : 1))
   if (h && Math.abs(h - height.value) > 1) height.value = h
 }
 
@@ -230,6 +236,8 @@ function onLoad() {
   if (typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(() => measure())
     ro.observe(doc.body)
+    // A scaled body keeps its natural width, so watch the frame itself for pane resizes.
+    if (frame.value) ro.observe(frame.value)
   }
   doc.addEventListener('load', measure, true) // images
   doc.addEventListener('click', (e) => {

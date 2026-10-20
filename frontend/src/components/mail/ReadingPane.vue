@@ -272,7 +272,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
         </DropdownMenu>
       </div>
 
-      <div ref="scroller" class="thin-scroll min-h-0 flex-1 overflow-y-auto">
+      <div ref="scroller" class="thin-scroll min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div :class="showBack ? 'mx-auto w-full max-w-4xl' : ''">
         <div v-if="!threadMatches && !error" class="space-y-4 px-6 py-6">
           <Skeleton class="h-6 w-2/3" />
