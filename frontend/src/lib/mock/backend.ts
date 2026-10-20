@@ -249,6 +249,7 @@ class MockBackend {
         const hit = labels.some((l) => m.labels.includes(l)) || (q.unlabeled && m.labels.length === 0)
         if (!hit) continue
       }
+      if (q.excludeLabels?.some((l) => m.labels.includes(l))) continue
       if (parsed && !this.matchSearch(m, parsed).ok) continue
       out.push(m)
     }
@@ -964,7 +965,8 @@ class MockBackend {
     const includeAll = includeAllFolders
     const base = !q.folderId && !q.folderKind
       ? [...this.messages.values()].filter((m) => (!q.accountId || m.accountId === q.accountId) && (!q.unreadOnly || m.unread)
-        && (!(q.labels?.length || q.unlabeled) || q.labels.some((l) => m.labels.includes(l)) || (q.unlabeled && m.labels.length === 0)))
+        && (!(q.labels?.length || q.unlabeled) || q.labels.some((l) => m.labels.includes(l)) || (q.unlabeled && m.labels.length === 0))
+        && !q.excludeLabels?.some((l) => m.labels.includes(l)))
       : this.filter({ ...q, cursor: '' })
     return base.filter((m) => (includeAll || !this.neverLabel(m)) && (!onlyUnlabeled || m.labels.length === 0))
   }

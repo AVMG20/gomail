@@ -105,6 +105,9 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 	case q.Unlabeled:
 		w.add(noLabel)
 	}
+	if len(q.ExcludeLabels) > 0 {
+		w.add(`NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (`+placeholders(len(q.ExcludeLabels))+`)`+s.labelCond()+`)`, anySlice(q.ExcludeLabels)...)
+	}
 	if opt.OnlyUnlabeled {
 		w.add(noLabel)
 	}

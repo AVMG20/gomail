@@ -282,4 +282,15 @@ func TestUnlabeledOrLabels(t *testing.T) {
 	if g := got(models.ListQuery{Labels: []string{"work", "personal"}}); g != "[C A] 2" {
 		t.Fatalf("labels: %s", g)
 	}
+	if g := got(models.ListQuery{ExcludeLabels: []string{"work"}}); g != "[C B] 2" {
+		t.Fatalf("hide work: %s", g)
+	}
+	if g := got(models.ListQuery{Unlabeled: true, Labels: []string{"personal"}, ExcludeLabels: []string{"work"}}); g != "[C B] 2" {
+		t.Fatalf("hide work with show filter: %s", g)
+	}
+	// Conversation view must not answer from the unfiltered folder counters.
+	p, err := s.ListMessages(models.ListQuery{FolderID: inbox.ID, ExcludeLabels: []string{"work", "personal"}}, ListOptions{Conversations: true})
+	if err != nil || p.Total != 1 || len(p.Messages) != 1 {
+		t.Fatalf("conversations hiding both: total %d, %d rows, %v", p.Total, len(p.Messages), err)
+	}
 }

@@ -339,7 +339,7 @@ func (s *Store) folderKinds(ids []string) (map[string]string, error) {
 // or FolderKind across accounts). Views with search/label/unread filters
 // or the starred view return nil.
 func (s *Store) QueryFolders(q models.ListQuery) ([]models.Folder, error) {
-	if q.Search != "" || len(q.Labels) > 0 || q.Unlabeled || q.UnreadOnly {
+	if q.Search != "" || len(q.Labels) > 0 || len(q.ExcludeLabels) > 0 || q.Unlabeled || q.UnreadOnly {
 		return nil, nil
 	}
 	if q.FolderID != "" {
@@ -457,7 +457,7 @@ func (s *Store) hasMoreRemote(q models.ListQuery) bool {
 // fastConversationCount answers the conversation total of plain folder
 // views from the trigger-maintained folder_threads counters.
 func (s *Store) fastConversationCount(q models.ListQuery, opt ListOptions) (int, bool, error) {
-	if !opt.Conversations || q.Search != "" || len(q.Labels) > 0 || q.Unlabeled {
+	if !opt.Conversations || q.Search != "" || len(q.Labels) > 0 || len(q.ExcludeLabels) > 0 || q.Unlabeled {
 		return 0, false, nil
 	}
 	var folders []string

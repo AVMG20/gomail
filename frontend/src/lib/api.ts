@@ -343,6 +343,7 @@ function normQuery(q: Partial<ListQuery>): ListQuery {
     folderKind: q.folderKind ?? '',
     labels: q.labels ?? [],
     unlabeled: q.unlabeled ?? false,
+    excludeLabels: q.excludeLabels ?? [],
     search: q.search ?? '',
     unreadOnly: q.unreadOnly ?? false,
     limit: q.limit ?? 50,

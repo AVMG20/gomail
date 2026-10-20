@@ -1,16 +1,14 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, h, ref } from 'vue'
 import {
-  CircleArrowUpIcon, WifiOffIcon, ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon, PencilIcon,
+  CircleArrowUpIcon, WifiOffIcon, ChevronRightIcon, LayersIcon, RefreshCwIcon, TagIcon, Trash2Icon, PlusIcon, EyeOffIcon,
 } from '@lucide/vue'
-import Tip from '@/components/common/Tip.vue'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
 import type { Account, Folder } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
-import { useComposeStore } from '@/stores/compose'
 import { useMailStore, UNIFIED_NAMES } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
@@ -29,7 +27,6 @@ const mail = useMailStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
 const ai = useAiStore()
-const compose = useComposeStore()
 
 const account = computed(() => mail.mailboxAccount)
 const moreOpen = ref(false)
@@ -118,15 +115,6 @@ function formatCount(n: number) {
           <span class="text-muted-foreground block truncate text-xs">{{ accounts.accounts.length }} mailboxes</span>
         </span>
       </div>
-      <Tip label="New message" shortcut="c">
-        <button
-          type="button"
-          class="bg-background hover:bg-sidebar-accent mt-2 flex h-8 w-full items-center gap-2 rounded-md border px-2.5 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @click="compose.compose()"
-        >
-          <PencilIcon class="size-3.5 text-[color:var(--account)]" /> New message
-        </button>
-      </Tip>
     </div>
 
     <div class="thin-scroll flex-1 overflow-y-auto px-2 pb-2">
@@ -219,7 +207,8 @@ function formatCount(n: number) {
                 <span class="flex size-4 shrink-0 items-center justify-center">
                   <span class="size-2.5 rounded-full" :style="{ background: label.color, boxShadow: mail.labelFilter.labels.includes(label.id) ? `0 0 0 3px color-mix(in oklab, ${label.color} 25%, transparent)` : undefined }" />
                 </span>
-                <span class="flex-1 truncate text-left">{{ label.name }}</span>
+                <span :class="['flex-1 truncate text-left', mail.labelFilter.hidden.includes(label.id) && 'text-muted-foreground line-through']">{{ label.name }}</span>
+                <EyeOffIcon v-if="mail.labelFilter.hidden.includes(label.id)" class="text-muted-foreground size-3.5" aria-label="Hidden from the list" />
                 <!-- Unread, like the folders above (the label filter popover shows totals). -->
                 <span v-if="count?.unread" class="text-foreground/80 text-xs font-medium tabular-nums" :aria-label="`${count.unread} unread`">{{ formatCount(count.unread) }}</span>
               </button>

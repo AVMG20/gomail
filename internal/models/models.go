@@ -169,15 +169,16 @@ type AttachmentData struct {
 // "all accounts" (unified view); FolderKind selects the same system folder
 // across accounts, FolderID selects one specific folder.
 type ListQuery struct {
-	AccountID  string   `json:"accountId"`
-	FolderID   string   `json:"folderId"`
-	FolderKind string   `json:"folderKind"`
-	Labels     []string `json:"labels"`    // messages having ANY of these label ids; empty = no label filter
-	Unlabeled  bool     `json:"unlabeled"` // only messages without any label
-	Search     string   `json:"search"`
-	UnreadOnly bool     `json:"unreadOnly"`
-	Limit      int      `json:"limit"`
-	Cursor     string   `json:"cursor"`
+	AccountID     string   `json:"accountId"`
+	FolderID      string   `json:"folderId"`
+	FolderKind    string   `json:"folderKind"`
+	Labels        []string `json:"labels"`        // messages having ANY of these label ids; empty = no label filter
+	Unlabeled     bool     `json:"unlabeled"`     // only messages without any label
+	ExcludeLabels []string `json:"excludeLabels"` // hide messages having ANY of these label ids
+	Search        string   `json:"search"`
+	UnreadOnly    bool     `json:"unreadOnly"`
+	Limit         int      `json:"limit"`
+	Cursor        string   `json:"cursor"`
 }
 
 // SearchQuery drives the command palette search across all mail. Query

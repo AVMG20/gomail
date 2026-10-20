@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { refDebounced, useThrottleFn } from '@vueuse/core'
 import {
-  InboxIcon, MailIcon, MailOpenIcon, PanelLeftIcon, RefreshCwIcon, SearchIcon, SearchXIcon, TagIcon, XIcon,
+  EyeOffIcon, InboxIcon, MailIcon, MailOpenIcon, PanelLeftIcon, RefreshCwIcon, SearchIcon, SearchXIcon, SquarePenIcon, TagIcon, XIcon,
 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -13,6 +13,7 @@ import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
 import { useAccountsStore } from '@/stores/accounts'
+import { useComposeStore } from '@/stores/compose'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
@@ -35,6 +36,7 @@ const mail = useMailStore()
 const accounts = useAccountsStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
+const compose = useComposeStore()
 
 const compact = computed(() => settings.settings?.density === 'compact')
 const rowHeight = computed(() => (compact.value ? 40 : 84))
@@ -242,6 +244,7 @@ function onContext(e: MouseEvent) {
 
 // ---- header bits
 const activeLabels = computed(() => mail.labelFilter.labels.map((id) => settings.labelMap.get(id)).filter((l) => !!l))
+const hiddenLabels = computed(() => mail.labelFilter.hidden.map((id) => settings.labelMap.get(id)).filter((l) => !!l))
 const subtitle = computed(() => {
   if (mail.status === 'loading') return ''
   const n = mail.total
@@ -288,6 +291,11 @@ const emptyState = computed(() => {
             <h1 class="truncate text-[15px] leading-tight font-semibold tracking-tight">{{ mail.mailboxName }}</h1>
             <p class="text-muted-foreground h-4 truncate text-xs leading-4">{{ subtitle }}</p>
           </div>
+          <Tip label="New message" shortcut="c">
+            <Button variant="ghost" size="icon-sm" class="text-muted-foreground" aria-label="New message" @click="compose.compose()">
+              <SquarePenIcon />
+            </Button>
+          </Tip>
           <Tip label="Sync now">
             <Button variant="ghost" size="icon-sm" class="text-muted-foreground" aria-label="Sync now" @click="refresh">
               <RefreshCwIcon :class="syncing && 'animate-spin'" />
@@ -329,6 +337,12 @@ const emptyState = computed(() => {
         <span v-if="mail.labelFilter.unlabeled" class="border-border text-muted-foreground inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2 text-xs">
           No label
           <button type="button" class="opacity-60 hover:opacity-100" aria-label="Remove no-label filter" @click="mail.toggleUnlabeledFilter()"><XIcon class="size-3" /></button>
+        </span>
+        <span v-for="l in hiddenLabels" :key="`hidden-${l!.id}`" class="border-border text-muted-foreground inline-flex h-6 items-center gap-1.5 rounded-full border border-dashed px-2 text-xs" :title="`Hiding mail labeled ${l!.name}`">
+          <EyeOffIcon class="size-3" />
+          <span class="size-2 rounded-full" :style="{ background: l!.color }" />
+          <span class="line-through">{{ l!.name }}</span>
+          <button type="button" class="opacity-60 hover:opacity-100" :aria-label="`Stop hiding ${l!.name}`" @click="mail.toggleHiddenLabel(l!.id)"><XIcon class="size-3" /></button>
         </span>
         <button type="button" class="text-muted-foreground hover:text-foreground ml-1 text-xs" @click="mail.clearLabelFilter()">Clear</button>
       </div>

@@ -629,6 +629,11 @@ export interface ListQuery {
      * only messages without any label
      */
     "unlabeled": boolean;
+
+    /**
+     * hide messages having ANY of these label ids
+     */
+    "excludeLabels": string[] | null;
     "search": string;
     "unreadOnly": boolean;
     "limit": number;

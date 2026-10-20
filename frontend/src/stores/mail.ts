@@ -17,6 +17,8 @@ export interface Mailbox {
 export interface LabelFilter {
   labels: string[]
   unlabeled: boolean
+  /** Hide mail having ANY of these labels (absent in filters saved before it existed). */
+  hidden?: string[]
 }
 
 const PAGE = 60
@@ -103,8 +105,11 @@ export const useMailStore = defineStore('mail', () => {
   const remoteAllowed = shallowRef<Set<string>>(new Set())
   const addressBook = shallowRef<Map<string, Address>>(new Map())
 
-  const labelFilter = computed<LabelFilter>(() => filters.value[mailboxKey(mailbox.value)] ?? { labels: [], unlabeled: false })
-  const hasLabelFilter = computed(() => labelFilter.value.labels.length > 0 || labelFilter.value.unlabeled)
+  const labelFilter = computed<Required<LabelFilter>>(() => {
+    const f = filters.value[mailboxKey(mailbox.value)]
+    return { labels: f?.labels ?? [], unlabeled: !!f?.unlabeled, hidden: f?.hidden ?? [] }
+  })
+  const hasLabelFilter = computed(() => labelFilter.value.labels.length > 0 || labelFilter.value.unlabeled || labelFilter.value.hidden.length > 0)
 
   const query = computed<ListQuery>(() => ({
     accountId: mailbox.value.accountId,
@@ -112,6 +117,7 @@ export const useMailStore = defineStore('mail', () => {
     folderKind: mailbox.value.folderId || mailbox.value.kind === 'all' ? '' : mailbox.value.kind,
     labels: labelFilter.value.labels,
     unlabeled: labelFilter.value.unlabeled,
+    excludeLabels: labelFilter.value.hidden,
     search: search.value.trim(),
     unreadOnly: unreadOnly.value,
     limit: PAGE,
@@ -170,7 +176,7 @@ export const useMailStore = defineStore('mail', () => {
   async function refreshViewUnread() {
     const seq = ++unreadSeq
     const q = query.value
-    if (!q.search && !q.labels?.length && !q.unlabeled) {
+    if (!q.search && !q.labels?.length && !q.unlabeled && !q.excludeLabels?.length) {
       viewUnread.value = null
       return
     }
@@ -357,22 +363,30 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   function setLabelFilter(f: LabelFilter) {
-    filters.value = { ...filters.value, [mailboxKey(mailbox.value)]: { labels: [...f.labels], unlabeled: f.unlabeled } }
+    filters.value = { ...filters.value, [mailboxKey(mailbox.value)]: { labels: [...f.labels], unlabeled: f.unlabeled, hidden: [...(f.hidden ?? [])] } }
     writeJSON(FILTERS_KEY, filters.value)
   }
 
+  /** Show only mail with this label (toggle). A label is either shown-only or hidden, never both. */
   function toggleLabelFilter(labelId: string) {
     const f = labelFilter.value
     const labels = f.labels.includes(labelId) ? f.labels.filter((l) => l !== labelId) : [...f.labels, labelId]
-    setLabelFilter({ labels, unlabeled: f.unlabeled })
+    setLabelFilter({ ...f, labels, hidden: f.hidden.filter((l) => l !== labelId) })
+  }
+
+  /** Hide mail with this label (toggle). */
+  function toggleHiddenLabel(labelId: string) {
+    const f = labelFilter.value
+    const hidden = f.hidden.includes(labelId) ? f.hidden.filter((l) => l !== labelId) : [...f.hidden, labelId]
+    setLabelFilter({ ...f, hidden, labels: f.labels.filter((l) => l !== labelId) })
   }
 
   function toggleUnlabeledFilter() {
-    setLabelFilter({ labels: labelFilter.value.labels, unlabeled: !labelFilter.value.unlabeled })
+    setLabelFilter({ ...labelFilter.value, unlabeled: !labelFilter.value.unlabeled })
   }
 
   function clearLabelFilter() {
-    setLabelFilter({ labels: [], unlabeled: false })
+    setLabelFilter({ labels: [], unlabeled: false, hidden: [] })
   }
 
   // Reload when the query changes. Filters keep the old list visible while loading.
@@ -394,7 +408,9 @@ export const useMailStore = defineStore('mail', () => {
       if (!settings.settings) return
       const valid = new Set(settings.labels.map((l) => l.id))
       const f = labelFilter.value
-      if (f.labels.some((l) => !valid.has(l))) setLabelFilter({ labels: f.labels.filter((l) => valid.has(l)), unlabeled: f.unlabeled })
+      if ([...f.labels, ...f.hidden].some((l) => !valid.has(l))) {
+        setLabelFilter({ labels: f.labels.filter((l) => valid.has(l)), unlabeled: f.unlabeled, hidden: f.hidden.filter((l) => valid.has(l)) })
+      }
     },
   )
 
@@ -769,7 +785,7 @@ export const useMailStore = defineStore('mail', () => {
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
     labelFilter, hasLabelFilter, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
-    reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleUnlabeledFilter, clearLabelFilter,
+    reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     archive, trash, setRead, setStarred, addLabel, removeLabel, loadThread, cachedThread, invalidateThread, suggestAddresses,
   }

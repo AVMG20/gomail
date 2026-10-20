@@ -253,6 +253,8 @@ export interface ListQuery {
   labels: string[]
   /** Match mail without any label (combined with `labels` as OR). */
   unlabeled: boolean
+  /** Hide mail having ANY of these labels. */
+  excludeLabels?: string[]
   search: string
   unreadOnly: boolean
   limit: number
