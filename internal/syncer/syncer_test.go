@@ -67,6 +67,8 @@ type flaky struct {
 	markFolderReadHook func()
 	// moveHook, if set, runs before Move; an error fails the move.
 	moveHook func(target mail.Folder) error
+	// labelHook, if set, runs before SetLabel.
+	labelHook func()
 }
 
 func (f *flaky) err(op string) error {
@@ -119,6 +121,9 @@ func (f *flaky) SetLabel(ctx context.Context, ids []string, name string, add boo
 	f.mu.Lock()
 	f.labels = append(f.labels, fmt.Sprintf("%s:%v:%d", name, add, len(ids)))
 	f.mu.Unlock()
+	if f.labelHook != nil {
+		f.labelHook()
+	}
 	return f.Provider.SetLabel(ctx, ids, name, add)
 }
 

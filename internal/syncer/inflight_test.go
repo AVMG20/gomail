@@ -3,7 +3,9 @@ package syncer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,5 +225,54 @@ func TestFailedMoveDoesNotUndoALaterMove(t *testing.T) {
 	sums, _ := te.st.Summaries([]string{m.ID})
 	if len(sums) != 1 || !slices.Equal(sums[0].FolderIDs, []string{trash.ID}) {
 		t.Fatalf("folders %v, want the trash (%s) only", sums[0].FolderIDs, trash.ID)
+	}
+}
+
+// Outlook categories are set by reading the message's list and writing it
+// back whole, so two label pushes for the same mailbox running at once
+// (a rule adding two labels to new mail) lose one of the labels; the next
+// sync then removes it locally too. Pushes of a mailbox run one at a time.
+func TestLabelPushesOfAMailboxDontOverlap(t *testing.T) {
+	te := newTestEnv(t)
+	m := labeledMessage(t, te)
+	var mu sync.Mutex
+	active, most := 0, 0
+	te.provs[demo.OutlookAccountID].labelHook = func() {
+		mu.Lock()
+		active++
+		most = max(most, active)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+	}
+	te.e.PushLabel([]string{m.ID}, "Work", true)
+	te.e.PushLabel([]string{m.ID}, "Finance", true)
+	te.e.wg.Wait()
+	if most != 1 {
+		t.Fatalf("%d label pushes ran at once", most)
+	}
+	if n := len(te.provs[demo.OutlookAccountID].labels); n != 2 {
+		t.Fatalf("%d pushes, want 2", n)
+	}
+}
+
+// Label pushes reach the provider in the order they were made: adding a
+// label and taking it off again must not end with the label on.
+func TestLabelPushesKeepTheirOrder(t *testing.T) {
+	te := newTestEnv(t)
+	m := labeledMessage(t, te)
+	p := te.provs[demo.OutlookAccountID]
+	p.labelHook = func() { time.Sleep(time.Millisecond) }
+	var want []string
+	for i := range 20 {
+		add := i%2 == 0
+		te.e.PushLabel([]string{m.ID}, "Work", add)
+		want = append(want, fmt.Sprintf("Work:%v:1", add))
+	}
+	te.e.wg.Wait()
+	if !slices.Equal(p.labels, want) {
+		t.Fatalf("pushed %v, want %v", p.labels, want)
 	}
 }

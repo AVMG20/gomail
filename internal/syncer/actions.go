@@ -507,9 +507,7 @@ func (e *Engine) PushLabel(ids []string, labelName string, add bool) {
 		if !e.HasProviderLabel(acct, labelName) {
 			continue
 		}
-		e.wg.Add(1)
-		go func(acct string, ms []models.MessageSummary) {
-			defer e.wg.Done()
+		e.queuePush(acct, func() {
 			defer safe.Recover("push label")
 			ctx, cancel := context.WithTimeout(e.ctx, 2*time.Minute)
 			defer cancel()
@@ -520,8 +518,40 @@ func (e *Engine) PushLabel(ids []string, labelName string, add bool) {
 			if err != nil {
 				slog.Warn("pushing label to provider failed", "account", acct, "label", labelName, "err", err)
 			}
-		}(acct, ms)
+		})
 	}
+}
+
+// queuePush runs label pushes of an account one at a time, in order:
+// Outlook sets categories by reading a message's list and writing it back
+// whole, so pushes running at once lose labels, and an add overtaken by
+// its own undo leaves the wrong state.
+func (e *Engine) queuePush(accountID string, fn func()) {
+	st := e.state(accountID)
+	e.mu.Lock()
+	st.pushQ = append(st.pushQ, fn)
+	start := !st.pushing
+	st.pushing = true
+	e.mu.Unlock()
+	if !start {
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		for {
+			e.mu.Lock()
+			if len(st.pushQ) == 0 {
+				st.pushing = false
+				e.mu.Unlock()
+				return
+			}
+			next := st.pushQ[0]
+			st.pushQ = st.pushQ[1:]
+			e.mu.Unlock()
+			next()
+		}
+	}()
 }
 
 // MarkFolderRead marks every message of a folder read (optimistically).

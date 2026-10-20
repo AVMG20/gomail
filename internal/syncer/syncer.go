@@ -75,7 +75,9 @@ type acctState struct {
 	// apply serializes writes of fetched mail (sync, search, older pages)
 	// with optimistic local changes, so "changed locally since the fetch"
 	// is checked and acted on atomically.
-	apply sync.Mutex
+	apply   sync.Mutex
+	pushQ   []func() // queued label pushes (see queuePush; e.mu)
+	pushing bool     // a goroutine is working through pushQ
 }
 
 // lockApply takes the apply locks of the accounts (in a fixed order).
