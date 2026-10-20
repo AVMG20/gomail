@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/AVMG20/gomail/internal/calendar"
 	"github.com/AVMG20/gomail/internal/config"
@@ -590,7 +591,10 @@ func (s *Service) SaveAttachment(messageID, attachmentID string) error {
 func sanitizeFilename(n string) string {
 	n = filepath.Base(strings.ReplaceAll(n, "\\", "/"))
 	n = strings.Map(func(r rune) rune {
-		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
+		switch {
+		case unicode.Is(unicode.Bidi_Control, r):
+			return -1 // "invoice\u202Efdp.exe" would read as "invoiceexe.pdf"
+		case unicode.IsControl(r) || strings.ContainsRune(`<>:"/\|?*`, r):
 			return '_'
 		}
 		return r

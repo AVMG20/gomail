@@ -294,3 +294,26 @@ func TestUnlabeledOrLabels(t *testing.T) {
 		t.Fatalf("conversations hiding both: total %d, %d rows, %v", p.Total, len(p.Messages), err)
 	}
 }
+
+// Attachment names are shown as-is: bidi controls that reverse how the
+// extension reads ("invoice‮fdp.exe" shows as "invoiceexe.pdf") are
+// dropped when they are stored.
+func TestSaveBodyDropsBidiControlsFromAttachmentNames(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	m := threadMsg("A", "T1", 1, "Ann", "INBOX")
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{m}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	id := MessageID("a1", "A")
+	if err := s.SaveBody(id, BodyUpdate{Text: "x", Attachments: []models.Attachment{{ID: "1", Filename: "invoice‮fdp.exe", Size: 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.Attachment(id, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Filename != "invoicefdp.exe" {
+		t.Fatalf("filename %q", a.Filename)
+	}
+}

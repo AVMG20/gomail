@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
@@ -759,12 +760,23 @@ func (s *Store) SaveBody(id string, b BodyUpdate) error {
 		}
 		for i, a := range b.Attachments {
 			if _, err := tx.Exec(`INSERT OR REPLACE INTO attachments(message_id, id, filename, mime_type, size, inline, content_id, pos) VALUES(?,?,?,?,?,?,?,?)`,
-				id, a.ID, a.Filename, a.MimeType, a.Size, boolInt(a.Inline), a.ContentID, i); err != nil {
+				id, a.ID, stripBidi(a.Filename), a.MimeType, a.Size, boolInt(a.Inline), a.ContentID, i); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// stripBidi drops bidi controls, which can make "invoice\u202Efdp.exe"
+// display as "invoiceexe.pdf".
+func stripBidi(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Bidi_Control, r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func countNonInline(atts []models.Attachment) int {

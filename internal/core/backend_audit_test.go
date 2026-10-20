@@ -127,3 +127,17 @@ func TestStaleSettingsSaveDoesNotResurrectDroppedLabels(t *testing.T) {
 		t.Fatal("the rest of the save was lost")
 	}
 }
+
+// A right-to-left override makes "invoice‮fdp.exe" display as
+// "invoiceexe.pdf": the save dialog must not suggest such a name.
+func TestSanitizeFilenameDropsBidiControls(t *testing.T) {
+	for in, want := range map[string]string{
+		"invoice‮fdp.exe":    "invoicefdp.exe",
+		"a⁦b⁩‏.txt":          "ab.txt",
+		"x\u007f\u0085y.pdf": "x__y.pdf",
+	} {
+		if got := sanitizeFilename(in); got != want {
+			t.Errorf("sanitizeFilename(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
