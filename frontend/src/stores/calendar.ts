@@ -334,16 +334,20 @@ export const useCalendarStore = defineStore('calendar', () => {
     }
   }
 
-  async function respond(ev: CalendarEvent, response: AttendeeResponse) {
+  /** Answer an invitation (the whole series for a recurring one). Resolves to "" on success, else the error. */
+  async function respond(ev: CalendarEvent, response: AttendeeResponse): Promise<string> {
     const series = ev.seriesId || ev.id
     const setResponse = (r: AttendeeResponse) => (events.value = events.value.map((e) => ((e.seriesId || e.id) === series ? { ...e, myResponse: r } : e)))
     setResponse(response)
     try {
       await api.respondToEvent(ev.id, response)
       toast.success(response === 'accepted' ? 'Accepted' : response === 'declined' ? 'Declined' : 'Marked as maybe', { description: ev.title })
+      return ''
     } catch (e) {
       setResponse(ev.myResponse)
-      toast.error('Couldn’t send your response', { description: errorMessage(e) })
+      const msg = errorMessage(e) || 'Couldn’t send your response'
+      toast.error('Couldn’t send your response', { description: msg })
+      return msg
     }
   }
 
