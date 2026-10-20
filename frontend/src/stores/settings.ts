@@ -5,6 +5,7 @@ import { api, errorMessage, hasMethod, isWails, setWindowChrome } from '@/lib/ap
 import { setClockPreference } from '@/lib/calendar'
 import { applyTheme, themeFromSettings } from '@/lib/theme'
 import type { AIModel, AppInfo, DefaultPrompts, Label, Settings, UpdateInfo } from '@/lib/types'
+import { labelsForAccount as forAccount, labelsForAccounts as forAccounts } from '@/lib/labelScope'
 
 export const JEV_MODELS: AIModel[] = [
   { id: 'typesafe/jev-1.13', name: 'Jev 1.13 (pinned)', description: 'Decision model for labeling, pinned version', contextLength: 0, promptPrice: 0, completionPrice: 0 },
@@ -22,6 +23,10 @@ export const useSettingsStore = defineStore('settings', () => {
 
   const labels = computed<Label[]>(() => settings.value?.labels ?? [])
   const labelMap = computed(() => new Map(labels.value.map((l) => [l.id, l])))
+  /** Labels of one mailbox ("" = the unified view: every label). Use this wherever labels are offered. */
+  const labelsForAccount = (accountId: string) => forAccount(labels.value, accountId)
+  /** Labels of any of these mailboxes (a mixed selection); none known = every label. */
+  const labelsForAccounts = (accountIds: Iterable<string>) => forAccounts(labels.value, accountIds)
   const aiReady = computed(() => !!settings.value?.openRouterKeySet)
   const grammarReady = computed(() => aiReady.value && hasMethod('ImproveGrammar'))
 
@@ -169,7 +174,7 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     patchLabel, renameLabel, removeLabel,
     settings, saving, models, modelsLoading, modelsError, defaults, appInfo, updateInfo, checkingUpdate, checkForUpdate,
-    labels, labelMap, aiReady, grammarReady,
+    labels, labelMap, labelsForAccount, labelsForAccounts, aiReady, grammarReady,
     load, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
   }
 })

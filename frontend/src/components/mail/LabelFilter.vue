@@ -31,7 +31,8 @@ function pick(id: string) {
   else mail.toggleLabelFilter(id)
 }
 
-const items = computed(() => fuzzyFilter(q.value, settings.labels, (l) => l.name, 100))
+// Only the labels of the mailbox shown (every label in the unified view).
+const items = computed(() => fuzzyFilter(q.value, settings.labelsForAccount(mail.mailbox.accountId), (l) => l.name, 100))
 const activeCount = computed(() => mail.labelFilter.labels.length + mail.labelFilter.hidden.length + (mail.labelFilter.unlabeled ? 1 : 0))
 </script>
 

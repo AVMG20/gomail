@@ -231,7 +231,7 @@ func TestThresholdChangeAppliesToStoredScores(t *testing.T) {
 	if err != nil || len(ins) != 1 {
 		t.Fatal(err)
 	}
-	hash := aiHash(s.labelsetHash(), ins[0])
+	hash := aiHash(s.labelsetHash(ins[0].AccountID), ins[0])
 	label := s.GetSettings().Labels[0].ID
 	_ = s.store.DeleteUnknownLabels(nil) // start without any label assignments
 	if _, _, err := s.store.ApplyAIScores(id, map[string]float64{label: 0.6}, store.AIPolicy{AddThreshold: 0.5, RemoveThreshold: 0.1}, hash); err != nil {

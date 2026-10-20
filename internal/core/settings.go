@@ -30,6 +30,9 @@ func (s *Service) loadSettings() error {
 		st = s.salvageSettings()
 	}
 	config.Normalize(&st)
+	if s.scopeLabels(st.Labels) {
+		_ = s.persist(st) // labels from before labels were per mailbox
+	}
 	s.settingsMu.Lock()
 	s.settings = st
 	s.settingsMu.Unlock()
@@ -96,11 +99,21 @@ func (s *Service) SaveSettings(in models.Settings) error {
 		prev[l.ID] = l
 	}
 	for i, l := range in.Labels {
-		if p, ok := prev[l.ID]; ok && l.Source == config.LabelSourceUser && p.Source != config.LabelSourceUser {
+		p, ok := prev[l.ID]
+		if !ok {
+			continue
+		}
+		if l.Source == config.LabelSourceUser && p.Source != config.LabelSourceUser {
 			in.Labels[i].Source = p.Source
+		}
+		if p.Source == config.LabelSourceProvider {
+			// A provider label belongs to the mailboxes it was imported
+			// from; the UI doesn't edit that (and may hold a stale copy).
+			in.Labels[i].AccountIDs = slices.Clone(p.AccountIDs)
 		}
 	}
 	in.Labels = config.NormalizeLabels(in.Labels)
+	s.scopeLabels(in.Labels)
 	if err := s.persist(in); err != nil {
 		s.settingsMu.Unlock()
 		return err
@@ -174,6 +187,12 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 		}
 		if i, ok := byName[lower]; ok {
 			out[lower] = st.Labels[i].ID
+			// The same name in another mailbox is the same label: it now
+			// belongs there too (its mail carries it).
+			if l := st.Labels[i]; l.Source != config.LabelSourceSystem && len(l.AccountIDs) > 0 && !slices.Contains(l.AccountIDs, accountID) {
+				st.Labels[i].AccountIDs = append(slices.Clone(l.AccountIDs), accountID)
+				changed = true
+			}
 			if st.Labels[i].Source == config.LabelSourceProvider && pl.Color != "" && st.Labels[i].Color != pl.Color && config.IsHexColor(pl.Color) {
 				st.Labels[i].Color = pl.Color
 				changed = true
@@ -183,7 +202,7 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 		if slices.Contains(dismissed, lower) {
 			continue
 		}
-		st.Labels = append(st.Labels, models.Label{Name: name, Color: pl.Color, Source: config.LabelSourceProvider})
+		st.Labels = append(st.Labels, models.Label{Name: name, Color: pl.Color, Source: config.LabelSourceProvider, AccountIDs: []string{accountID}})
 		st.Labels = config.NormalizeLabels(st.Labels)
 		added := st.Labels[len(st.Labels)-1]
 		for _, l := range st.Labels { // NormalizeLabels may append Junk last
@@ -206,6 +225,126 @@ func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) m
 		s.emit(models.EventLabelsChanged, models.AccountEvent{AccountID: accountID})
 	}
 	return out
+}
+
+// ---- mailbox scope of labels ----
+
+// accountIDs lists the ids of the accounts on this computer.
+func (s *Service) accountIDs() []string {
+	accts, err := s.store.Accounts()
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, len(accts))
+	for i, a := range accts {
+		ids[i] = a.ID
+	}
+	return ids
+}
+
+// scopeLabels gives labels without a mailbox list their mailboxes:
+// provider labels the accounts whose mail carries them, every other label
+// every mailbox (see config.ScopeLabels). It reports whether a label
+// changed.
+func (s *Service) scopeLabels(labels []models.Label) bool {
+	ids := s.accountIDs()
+	if len(ids) == 0 {
+		return false
+	}
+	changed := false
+	var seen map[string][]string
+	for i, l := range labels {
+		if l.Source != config.LabelSourceProvider || len(l.AccountIDs) > 0 {
+			continue
+		}
+		if seen == nil {
+			if seen, _ = s.store.LabelAccounts(); seen == nil {
+				seen = map[string][]string{}
+			}
+		}
+		if a := seen[l.ID]; len(a) > 0 {
+			labels[i].AccountIDs = slices.Clone(a)
+			changed = true
+		}
+	}
+	return config.ScopeLabels(labels, ids) || changed
+}
+
+// updateLabels changes the stored settings' labels outside SaveSettings
+// (accounts added or removed). fn reports whether it changed anything.
+func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
+	s.settingsMu.Lock()
+	st := s.settings
+	st.Labels = slices.Clone(st.Labels)
+	st.LabelRules = slices.Clone(st.LabelRules)
+	st.MutedMailboxes = slices.Clone(st.MutedMailboxes)
+	if !fn(&st) {
+		s.settingsMu.Unlock()
+		return
+	}
+	if err := s.persist(st); err != nil {
+		s.settingsMu.Unlock()
+		slog.Warn("saving label mailboxes failed", "err", err)
+		return
+	}
+	s.settings = st
+	s.settingsMu.Unlock()
+	s.store.SetLabels(st.Labels)
+	s.emit(models.EventLabelsChanged, models.AccountEvent{})
+}
+
+// labelsGainAccount runs when a mailbox is added: user labels that belonged
+// to every mailbox so far ("All") belong to the new one too, and labels
+// without a list get one.
+func (s *Service) labelsGainAccount(accountID string) {
+	var others []string
+	for _, id := range s.accountIDs() {
+		if id != accountID {
+			others = append(others, id)
+		}
+	}
+	s.updateLabels(func(st *models.Settings) bool {
+		changed := false
+		for i, l := range st.Labels {
+			if l.Source != config.LabelSourceUser || len(l.AccountIDs) == 0 || slices.Contains(l.AccountIDs, accountID) {
+				continue
+			}
+			all := true
+			for _, a := range others {
+				if !slices.Contains(l.AccountIDs, a) {
+					all = false
+					break
+				}
+			}
+			if all {
+				st.Labels[i].AccountIDs = append(slices.Clone(l.AccountIDs), accountID)
+				changed = true
+			}
+		}
+		return s.scopeLabels(st.Labels) || changed
+	})
+}
+
+// labelsLoseAccount runs when a mailbox is removed: labels forget it.
+// Provider labels of only that mailbox are dropped (their mail is gone);
+// user labels left without a mailbox belong to every remaining one.
+func (s *Service) labelsLoseAccount(accountID string) {
+	s.updateLabels(func(st *models.Settings) bool {
+		changed := false
+		out := st.Labels[:0:0]
+		for _, l := range st.Labels {
+			if i := slices.Index(l.AccountIDs, accountID); i >= 0 {
+				l.AccountIDs = slices.Delete(slices.Clone(l.AccountIDs), i, i+1)
+				changed = true
+				if len(l.AccountIDs) == 0 && l.Source == config.LabelSourceProvider {
+					continue
+				}
+			}
+			out = append(out, l)
+		}
+		st.Labels = out
+		return s.scopeLabels(st.Labels) || changed
+	})
 }
 
 // ---- OpenRouter key ----

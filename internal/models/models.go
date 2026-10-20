@@ -255,6 +255,11 @@ type Label struct {
 	// Source is "user" (created in gomail), "provider" (imported from Gmail
 	// labels / Outlook categories) or "system" (built-in, e.g. "junk").
 	Source string `json:"source"`
+	// AccountIDs are the mailboxes the label belongs to: it is offered,
+	// counted and applied only there. Provider labels list the accounts
+	// they were imported from. Empty means every mailbox (labels saved
+	// before labels were per mailbox, and the built-in Junk label).
+	AccountIDs []string `json:"accountIds"`
 }
 
 type Settings struct {

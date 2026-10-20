@@ -118,7 +118,7 @@ function safeHighlight(html: string) {
 }
 
 // ---- operator completions (label:, from:, is:, has:, in:)
-const completions = computed<Completion[]>(() => operatorCompletions(query.value, { labels: settings.labels, contacts: [...mail.addressBook.values()] }))
+const completions = computed<Completion[]>(() => operatorCompletions(query.value, { labels: settings.labelsForAccount(scopeAccount.value), contacts: [...mail.addressBook.values()] }))
 
 function complete(c: Completion) {
   query.value = applyCompletion(query.value, c.value)
@@ -126,7 +126,8 @@ function complete(c: Completion) {
 
 // ---- local fuzzy sections
 const q = computed(() => query.value.trim())
-const labelItems = computed<Label[]>(() => (q.value.includes(':') ? [] : fuzzyFilter(q.value, settings.labels, (l) => l.name, q.value ? 3 : 0)))
+// Label items filter the list shown: only that mailbox's labels (every label in the unified view).
+const labelItems = computed<Label[]>(() => (q.value.includes(':') ? [] : fuzzyFilter(q.value, settings.labelsForAccount(mail.mailbox.accountId), (l) => l.name, q.value ? 3 : 0)))
 
 interface MailboxItem { key: string; title: string; subtitle: string; icon?: Component; accountId: string; folderId: string; kind: string; isAccount?: boolean }
 const mailboxItems = computed<MailboxItem[]>(() => {

@@ -1134,9 +1134,30 @@ func (s *Store) LabelCounts(accountID string) ([]models.LabelCount, error) {
 	return out, rows.Err()
 }
 
+// LabelAccounts returns, per label, the accounts whose messages carry it
+// (used to give provider labels from before labels were per mailbox the
+// mailboxes they were imported in).
+func (s *Store) LabelAccounts() (map[string][]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT label_id, account_id FROM message_labels WHERE account_id != '' ORDER BY label_id, account_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var l, a string
+		if err := rows.Scan(&l, &a); err != nil {
+			return nil, err
+		}
+		out[l] = append(out[l], a)
+	}
+	return out, rows.Err()
+}
+
 // ClassifyInput is the data the classifier needs for one message.
 type ClassifyInput struct {
 	ID             string
+	AccountID      string
 	From           models.Address
 	To             []models.Address
 	Subject        string
@@ -1154,7 +1175,7 @@ type ClassifyInput struct {
 func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 	var out []ClassifyInput
 	for _, chunk := range chunks(ids, 500) {
-		rows, err := s.db.Query(`SELECT m.id, m.from_name, m.from_email, m.to_json, m.subject, m.snippet, coalesce(m.body_text, ''), m.date,
+		rows, err := s.db.Query(`SELECT m.id, m.account_id, m.from_name, m.from_email, m.to_json, m.subject, m.snippet, coalesce(m.body_text, ''), m.date,
 			m.has_attachments, m.classified_at, m.ai_hash, m.ai_scores,
 			coalesce((SELECT group_concat(f.kind) FROM message_folders mf JOIN folders f ON f.id = mf.folder_id WHERE mf.message_id = m.id), '')
 			FROM messages m WHERE m.id IN (`+placeholders(len(chunk))+`)`, anySlice(chunk)...)
@@ -1168,7 +1189,7 @@ func (s *Store) ClassifyInputs(ids []string) ([]ClassifyInput, error) {
 			var att int
 			var classified int64
 			var kinds, scores string
-			if err := rows.Scan(&c.ID, &c.From.Name, &c.From.Email, &to, &c.Subject, &c.Snippet, &c.BodyText, &date, &att, &classified,
+			if err := rows.Scan(&c.ID, &c.AccountID, &c.From.Name, &c.From.Email, &to, &c.Subject, &c.Snippet, &c.BodyText, &date, &att, &classified,
 				&c.AIHash, &scores, &kinds); err != nil {
 				rows.Close()
 				return nil, err

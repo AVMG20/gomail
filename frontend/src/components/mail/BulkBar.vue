@@ -65,7 +65,7 @@ async function labelWithAi() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" class="w-52">
         <DropdownMenuLabel class="text-muted-foreground text-xs">Add label</DropdownMenuLabel>
-        <LabelMenuItems @pick="(id) => run((ids) => mail.addLabel(ids, id))" />
+        <LabelMenuItems :account-ids="mail.selectionAccountIds" @pick="(id) => run((ids) => mail.addLabel(ids, id))" />
       </DropdownMenuContent>
     </DropdownMenu>
     <DropdownMenu>
@@ -74,7 +74,7 @@ async function labelWithAi() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" class="w-52">
         <DropdownMenuLabel class="text-muted-foreground text-xs">Remove label</DropdownMenuLabel>
-        <LabelMenuItems @pick="(id) => run((ids) => mail.removeLabel(ids, id))" />
+        <LabelMenuItems :account-ids="mail.selectionAccountIds" @pick="(id) => run((ids) => mail.removeLabel(ids, id))" />
       </DropdownMenuContent>
     </DropdownMenu>
     <Tip label="Label with AI">

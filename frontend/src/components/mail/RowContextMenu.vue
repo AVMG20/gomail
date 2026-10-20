@@ -55,6 +55,15 @@ function moveTo(folderId: string) {
 // "All N in this view" covers rows that never loaded: go by the view's unread count.
 const anyUnread = computed(() => (mail.selectAllQuery && mail.selection.has(props.messageId) ? mail.viewUnreadCount > 0 : ctxIds.value.some((id) => mail.byId.get(id)?.unread)))
 const allStarred = computed(() => (mail.selectAllQuery && mail.selection.has(props.messageId) ? mail.mailbox.kind === 'starred' : ctxIds.value.every((id) => mail.byId.get(id)?.starred)))
+// The labels of the mailboxes of the mail it applies to (a mixed selection: of any of them), plus
+// labels the mail already has so they can be taken off.
+const ctxLabels = computed(() => {
+  const inSelection = mail.selection.has(props.messageId)
+  const accts = inSelection ? mail.selectionAccountIds : [ctxMsg.value?.accountId ?? '']
+  const scoped = new Set(settings.labelsForAccounts(accts).map((l) => l.id))
+  const present = new Set(ctxIds.value.flatMap((id) => mail.byId.get(id)?.labels ?? []))
+  return settings.labels.filter((l) => scoped.has(l.id) || present.has(l.id))
+})
 const labelState = (labelId: string) => ctxIds.value.every((id) => mail.byId.get(id)?.labels.includes(labelId))
 
 function toggleCtxLabel(labelId: string) {
@@ -83,7 +92,7 @@ function toggleCtxLabel(labelId: string) {
         <ContextMenuSubTrigger class="gap-2"><TagIcon class="size-4" /> Labels</ContextMenuSubTrigger>
         <ContextMenuSubContent class="w-52">
           <ContextMenuCheckboxItem
-            v-for="l in settings.labels"
+            v-for="l in ctxLabels"
             :key="l.id"
             :model-value="labelState(l.id)"
             @select="(e: Event) => { e.preventDefault(); toggleCtxLabel(l.id) }"

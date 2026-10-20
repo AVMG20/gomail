@@ -296,6 +296,14 @@ func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
 		return fmt.Errorf("too many messages selected (max %d)", syncer.MaxBulk)
 	}
 	if add {
+		// A label is only added to mail of the mailboxes it belongs to
+		// (removing it is always allowed).
+		if ids, err = s.inLabelMailboxes(ids, l); err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return fmt.Errorf("the label “%s” isn’t used in this mailbox; choose its mailboxes in Settings → Labels", l.Name)
+		}
 		err = s.store.AddLabels(ids, labelID)
 	} else {
 		err = s.store.RemoveLabels(ids, labelID)
@@ -308,6 +316,27 @@ func (s *Service) changeLabel(ids []string, labelID string, add bool) error {
 		s.engine.PushLabel(ids, l.Name, add)
 	}
 	return nil
+}
+
+// inLabelMailboxes keeps the messages of mailboxes the label belongs to.
+func (s *Service) inLabelMailboxes(ids []string, l models.Label) ([]string, error) {
+	sums, err := s.store.Summaries(ids)
+	if err != nil {
+		return nil, err
+	}
+	ok := map[string]bool{}
+	for _, m := range sums {
+		if config.LabelInAccount(l, m.AccountID) {
+			ok[m.ID] = true
+		}
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if ok[id] {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) messagesChanged(ids []string) {

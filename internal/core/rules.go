@@ -36,9 +36,15 @@ type ruleActions struct {
 
 // planRules decides what the rules do to the candidates. Junk rules only
 // act when junk is set (new mail): moving mail already on this computer to
-// Junk would undo the user's own "not junk" moves.
-func planRules(rules []models.LabelRule, cands []store.RuleCandidate, junk bool) ruleActions {
+// Junk would undo the user's own "not junk" moves. A label rule only adds
+// its label to mail of a mailbox the label belongs to (a rule for every
+// mailbox skips the others; so does a rule whose label lost its mailbox).
+func planRules(rules []models.LabelRule, labels []models.Label, cands []store.RuleCandidate, junk bool) ruleActions {
 	act := ruleActions{labels: map[string][]string{}}
+	byID := make(map[string]models.Label, len(labels))
+	for _, l := range labels {
+		byID[l.ID] = l
+	}
 	junked := map[string]bool{}
 	for _, c := range cands {
 		for _, r := range rules {
@@ -50,7 +56,7 @@ func planRules(rules []models.LabelRule, cands []store.RuleCandidate, junk bool)
 					junked[c.ID] = true
 					act.junk = append(act.junk, c.ID)
 				}
-			} else if r.LabelID != "" {
+			} else if l, ok := byID[r.LabelID]; ok && config.LabelInAccount(l, c.AccountID) {
 				act.labels[r.LabelID] = append(act.labels[r.LabelID], c.ID)
 			}
 		}
@@ -127,7 +133,8 @@ func (s *Service) applyRuleActions(act ruleActions) (int, error) {
 // announced (so quiet labels and Junk moves already count). It only looks
 // at the new messages, so a sync doesn't scan the whole mailbox.
 func (s *Service) applyRules(accountID string, ids []string) {
-	rules := s.Settings().LabelRules
+	st := s.Settings()
+	rules := st.LabelRules
 	if len(rules) == 0 || len(ids) == 0 {
 		return
 	}
@@ -136,7 +143,7 @@ func (s *Service) applyRules(accountID string, ids []string) {
 		slog.Warn("label rules: reading new mail failed", "account", accountID, "err", err)
 		return
 	}
-	_, _ = s.applyRuleActions(planRules(rules, cands, true))
+	_, _ = s.applyRuleActions(planRules(rules, st.Labels, cands, true))
 }
 
 // ApplyLabelRules runs the label rules over the mail already on this
@@ -144,7 +151,8 @@ func (s *Service) applyRules(accountID string, ids []string) {
 // many messages got a label. Junk rules are skipped: they only act on new
 // mail, so mail the user took out of Junk stays out.
 func (s *Service) ApplyLabelRules() (int, error) {
-	rules := s.Settings().LabelRules
+	st := s.Settings()
+	rules := st.LabelRules
 	if len(rules) == 0 {
 		return 0, nil
 	}
@@ -152,7 +160,7 @@ func (s *Service) ApplyLabelRules() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return s.applyRuleActions(planRules(rules, cands, false))
+	return s.applyRuleActions(planRules(rules, st.Labels, cands, false))
 }
 
 // quietMessage reports whether new mail shouldn't notify: its mailbox has

@@ -61,8 +61,9 @@ function go(r: Row) {
   mail.setMailbox({ accountId: account.value?.id ?? '', folderId: r.folderId, kind: r.kind })
 }
 
+// Only this mailbox's labels (every label in the unified view); the counts are scoped the same way.
 const labelRows = computed(() =>
-  settings.labels.map((l) => ({ label: l, count: accounts.labelCounts.get(l.id) })).filter((x) => x.label.source === 'user' || !x.label.source || (x.count?.total ?? 0) > 0),
+  settings.labelsForAccount(account.value?.id ?? '').map((l) => ({ label: l, count: accounts.labelCounts.get(l.id) })).filter((x) => x.label.source === 'user' || !x.label.source || (x.count?.total ?? 0) > 0),
 )
 
 // Background backfill of older mail: shown as a quiet suffix, never as a progress bar.

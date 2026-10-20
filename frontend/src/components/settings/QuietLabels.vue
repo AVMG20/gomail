@@ -16,13 +16,14 @@ const settings = useSettingsStore()
 const accounts = useAccountsStore()
 const quiet = computed(() => settings.settings?.quietLabels ?? {})
 const muted = computed(() => new Set(settings.settings?.mutedMailboxes ?? []))
-// Labels the user can make quiet (Junk always is).
-const options = computed(() => settings.labels.filter((l) => l.id !== JUNK))
+// Labels the user can make quiet in a mailbox: that mailbox's labels (Junk always is quiet).
+const optionsFor = (accountId: string) => settings.labelsForAccount(accountId).filter((l) => l.id !== JUNK)
 const junkLabel = computed(() => settings.labelMap.get(JUNK) ?? { id: JUNK, name: 'Junk', color: 'var(--muted-foreground)' })
 
-/** The mailbox's quiet labels that still exist, without Junk (shown separately). */
+/** The mailbox's quiet labels that still exist there, without Junk (shown separately). */
 function listFor(accountId: string): string[] {
-  return (quiet.value[accountId] ?? []).filter((id) => id !== JUNK && settings.labelMap.has(id))
+  const valid = new Set(optionsFor(accountId).map((l) => l.id))
+  return (quiet.value[accountId] ?? []).filter((id) => valid.has(id))
 }
 function toggle(accountId: string, labelId: string, on: boolean) {
   const cur = listFor(accountId)
@@ -82,7 +83,7 @@ const label = (id: string) => settings.labelMap.get(id)
                 <XIcon class="size-3" />
               </button>
             </span>
-            <DropdownMenu v-if="options.length">
+            <DropdownMenu v-if="optionsFor(a.id).length">
               <DropdownMenuTrigger as-child>
                 <button
                   type="button"
@@ -95,7 +96,7 @@ const label = (id: string) => settings.labelMap.get(id)
               <DropdownMenuContent align="start" class="max-h-72 w-52 overflow-y-auto">
                 <DropdownMenuLabel class="text-muted-foreground text-xs">Arrive quietly</DropdownMenuLabel>
                 <DropdownMenuCheckboxItem
-                  v-for="l in options"
+                  v-for="l in optionsFor(a.id)"
                   :key="l.id"
                   :model-value="listFor(a.id).includes(l.id)"
                   @select.prevent

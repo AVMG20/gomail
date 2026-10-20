@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,19 +235,38 @@ func (s *Store) ResolveIDs(q models.ListQuery, opt FilterOptions, max int) ([]st
 }
 
 // EstimateInput counts messages matching q, how many already carry an AI
-// hash starting with unchangedPrefix (would be skipped), and the characters
-// the classifier would send for the others (body capped at bodyCap).
-func (s *Store) EstimateInput(q models.ListQuery, opt FilterOptions, bodyCap int, unchangedPrefix string) (count, unchanged int, chars int64, err error) {
+// hash starting with their account's prefix in unchanged (would be
+// skipped), and the characters the classifier would send for the others
+// (body capped at bodyCap). Each mailbox has its own label set, so its own
+// prefix; accounts missing from unchanged count as changed.
+func (s *Store) EstimateInput(q models.ListQuery, opt FilterOptions, bodyCap int, unchanged map[string]string) (count, same int, chars int64, err error) {
 	w, err := s.buildFilter(q, opt)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	like := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(unchangedPrefix) + "%"
-	err = s.db.QueryRow(`SELECT count(*), coalesce(sum(CASE WHEN m.ai_hash LIKE ? ESCAPE '\' THEN 1 ELSE 0 END), 0),
-		coalesce(sum(CASE WHEN m.ai_hash LIKE ? ESCAPE '\' THEN 0 ELSE length(m.subject) + length(m.from_name) + length(m.from_email) + length(m.to_json) +
+	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	accts := make([]string, 0, len(unchanged))
+	for a := range unchanged {
+		accts = append(accts, a)
+	}
+	sort.Strings(accts)
+	cond, condArgs := "0", []any{}
+	if len(accts) > 0 {
+		var b strings.Builder
+		b.WriteString("CASE m.account_id")
+		for _, a := range accts {
+			b.WriteString(` WHEN ? THEN m.ai_hash LIKE ? ESCAPE '\'`)
+			condArgs = append(condArgs, a, esc.Replace(unchanged[a])+"%")
+		}
+		b.WriteString(" ELSE 0 END")
+		cond = b.String()
+	}
+	args := append(append(append([]any{}, condArgs...), condArgs...), bodyCap)
+	err = s.db.QueryRow(`SELECT count(*), coalesce(sum(CASE WHEN `+cond+` THEN 1 ELSE 0 END), 0),
+		coalesce(sum(CASE WHEN `+cond+` THEN 0 ELSE length(m.subject) + length(m.from_name) + length(m.from_email) + length(m.to_json) +
 		CASE WHEN m.body_text IS NOT NULL AND length(m.body_text) > 0 THEN min(length(m.body_text), ?) ELSE length(m.snippet) END END), 0)
-		FROM messages m`+w.sql(), append([]any{like, like, bodyCap}, w.args...)...).Scan(&count, &unchanged, &chars)
-	return count, unchanged, chars, err
+		FROM messages m`+w.sql(), append(args, w.args...)...).Scan(&count, &same, &chars)
+	return count, same, chars, err
 }
 
 // now is replaceable in tests.

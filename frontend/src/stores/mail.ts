@@ -6,6 +6,7 @@ import type { Address, ListQuery, Message, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from './accounts'
 import { useSettingsStore } from './settings'
 import { announce } from '@/lib/announce'
+import { labelInAccount } from '@/lib/labelScope'
 
 /** accountId "" = unified across accounts (by folder kind). */
 export interface Mailbox {
@@ -140,6 +141,18 @@ export const useMailStore = defineStore('mail', () => {
   const hasMore = computed(() => !!nextCursor.value)
   const selectionCount = computed(() => (selectAllQuery.value ? total.value : selection.value.size))
   const isUnified = computed(() => !mailbox.value.accountId)
+  /** Mailboxes of the selected mail (label menus offer their labels). "All in this view" in the
+   *  unified view, or rows that aren't loaded: [] (unknown, so every label). */
+  const selectionAccountIds = computed<string[]>(() => {
+    if (selectAllQuery.value) return mailbox.value.accountId ? [mailbox.value.accountId] : []
+    const ids = new Set<string>()
+    for (const id of selection.value) {
+      const a = byId.value.get(id)?.accountId
+      if (!a) return mailbox.value.accountId ? [mailbox.value.accountId] : []
+      ids.add(a)
+    }
+    return [...ids]
+  })
 
   const mailboxName = computed(() => {
     const mb = mailbox.value
@@ -406,12 +419,12 @@ export const useMailStore = defineStore('mail', () => {
     },
   )
 
-  // Drop label filters that reference deleted labels.
+  // Drop label filters that reference deleted labels, or labels that no longer belong to this mailbox.
   watch(
-    () => settings.labels.map((l) => l.id).join(','),
+    () => `${mailbox.value.accountId}|${settings.labels.map((l) => `${l.id}:${l.accountIds?.join('+') ?? ''}`).join(',')}`,
     () => {
       if (!settings.settings) return
-      const valid = new Set(settings.labels.map((l) => l.id))
+      const valid = new Set(settings.labelsForAccount(mailbox.value.accountId).map((l) => l.id))
       const f = labelFilter.value
       if ([...f.labels, ...f.hidden].some((l) => !valid.has(l))) {
         setLabelFilter({ labels: f.labels.filter((l) => valid.has(l)), unlabeled: f.unlabeled, hidden: f.hidden.filter((l) => valid.has(l)) })
@@ -765,7 +778,14 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   async function addLabel(ids: string[], labelId: string, quiet = false) {
-    if (!ids.length) return
+    // Only mail of the label's mailboxes gets it (the backend refuses the rest); rows not loaded are
+    // left to the backend.
+    const label = settings.labelMap.get(labelId)
+    if (label) ids = ids.filter((id) => { const m = byId.value.get(id); return !m || labelInAccount(label, m.accountId) })
+    if (!ids.length) {
+      if (label) toast(`“${label.name}” isn’t a label of this mailbox`, { description: 'Choose its mailboxes in Settings → Labels.' })
+      return
+    }
     patchLocal(ids, (m) => ({
       labels: m.labels.includes(labelId) ? m.labels : [...m.labels, labelId],
       labelDetails: [...(m.labelDetails ?? []).filter((d) => d.labelId !== labelId), { labelId, source: 'manual', confidence: 1 }],
@@ -839,7 +859,7 @@ export const useMailStore = defineStore('mail', () => {
   return {
     mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
-    labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, mailboxName, mailboxAccount,
+    labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,

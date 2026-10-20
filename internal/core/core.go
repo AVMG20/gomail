@@ -173,6 +173,7 @@ func New(opts Options) (*Service, error) {
 			st.Close()
 			return nil, err
 		}
+		s.updateLabels(func(st *models.Settings) bool { return s.scopeLabels(st.Labels) })
 	}
 	return s, nil
 }
@@ -563,6 +564,7 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 			return models.Account{}, err
 		}
 		slog.Info("account added", "provider", kind, "account", acct.ID)
+		s.labelsGainAccount(acct.ID)
 	} else if err := auth.SaveToken(s.secrets, acct.ID, tok); err != nil {
 		return models.Account{}, fmt.Errorf("could not store the sign-in securely: %w", err)
 	} else {
@@ -635,6 +637,7 @@ func (s *Service) RemoveAccount(accountID string) error {
 	s.forgetClients(accountID)
 	s.engine.Forget(accountID)
 	s.attCache.dropAccount(accountID)
+	s.labelsLoseAccount(accountID)
 	// A refresh that was in flight may have saved the token again.
 	_ = s.secrets.Delete(auth.TokenKey(accountID))
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})

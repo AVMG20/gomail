@@ -15,15 +15,29 @@ import {
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { LABEL_COLORS } from '@/lib/color'
 import { buildLabelExport, MAX_IMPORT_BYTES, mergeLabelImport } from '@/lib/labelsIO'
+import { labelAccounts, newLabelAccounts } from '@/lib/labelScope'
 import type { Label, Settings } from '@/lib/types'
+import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
+import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
+import LabelMailboxPicker from './LabelMailboxPicker.vue'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 import RulesSection from './RulesSection.vue'
 
 const settings = useSettingsStore()
 const ai = useAiStore()
+const accounts = useAccountsStore()
+const mail = useMailStore()
+const accountIds = computed(() => accounts.accounts.map((a) => a.id))
+/** Where an imported label is used, e.g. "alex@example.com" or "2 mailboxes". */
+function mailboxesText(l: Label): string {
+  if (accountIds.value.length < 2 || l.source === 'system') return ''
+  const ids = labelAccounts(l, accountIds.value)
+  if (ids.length >= accountIds.value.length) return 'All mailboxes'
+  return ids.length === 1 ? accounts.accountMap.get(ids[0])?.email ?? '' : `${ids.length} mailboxes`
+}
 const s = computed(() => settings.settings!)
 const userLabels = computed(() => settings.labels.filter((l) => !l.source || l.source === 'user'))
 const providerLabels = computed(() => settings.labels.filter((l) => l.source && l.source !== 'user'))
@@ -41,7 +55,9 @@ function add() {
   const used = new Set(settings.labels.map((l) => l.color.toLowerCase()))
   const color = LABEL_COLORS.find((c) => !used.has(c.toLowerCase())) ?? LABEL_COLORS[userLabels.value.length % LABEL_COLORS.length]
   justAdded.value = id
-  setLabels([...settings.labels, { id, name: 'New label', description: '', color, source: 'user' }])
+  // The mailbox being viewed (every mailbox in the unified view).
+  const ids = newLabelAccounts(mail.mailbox.accountId, accountIds.value)
+  setLabels([...settings.labels, { id, name: 'New label', description: '', color, source: 'user', accountIds: ids }])
   void nextTick(() => {
     const el = document.querySelector<HTMLInputElement>(`[data-label-name="${id}"]`)
     el?.focus()
@@ -148,7 +164,7 @@ function labelAll() {
 
 <template>
   <div v-if="settings.settings">
-    <SettingSection title="Your labels" description="Tag mail across all accounts. The description tells the AI when a label applies.">
+    <SettingSection title="Your labels" description="Tag mail in your mailboxes. Each label belongs to the mailboxes you pick; the description tells the AI when it applies.">
       <div v-for="(l, i) in userLabels" :key="l.id" class="group flex items-start gap-3 py-3">
         <Popover>
           <PopoverTrigger as-child>
@@ -165,6 +181,7 @@ function labelAll() {
         <div class="min-w-0 flex-1 space-y-1.5">
           <div class="flex items-center gap-2">
             <Input :model-value="l.name" class="h-8 max-w-56 text-[13px] font-medium" aria-label="Label name" :data-label-name="l.id" @update:model-value="(v) => patch(l.id, { name: String(v) })" @blur="onNameBlur(l)" />
+            <LabelMailboxPicker v-if="accountIds.length > 1" :label="l" @change="(ids) => patch(l.id, { accountIds: ids })" />
           </div>
           <Textarea :model-value="l.description" rows="1" :aria-label="`Description for ${l.name}`" placeholder="When should this label apply? e.g. “Invoices, receipts and bank statements”" class="min-h-8 resize-none py-1.5 text-xs" @update:model-value="(v) => patch(l.id, { description: String(v) })" />
         </div>
@@ -206,6 +223,7 @@ function labelAll() {
         <span class="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
           <ProviderIcon v-if="l.provider" :provider="l.provider" class="size-3.5" />
           {{ l.source === 'system' ? 'Built-in' : l.provider ? `From ${l.provider === 'outlook' ? 'Outlook' : 'Gmail'}` : 'Imported from Gmail/Outlook' }}
+          <template v-if="mailboxesText(l)"> · {{ mailboxesText(l) }}</template>
         </span>
       </div>
       <p v-if="s.importProviderLabels && !providerLabels.length" class="text-muted-foreground py-3 text-xs">No labels imported yet.</p>

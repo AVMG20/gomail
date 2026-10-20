@@ -332,6 +332,8 @@ export interface Label {
   source?: LabelSource | string
   /** Optional hint (mock only today): provider the label was imported from. */
   provider?: string
+  /** Mailboxes (account ids) the label belongs to; empty/absent = every mailbox (and Junk always). */
+  accountIds?: string[]
 }
 
 export type ThemeMode = 'system' | 'light' | 'dark'

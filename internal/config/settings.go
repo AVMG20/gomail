@@ -2,6 +2,7 @@ package config
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -257,6 +258,11 @@ func NormalizeLabels(in []models.Label) []models.Label {
 		if c.Source == LabelSourceSystem && c.ID != JunkLabelID {
 			c.Source = LabelSourceUser
 		}
+		if c.Source == LabelSourceSystem {
+			c.AccountIDs = []string{} // Junk belongs to every mailbox
+		} else {
+			c.AccountIDs = uniqueTrimmed(c.AccountIDs)
+		}
 		id := Slug(c.ID)
 		if id == "" {
 			id = Slug(c.Name)
@@ -281,6 +287,44 @@ func NormalizeLabels(in []models.Label) []models.Label {
 		out = append(out, JunkLabel())
 	}
 	return out
+}
+
+// LabelInAccount reports whether a label belongs to a mailbox. The
+// built-in Junk label and labels without a mailbox list belong to every
+// mailbox; accountID "" (the unified view) matches every label.
+func LabelInAccount(l models.Label, accountID string) bool {
+	return accountID == "" || l.Source == LabelSourceSystem || len(l.AccountIDs) == 0 || slices.Contains(l.AccountIDs, accountID)
+}
+
+// LabelsForAccount returns the labels of a mailbox ("" = all labels).
+func LabelsForAccount(labels []models.Label, accountID string) []models.Label {
+	out := make([]models.Label, 0, len(labels))
+	for _, l := range labels {
+		if LabelInAccount(l, accountID) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// ScopeLabels gives labels without a mailbox list every mailbox in
+// accountIDs, so labels from before labels were per mailbox keep working
+// everywhere. Junk stays unscoped (it belongs to every mailbox). Ids of
+// mailboxes that aren't in accountIDs are kept: a backup's labels may
+// name accounts that are restored right after the settings. Without any
+// account nothing changes. It reports whether a label changed.
+func ScopeLabels(labels []models.Label, accountIDs []string) bool {
+	if len(accountIDs) == 0 {
+		return false
+	}
+	changed := false
+	for i, l := range labels {
+		if l.Source != LabelSourceSystem && len(l.AccountIDs) == 0 {
+			labels[i].AccountIDs = slices.Clone(accountIDs)
+			changed = true
+		}
+	}
+	return changed
 }
 
 // Slug turns a label name into a stable lowercase identifier.

@@ -22,8 +22,8 @@ export const SEED_LABELS: Label[] = [
 
 export const PROVIDER_LABELS: Label[] = [
   { id: 'junk', name: 'Junk', description: 'Mail in Spam/Junk (built-in, same id as the real backend)', color: '#a1a1aa', source: 'system', provider: 'gmail' },
-  { id: 'gmail-receipts', name: 'Receipts', description: 'Gmail label', color: '#10b981', source: 'provider', provider: 'gmail' },
-  { id: 'outlook-blue', name: 'Blue category', description: 'Outlook category', color: '#0ea5e9', source: 'provider', provider: 'outlook' },
+  { id: 'gmail-receipts', name: 'Receipts', description: 'Gmail label', color: '#10b981', source: 'provider', provider: 'gmail', accountIds: ['acc_personal', 'acc_side'] },
+  { id: 'outlook-blue', name: 'Blue category', description: 'Outlook category', color: '#0ea5e9', source: 'provider', provider: 'outlook', accountIds: ['acc_work'] },
 ]
 
 export const SEED_SETTINGS: Settings = {

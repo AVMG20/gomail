@@ -653,6 +653,14 @@ export interface Label {
      * labels / Outlook categories) or "system" (built-in, e.g. "junk").
      */
     "source": string;
+
+    /**
+     * AccountIDs are the mailboxes the label belongs to: it is offered,
+     * counted and applied only there. Provider labels list the accounts
+     * they were imported from. Empty means every mailbox (labels saved
+     * before labels were per mailbox, and the built-in Junk label).
+     */
+    "accountIds": string[] | null;
 }
 
 /**

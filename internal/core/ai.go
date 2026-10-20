@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/AVMG20/gomail/internal/ai"
+	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/store"
@@ -129,9 +130,11 @@ func (s *Service) SummarizeMessage(id string) (string, error) {
 
 // ---- classification ----
 
-func (s *Service) labelDefs() []ai.LabelDef {
+// labelDefs are the labels offered to the classifier for mail of an
+// account: only the labels of that mailbox ("" = every label).
+func (s *Service) labelDefs(accountID string) []ai.LabelDef {
 	var out []ai.LabelDef
-	for _, l := range s.Settings().Labels {
+	for _, l := range config.LabelsForAccount(s.Settings().Labels, accountID) {
 		out = append(out, ai.LabelDef{ID: l.ID, Name: l.Name, Description: l.Description})
 	}
 	return out
@@ -156,13 +159,14 @@ func (s *Service) checkAIReady() error {
 	return nil
 }
 
-// labelsetHash fingerprints everything that influences classification
-// besides the message: model, instructions and label definitions.
-func (s *Service) labelsetHash() string {
+// labelsetHash fingerprints everything that influences classification of
+// an account's mail besides the message: model, instructions and the
+// definitions of the labels offered for that mailbox.
+func (s *Service) labelsetHash(accountID string) string {
 	st := s.Settings()
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00", st.ClassifierModel, st.ClassifyInstructions)
-	defs := s.labelDefs()
+	defs := s.labelDefs(accountID)
 	sort.Slice(defs, func(i, j int) bool { return defs[i].ID < defs[j].ID })
 	for _, d := range defs {
 		fmt.Fprintf(h, "%s\x00%s\x00%s\x00", d.ID, d.Name, d.Description)
@@ -182,7 +186,7 @@ func aiHash(labelset string, in store.ClassifyInput) string {
 // classified with the current label set are skipped (no cost).
 func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) models.ClassificationResult {
 	res := models.ClassificationResult{MessageID: in.ID, Added: []string{}, Removed: []string{}, Scores: map[string]float64{}}
-	hash := aiHash(s.labelsetHash(), in)
+	hash := aiHash(s.labelsetHash(in.AccountID), in)
 	if in.AIHash == hash && in.AIScores != nil {
 		res.Scores, res.Skipped = in.AIScores, true
 		// No new scores needed, but the thresholds or provider-label
@@ -198,7 +202,7 @@ func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) model
 	if strings.TrimSpace(body) == "" {
 		body = in.Snippet
 	}
-	scores, err := s.ai.ScoreLabels(ctx, st.ClassifierModel, st.ClassifyInstructions, s.labelDefs(), ai.Email{
+	scores, err := s.ai.ScoreLabels(ctx, st.ClassifierModel, st.ClassifyInstructions, s.labelDefs(in.AccountID), ai.Email{
 		From: in.From, To: in.To, Subject: in.Subject, Date: in.Date, HasAttachments: in.HasAttachments, Body: body,
 	})
 	res.Cost = scores.Cost
@@ -427,7 +431,11 @@ func (s *Service) CancelClassify(jobID string) error {
 // EstimateClassify estimates the size and cost of ClassifyQuery.
 func (s *Service) EstimateClassify(q models.ListQuery, onlyUnlabeled, includeAllFolders bool) (models.ClassifyEstimate, error) {
 	q.Cursor = ""
-	count, unchanged, chars, err := s.store.EstimateInput(q, s.bulkOptions(onlyUnlabeled, includeAllFolders), ai.MaxBodyChars, s.labelsetHash()+":")
+	prefixes := map[string]string{}
+	for _, id := range s.accountIDs() {
+		prefixes[id] = s.labelsetHash(id) + ":"
+	}
+	count, unchanged, chars, err := s.store.EstimateInput(q, s.bulkOptions(onlyUnlabeled, includeAllFolders), ai.MaxBodyChars, prefixes)
 	if err != nil {
 		return models.ClassifyEstimate{}, err
 	}
@@ -440,7 +448,7 @@ func (s *Service) EstimateClassify(q models.ListQuery, onlyUnlabeled, includeAll
 		return est, nil
 	}
 	st := s.Settings()
-	perMsg, reqs := ai.EstimateTokens(int(chars/int64(todo)), s.labelDefs(), st.ClassifyInstructions)
+	perMsg, reqs := ai.EstimateTokens(int(chars/int64(todo)), s.labelDefs(q.AccountID), st.ClassifyInstructions)
 	est.Requests = reqs * todo
 	est.EstimatedTokens = perMsg * todo
 	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)

@@ -198,3 +198,39 @@ func TestNormalizeDropsDeletedLabels(t *testing.T) {
 		t.Fatalf("muted %s", got)
 	}
 }
+
+func TestLabelScope(t *testing.T) {
+	labels := NormalizeLabels([]models.Label{
+		{Name: "Old"},
+		{Name: "Scoped", AccountIDs: []string{" a1 ", "a1", ""}},
+		{ID: JunkLabelID, Name: "Junk", AccountIDs: []string{"a1"}},
+	})
+	if got := labels[1].AccountIDs; len(got) != 1 || got[0] != "a1" {
+		t.Fatalf("scoped label ids not cleaned: %q", got)
+	}
+	if len(labels[2].AccountIDs) != 0 {
+		t.Fatalf("Junk should belong to every mailbox: %q", labels[2].AccountIDs)
+	}
+	if ScopeLabels(labels, nil) {
+		t.Fatal("without accounts nothing changes")
+	}
+	if !ScopeLabels(labels, []string{"a1", "a2"}) || fmt.Sprint(labels[0].AccountIDs) != "[a1 a2]" || fmt.Sprint(labels[1].AccountIDs) != "[a1]" || len(labels[2].AccountIDs) != 0 {
+		t.Fatalf("scoped %+v", labels)
+	}
+	if ScopeLabels(labels, []string{"a1", "a2"}) {
+		t.Fatal("scoping twice changed something")
+	}
+	names := func(ls []models.Label) string {
+		out := ""
+		for _, l := range ls {
+			out += l.Name + ","
+		}
+		return out
+	}
+	if got := names(LabelsForAccount(labels, "a2")); got != "Old,Junk," {
+		t.Fatalf("a2 labels %s", got)
+	}
+	if got := names(LabelsForAccount(labels, "")); got != "Old,Scoped,Junk," {
+		t.Fatalf("unified labels %s", got)
+	}
+}

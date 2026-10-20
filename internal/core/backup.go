@@ -303,6 +303,7 @@ func (s *Service) ImportBackupFrom(r io.Reader) (models.RestoreSummary, error) {
 		return models.RestoreSummary{}, err
 	}
 	sum := models.RestoreSummary{CreatedAt: f.CreatedAt.UTC().Format(time.RFC3339)}
+	before := s.Settings().Labels
 	if err := s.restoreSettings(f, &sum); err != nil {
 		return sum, err
 	}
@@ -310,11 +311,13 @@ func (s *Service) ImportBackupFrom(r io.Reader) (models.RestoreSummary, error) {
 	for _, l := range s.Settings().Labels {
 		known[l.ID] = true
 	}
+	idMap := map[string]string{} // backup account id -> id here
 	for _, ba := range f.Accounts {
-		if err := s.restoreAccount(ba, known, &sum); err != nil {
+		if err := s.restoreAccount(ba, known, idMap, &sum); err != nil {
 			return sum, err
 		}
 	}
+	s.remapRestoredAccounts(f, before, idMap)
 	slog.Info("backup imported", "added", sum.AccountsAdded, "ready", sum.AccountsReady, "merged", sum.AccountsMerged,
 		"labelMarks", sum.LabelAssignments, "appliedNow", sum.AppliedNow)
 	s.emit(models.EventAccountsChanged, models.AccountEvent{})
@@ -438,9 +441,86 @@ func mergeLabels(backup, current []models.Label) []models.Label {
 	return out
 }
 
+// remapRestoredAccounts points the restored settings at the accounts as
+// they exist here: a mailbox merged into an existing account (or restored
+// under a new id) has another id than in the backup. Labels from the
+// backup belong to the mailboxes they belonged to there (plus, for a label
+// this install already had, its mailboxes here); a label of no mailbox
+// here (or from a backup made before labels were per mailbox) belongs to
+// every mailbox. Rules, quiet labels and muted mailboxes follow the ids.
+func (s *Service) remapRestoredAccounts(f backupFile, before []models.Label, idMap map[string]string) {
+	var bs struct {
+		Labels []models.Label `json:"labels"`
+	}
+	if len(f.Settings) > 0 {
+		_ = json.Unmarshal(f.Settings, &bs)
+	}
+	mapID := func(id string) string {
+		if m, ok := idMap[id]; ok {
+			return m
+		}
+		return id
+	}
+	local := s.accountIDs()
+	scope := map[string][]string{}
+	inBackup := map[string]bool{}
+	for _, l := range bs.Labels {
+		inBackup[l.ID] = true
+		for _, a := range l.AccountIDs {
+			scope[l.ID] = append(scope[l.ID], mapID(a))
+		}
+	}
+	for _, l := range before {
+		if inBackup[l.ID] && len(scope[l.ID]) > 0 {
+			scope[l.ID] = append(scope[l.ID], l.AccountIDs...)
+		}
+	}
+	s.updateLabels(func(st *models.Settings) bool {
+		changed := false
+		for i, l := range st.Labels {
+			if !inBackup[l.ID] || l.Source == config.LabelSourceSystem {
+				continue
+			}
+			ids := []string{}
+			for _, a := range scope[l.ID] {
+				if slices.Contains(local, a) && !slices.Contains(ids, a) {
+					ids = append(ids, a)
+				}
+			}
+			if !slices.Equal(ids, l.AccountIDs) {
+				st.Labels[i].AccountIDs = ids
+				changed = true
+			}
+		}
+		for i, r := range st.LabelRules {
+			if r.AccountID != "" && mapID(r.AccountID) != r.AccountID {
+				st.LabelRules[i].AccountID = mapID(r.AccountID)
+				changed = true
+			}
+		}
+		if len(st.QuietLabels) > 0 {
+			quiet := make(map[string][]string, len(st.QuietLabels))
+			for a, list := range st.QuietLabels {
+				if mapID(a) != a {
+					changed = true
+				}
+				quiet[mapID(a)] = list
+			}
+			st.QuietLabels = quiet
+		}
+		for i, a := range st.MutedMailboxes {
+			if mapID(a) != a {
+				st.MutedMailboxes[i] = mapID(a)
+				changed = true
+			}
+		}
+		return s.scopeLabels(st.Labels) || changed
+	})
+}
+
 var accountIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, sum *models.RestoreSummary) error {
+func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, idMap map[string]string, sum *models.RestoreSummary) error {
 	email := strings.ToLower(strings.TrimSpace(ba.Email))
 	if (ba.Provider != models.ProviderGmail && ba.Provider != models.ProviderOutlook) || !strings.Contains(email, "@") {
 		sum.AccountsSkipped++
@@ -456,6 +536,7 @@ func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, 
 	switch {
 	case err == nil:
 		sum.AccountsMerged++
+		idMap[ba.ID] = acct.ID
 		if acct.Signature == "" && signature != "" {
 			if err := s.store.UpdateSignature(acct.ID, signature); err != nil {
 				return err
@@ -502,6 +583,8 @@ func (s *Service) restoreAccount(ba backupAccount, knownLabels map[string]bool, 
 			sum.AccountsAdded++
 		}
 		slog.Info("account restored from backup", "provider", ba.Provider, "account", id)
+		idMap[ba.ID] = id
+		s.labelsGainAccount(id)
 	default:
 		return err
 	}
