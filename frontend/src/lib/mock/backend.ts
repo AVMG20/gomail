@@ -981,6 +981,23 @@ class MockBackend {
     })
   }
 
+  async GetViewLabelCounts(q: ListQuery): Promise<LabelCount[]> {
+    await latency(30, 80)
+    const counts = new Map<string, LabelCount>()
+    const hidden = new Set(this.settings.importProviderLabels ? [] : this.providerLabels.map((l) => l.id))
+    const view = this.filter({ ...q, labels: [], excludeLabels: [], unlabeled: false, search: '', unreadOnly: false, cursor: '', limit: 0 })
+    for (const m of view) {
+      for (const l of m.labels) {
+        if (hidden.has(l)) continue
+        const c = counts.get(l) ?? { labelId: l, total: 0, unread: 0 }
+        c.total++
+        if (m.unread) c.unread++
+        counts.set(l, c)
+      }
+    }
+    return [...counts.values()]
+  }
+
   async GetLabelCounts(accountId: string): Promise<LabelCount[]> {
     await latency(30, 80)
     const counts = new Map<string, LabelCount>()

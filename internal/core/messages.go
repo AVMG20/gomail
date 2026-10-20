@@ -84,6 +84,11 @@ func (s *Service) LabelCounts(accountID string) ([]models.LabelCount, error) {
 	return s.store.LabelCounts(accountID)
 }
 
+// ViewLabelCounts returns per-label counts within the box q shows.
+func (s *Service) ViewLabelCounts(q models.ListQuery) ([]models.LabelCount, error) {
+	return s.store.ViewLabelCounts(q)
+}
+
 // messageRaw returns a message with its body (fetched and cached when
 // needed) without remote-content blocking.
 func (s *Service) messageRaw(id string) (models.Message, error) {

@@ -66,7 +66,7 @@ onMounted(async () => {
   try {
     await Promise.all([settings.load(), accounts.load()])
     mail.ensureValidMailbox()
-    await accounts.loadLabelCounts(mail.mailbox.accountId)
+    await accounts.loadLabelCounts(labelScope())
     void mail.reload()
     // mailto: link that started the app (compose:open fired before we were listening).
     if (hasMethod('GetPendingCompose')) {
@@ -92,7 +92,12 @@ onMounted(async () => {
   setTimeout(() => void settings.checkForUpdate(), 4000)
 })
 
-watch(() => mail.mailbox.accountId, (id) => void accounts.loadLabelCounts(id))
+/** Sidebar label counts follow the box on screen (Inbox, All Mail, …), like the label filter does. */
+function labelScope() {
+  const { accountId, folderId, folderKind } = mail.query
+  return { accountId, folderId, folderKind }
+}
+watch(() => JSON.stringify(labelScope()), () => void accounts.loadLabelCounts(labelScope()))
 watch(() => settings.settings?.zoom, (z) => z && void api.setZoom(z).catch(() => {}))
 
 // Narrow windows: collapse the folder sidebar first (the rail stays).

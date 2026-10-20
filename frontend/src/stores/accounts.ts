@@ -4,6 +4,12 @@ import { useDebounceFn } from '@vueuse/core'
 import { api, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import type { Account, Folder, LabelCount, SyncProgress } from '@/lib/types'
 
+export interface LabelScope {
+  accountId: string
+  folderId: string
+  folderKind: string
+}
+
 export const SYSTEM_ORDER = ['inbox', 'starred', 'sent', 'drafts', 'archive', 'spam', 'trash']
 
 export const useAccountsStore = defineStore('accounts', () => {
@@ -11,7 +17,8 @@ export const useAccountsStore = defineStore('accounts', () => {
   const folders = shallowRef<Record<string, Folder[]>>({})
   /** Label counts for the active scope (account id, or "" for all accounts). */
   const labelCounts = shallowRef<Map<string, LabelCount>>(new Map())
-  const labelScope = ref('')
+  /** The box the sidebar's label counts are for (the list on screen): clicking a label filters it. */
+  const labelScope = ref<LabelScope>({ accountId: '', folderId: '', folderKind: '' })
   const loaded = ref(false)
   const syncing = ref<Set<string>>(new Set())
   /** Latest sync:progress per account (cleared when the sync finishes). */
@@ -60,11 +67,11 @@ export const useAccountsStore = defineStore('accounts', () => {
     folders.value = next
   }
 
-  async function loadLabelCounts(scope = labelScope.value) {
+  async function loadLabelCounts(scope: LabelScope = labelScope.value) {
     labelScope.value = scope
     const seq = ++countsSeq
     try {
-      const counts = await api.getLabelCounts(scope)
+      const counts = await api.getViewLabelCounts(scope)
       if (scope !== labelScope.value || seq !== countsSeq) return
       labelCounts.value = new Map(counts.map((c) => [c.labelId, c]))
     } catch {

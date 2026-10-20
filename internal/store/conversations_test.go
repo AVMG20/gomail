@@ -214,3 +214,43 @@ func TestConversationCountersStayConsistent(t *testing.T) {
 		t.Fatalf("%d counters left after deleting the account", left)
 	}
 }
+
+// The sidebar's label counts follow the box on screen: clicking a label
+// filters that box, so Inbox and All Mail count differently.
+func TestViewLabelCounts(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{
+		msg(0, "in inbox", "A", "INBOX", "ALL"), // unread
+		msg(1, "archived", "A", "ALL"),
+		msg(2, "archived too", "A", "ALL"), // unread
+	}}, nil)
+	ids := []string{MessageID("a1", "r000"), MessageID("a1", "r001"), MessageID("a1", "r002")}
+	if err := s.AddLabels(ids, "news"); err != nil {
+		t.Fatal(err)
+	}
+	inbox, _ := s.FolderByKind("a1", models.FolderInbox)
+	count := func(q models.ListQuery) models.LabelCount {
+		t.Helper()
+		cs, err := s.ViewLabelCounts(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cs {
+			if c.LabelID == "news" {
+				return c
+			}
+		}
+		return models.LabelCount{}
+	}
+	if c := count(models.ListQuery{AccountID: "a1", FolderID: inbox.ID}); c.Total != 1 || c.Unread != 1 {
+		t.Fatalf("inbox %+v", c)
+	}
+	if c := count(models.ListQuery{FolderKind: models.FolderArchive}); c.Total != 3 || c.Unread != 2 {
+		t.Fatalf("all mail %+v", c)
+	}
+	// The list's own filters don't change the counts.
+	if c := count(models.ListQuery{AccountID: "a1", FolderID: inbox.ID, Labels: []string{"other"}, Search: "zzz", UnreadOnly: true}); c.Total != 1 {
+		t.Fatalf("filtered inbox %+v", c)
+	}
+}

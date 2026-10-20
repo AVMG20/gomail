@@ -119,7 +119,7 @@ export const USED_METHODS = [
   'GetAccounts', 'AddAccount', 'CancelAddAccount', 'RemoveAccount', 'UpdateAccount', 'GetFolders', 'ListMessages', 'GetMessage',
   'GetThread', 'MarkRead', 'SetStarred', 'Archive', 'Trash', 'MoveToJunk', 'MoveToFolder', 'SendMessage', 'SaveAttachment', 'SyncNow',
   'OpenExternalURL', 'SearchMessages', 'ResolveQueryIDs', 'GetSettings', 'SaveSettings', 'SetOpenRouterKey', 'GetAppInfo',
-  'GetDefaultPrompts', 'TestOpenRouter', 'ListAIModels', 'ClassifyMessages', 'AddLabel', 'RemoveLabel', 'GetLabelCounts',
+  'GetDefaultPrompts', 'TestOpenRouter', 'ListAIModels', 'ClassifyMessages', 'AddLabel', 'RemoveLabel', 'GetLabelCounts', 'GetViewLabelCounts',
   'EstimateClassify', 'ClassifyQuery', 'CancelClassify', 'SummarizeMessage', 'ImproveGrammar',
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
@@ -496,6 +496,11 @@ export const api = {
   addLabel: (ids: string[], labelId: string) => call<void>('AddLabel', ids, labelId),
   removeLabel: (ids: string[], labelId: string) => call<void>('RemoveLabel', ids, labelId),
   getLabelCounts: async (accountId: string) => (await call<LabelCount[] | null>('GetLabelCounts', accountId)) ?? [],
+  /** Label counts within the box a list query shows (older backends: the whole mailbox). */
+  getViewLabelCounts: async (q: Partial<ListQuery>) =>
+    (hasMethod('GetViewLabelCounts')
+      ? await call<LabelCount[] | null>('GetViewLabelCounts', normQuery({ accountId: q.accountId, folderId: q.folderId, folderKind: q.folderKind }))
+      : await call<LabelCount[] | null>('GetLabelCounts', q.accountId ?? '')) ?? [],
   estimateClassify: async (q: Partial<ListQuery>, onlyUnlabeled: boolean, includeAllFolders: boolean): Promise<ClassifyEstimate> => {
     const e = await call<ClassifyEstimate & { estimatedCost?: number }>('EstimateClassify', normQuery(q), onlyUnlabeled, includeAllFolders)
     return { ...e, estimatedCostUsd: e.estimatedCostUsd ?? e.estimatedCost ?? 0, priceKnown: e.priceKnown ?? true }

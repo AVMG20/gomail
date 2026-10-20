@@ -1134,6 +1134,45 @@ func (s *Store) LabelCounts(accountID string) ([]models.LabelCount, error) {
 	return out, rows.Err()
 }
 
+// ViewLabelCounts counts labeled messages per label (total and unread)
+// within the box q shows (its account and folder, or folder kind across
+// accounts), so the sidebar matches what clicking a label filters. The
+// list's own filters (labels, search, unread only) are ignored. Trash only
+// counts in the Trash view.
+func (s *Store) ViewLabelCounts(q models.ListQuery) ([]models.LabelCount, error) {
+	w, err := s.buildFilter(models.ListQuery{AccountID: q.AccountID, FolderID: q.FolderID, FolderKind: q.FolderKind}, FilterOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if !s.isTrashView(q) {
+		w.add(`ml.trashed = 0`)
+	}
+	w.add(`1` + s.labelCond()) // labelCond starts with " AND"
+	rows, err := s.db.Query(`SELECT ml.label_id, count(*), coalesce(sum(ml.unread), 0)
+		FROM message_labels ml JOIN messages m ON m.id = ml.message_id`+w.sql()+` GROUP BY ml.label_id ORDER BY ml.label_id`, w.args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.LabelCount{}
+	for rows.Next() {
+		var c models.LabelCount
+		if err := rows.Scan(&c.LabelID, &c.Total, &c.Unread); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) isTrashView(q models.ListQuery) bool {
+	if q.FolderID != "" {
+		f, err := s.Folder(q.FolderID)
+		return err == nil && f.Kind == models.FolderTrash
+	}
+	return q.FolderKind == models.FolderTrash
+}
+
 // LabelAccounts returns, per label, the accounts whose messages carry it
 // (used to give provider labels from before labels were per mailbox the
 // mailboxes they were imported in).

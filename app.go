@@ -756,6 +756,16 @@ func (m *MailService) GetLabelCounts(accountID string) ([]models.LabelCount, err
 	return uiResult(s.LabelCounts(accountID))
 }
 
+// GetViewLabelCounts returns total/unread counts per label within the box
+// a list query shows (account + folder or folder kind), for the sidebar.
+func (m *MailService) GetViewLabelCounts(q models.ListQuery) ([]models.LabelCount, error) {
+	s, err := m.ready()
+	if err != nil {
+		return nil, err
+	}
+	return uiResult(s.ViewLabelCounts(q))
+}
+
 // ---- Settings ----
 
 func (m *MailService) GetSettings() (models.Settings, error) {

@@ -232,6 +232,14 @@ export function GetThread(id: string): $CancellablePromise<models$0.Message[] | 
 }
 
 /**
+ * GetViewLabelCounts returns total/unread counts per label within the box
+ * a list query shows (account + folder or folder kind), for the sidebar.
+ */
+export function GetViewLabelCounts(q: models$0.ListQuery): $CancellablePromise<models$0.LabelCount[] | null> {
+    return $Call.ByID(924911535, q);
+}
+
+/**
  * ImportBackup asks for a backup file and merges it into this install.
  * Restored accounts need a sign-in (ReauthAccount).
  */
