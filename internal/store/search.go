@@ -250,6 +250,7 @@ func (s *Store) Search(q models.SearchQuery) ([]models.SearchResult, error) {
 	if expr == "" && len(w.conds) == 0 {
 		return []models.SearchResult{}, nil
 	}
+	w.add(visible("m"))
 	if expr != "" {
 		var err error
 		cands, err = s.ftsCandidates(expr, w, ps.highlightTerms(), nowMs)

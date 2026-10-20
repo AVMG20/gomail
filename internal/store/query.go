@@ -67,9 +67,15 @@ type FilterOptions struct {
 	OnlyUnlabeled bool
 }
 
+// visible is the SQL condition for messages shown anywhere: a message in
+// no folder (e.g. one being deleted by emptying Trash) is hidden until it
+// is gone or comes back.
+func visible(alias string) string { return alias + `.folder_kinds != 0` }
+
 // buildFilter translates a ListQuery (+ options) into SQL conditions.
 func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, error) {
 	w := &where{}
+	inFolder := false // the folder condition already implies visible()
 	if q.AccountID != "" {
 		w.add(`m.account_id = ?`, q.AccountID)
 	}
@@ -85,14 +91,19 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 		case models.FolderStarred:
 			w.add(`m.account_id = ? AND m.starred = 1`, f.AccountID)
 		case models.FolderCustom:
+			inFolder = true
 			w.add(`m.account_id = ? AND (m.folder_kinds & 64) != 0`, f.AccountID)
 			w.add(`EXISTS (SELECT 1 FROM message_folders mf WHERE mf.message_id = m.id AND mf.folder_id = ?)`, f.ID)
 		default:
 			// One system folder per kind and account: the bitmask is exact.
+			inFolder = true
 			w.add(`m.account_id = ? AND (m.folder_kinds & ?) != 0`, f.AccountID, kindBits[f.Kind])
 		}
 	} else if q.FolderKind != "" {
 		addKindFilter(w, []string{q.FolderKind})
+	}
+	if !inFolder {
+		w.add(visible("m"))
 	}
 	// The label filter: any of the chosen labels, or "No label" (q.Unlabeled), OR-combined
 	// like the filter popover. OnlyUnlabeled (bulk AI labeling) always restricts.

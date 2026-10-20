@@ -812,9 +812,11 @@ func countNonInline(atts []models.Attachment) int {
 	return n
 }
 
-// Thread returns the messages of a thread in an account ordered by date.
+// Thread returns the messages of a thread in an account ordered by date
+// (without messages in no folder, which are being deleted).
 func (s *Store) Thread(accountID, threadID string) ([]models.MessageSummary, error) {
-	rows, err := s.db.Query(`SELECT `+s.summaryCols()+` FROM messages m WHERE m.account_id = ? AND m.thread_id = ? ORDER BY m.date, m.id`,
+	rows, err := s.db.Query(`SELECT `+s.summaryCols()+` FROM messages m WHERE m.account_id = ? AND m.thread_id = ? AND `+visible("m")+`
+		ORDER BY m.date, m.id`,
 		accountID, threadID)
 	if err != nil {
 		return nil, err
@@ -1400,7 +1402,7 @@ type RuleCandidate struct {
 
 // ruleCandidatesQuery selects received mail (not sent, drafts or trash).
 const ruleCandidatesQuery = `SELECT id, account_id, from_name, from_email, subject, (folder_kinds & ?) != 0 FROM messages
-	WHERE (folder_kinds & ?) = 0`
+	WHERE (folder_kinds & ?) = 0 AND folder_kinds != 0`
 
 func ruleCandidatesArgs(ids []string) []any {
 	return append([]any{kindBits["spam"], kindMask([]string{"sent", "drafts", "trash"})}, anySlice(ids)...)

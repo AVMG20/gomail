@@ -548,7 +548,8 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 func (e *Engine) applyFetched(accountID string, folders []mail.Folder, res mail.SyncResult, labelIDs map[string]string, started time.Time) (store.ApplyResult, error) {
 	unlock := e.lockApply(accountID)
 	defer unlock()
-	moved := e.keepLocalChanges(accountID, folders, res.Upserts, started)
+	var moved map[string]bool
+	res.Upserts, moved = e.keepLocalChanges(accountID, folders, res.Upserts, started)
 	return e.cfg.Store.ApplySyncKeeping(accountID, res, labelIDs, moved)
 }
 
@@ -594,7 +595,7 @@ func (e *Engine) ingest(accountID string, msgs []mail.Message, fetched time.Time
 	}
 	labelIDs := e.labelIDs(accountID, nil, msgs, false)
 	unlock := e.lockApply(accountID)
-	moved := e.keepLocalChanges(accountID, nil, msgs, fetched)
+	msgs, moved := e.keepLocalChanges(accountID, nil, msgs, fetched)
 	applied, err := e.cfg.Store.ApplySyncKeeping(accountID, mail.SyncResult{Upserts: msgs}, labelIDs, moved)
 	unlock()
 	if err != nil {

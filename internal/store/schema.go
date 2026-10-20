@@ -403,6 +403,23 @@ CREATE TABLE pending_calendars (
 	PRIMARY KEY(provider, email, remote_id)
 ) WITHOUT ROWID;
 `,
+	// 13: label counts skip messages in no folder (emptied from Trash or
+	// Spam while the server deletes them) like trashed ones.
+	`
+DROP TRIGGER IF EXISTS message_labels_fill;
+CREATE TRIGGER message_labels_fill AFTER INSERT ON message_labels BEGIN
+	UPDATE message_labels SET (account_id, unread, trashed) =
+		(SELECT m.account_id, m.unread, (m.folder_kinds & 32) != 0 OR m.folder_kinds = 0 FROM messages m WHERE m.id = new.message_id)
+	WHERE message_id = new.message_id AND label_id = new.label_id;
+END;
+DROP TRIGGER IF EXISTS messages_label_state;
+CREATE TRIGGER messages_label_state AFTER UPDATE OF unread, folder_kinds ON messages
+WHEN old.unread != new.unread
+	OR ((old.folder_kinds & 32) != 0 OR old.folder_kinds = 0) != ((new.folder_kinds & 32) != 0 OR new.folder_kinds = 0) BEGIN
+	UPDATE message_labels SET unread = new.unread, trashed = (new.folder_kinds & 32) != 0 OR new.folder_kinds = 0 WHERE message_id = new.id;
+END;
+UPDATE message_labels SET trashed = 1 WHERE trashed = 0 AND message_id IN (SELECT id FROM messages WHERE folder_kinds = 0);
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

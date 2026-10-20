@@ -34,7 +34,7 @@ func latestInThread(w *where) {
 	// Trashed messages form their own conversation (like sameThread), so a
 	// newer trashed reply doesn't hide the live thread.
 	inner := []string{"n.account_id = m.account_id", "n.thread_key = m.thread_key",
-		"((n.folder_kinds & 32) != 0) = ((m.folder_kinds & 32) != 0)",
+		threadSide("n") + " = " + threadSide("m"),
 		"(n.date > m.date OR (n.date = m.date AND n.id > m.id))"}
 	for _, c := range w.conds {
 		inner = append(inner, aliasRe.ReplaceAllString(c, "n."))
@@ -135,10 +135,16 @@ func displayName(a models.Address) string {
 	return a.Email
 }
 
+// threadSide splits a thread into live, trashed and folderless (being
+// deleted) messages, which never group together.
+func threadSide(alias string) string {
+	return `(CASE WHEN ` + alias + `.folder_kinds = 0 THEN 2 WHEN (` + alias + `.folder_kinds & 32) != 0 THEN 1 ELSE 0 END)`
+}
+
 // sameThread selects thread siblings of the anchor ?1 (account, thread and
 // trash-ness: trashed messages only group with trashed ones).
-const sameThread = `t.account_id = x.account_id AND t.thread_key = x.thread_key
-	AND ((t.folder_kinds & 32) != 0) = ((x.folder_kinds & 32) != 0)`
+var sameThread = `t.account_id = x.account_id AND t.thread_key = x.thread_key
+	AND ` + threadSide("t") + ` = ` + threadSide("x")
 
 var sourceRank = map[string]int{"manual": 4, "provider": 3, "system": 2, "ai": 1}
 

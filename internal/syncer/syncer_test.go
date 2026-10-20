@@ -69,6 +69,9 @@ type flaky struct {
 	moveHook func(target mail.Folder) error
 	// labelHook, if set, runs before SetLabel.
 	labelHook func()
+	// onEmpty runs at the start of EmptyFolder (while the local change is
+	// pending).
+	onEmpty func()
 }
 
 func (f *flaky) err(op string) error {
@@ -145,6 +148,9 @@ func (f *flaky) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
 }
 
 func (f *flaky) EmptyFolder(ctx context.Context, folder mail.Folder) error {
+	if f.onEmpty != nil {
+		f.onEmpty()
+	}
 	if err := f.err("empty"); err != nil {
 		return err
 	}

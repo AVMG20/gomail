@@ -144,10 +144,13 @@ func (l *localChanges) prune(before time.Time) {
 // keepLocalChanges gives fetched messages that changed locally after the
 // fetch started (or whose push is still running) their local read, star
 // and folder state, each only if that is what changed: the provider's
-// snapshot may predate the change. It returns the local ids of messages
-// whose folders changed locally; the round must not take them out of
-// folders either (Removed, complete listings).
-func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups []mail.Message, started time.Time) map[string]bool {
+// snapshot may predate the change. Messages whose folders changed locally
+// and that are in no folder locally (emptied from Trash or Spam while the
+// server deletes them) or no longer cached are dropped from ups. It
+// returns ups and the local ids of messages whose folders changed locally;
+// the round must not take them out of folders either (Removed, complete
+// listings).
+func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups []mail.Message, started time.Time) ([]mail.Message, map[string]bool) {
 	e.local.prune(started.Add(-10 * time.Minute))
 	moved := e.local.freshIDs(changeFolders, started)
 	var ids []string
@@ -160,15 +163,15 @@ func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups [
 		}
 	}
 	if len(ids) == 0 {
-		return moved
+		return ups, moved
 	}
 	sums, err := e.cfg.Store.Summaries(ids)
 	if err != nil {
-		return moved
+		return ups, moved
 	}
 	local, err := e.cfg.Store.Folders(accountID)
 	if err != nil {
-		return moved
+		return ups, moved
 	}
 	remoteOf := map[string]string{}
 	for _, f := range local {
@@ -185,8 +188,19 @@ func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups [
 			known[f.RemoteID] = true
 		}
 	}
+	drop := map[int]bool{}
+	for id, i := range idx {
+		if moved[id] {
+			drop[i] = true // unless still in a folder locally (below)
+		}
+	}
 	for _, sm := range sums {
-		m := &ups[idx[sm.ID]]
+		i := idx[sm.ID]
+		if moved[sm.ID] && len(sm.FolderIDs) == 0 {
+			continue
+		}
+		delete(drop, i)
+		m := &ups[i]
 		if e.local.fresh(sm.ID, changeRead, started) {
 			m.Unread = sm.Unread
 		}
@@ -206,7 +220,16 @@ func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups [
 			m.FolderRemoteIDs = fr
 		}
 	}
-	return moved
+	if len(drop) == 0 {
+		return ups, moved
+	}
+	kept := make([]mail.Message, 0, len(ups)-len(drop))
+	for i, m := range ups {
+		if !drop[i] {
+			kept = append(kept, m)
+		}
+	}
+	return kept, moved
 }
 
 // perAccount runs push for each account concurrently; failed accounts are
@@ -657,7 +680,10 @@ func (e *Engine) EmptyFolder(folderID string) error {
 		}
 	}
 	if len(gone) > 0 {
-		if _, err := e.cfg.Store.ApplySync(f.AccountID, mail.SyncResult{Deleted: gone}, nil); err != nil {
+		unlock := e.lockApply(f.AccountID)
+		_, err := e.cfg.Store.ApplySync(f.AccountID, mail.SyncResult{Deleted: gone}, nil)
+		unlock()
+		if err != nil {
 			slog.Warn("removing emptied messages", "err", err)
 		}
 	}
