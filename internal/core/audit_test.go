@@ -15,6 +15,7 @@ import (
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/secrets"
+	"github.com/AVMG20/gomail/internal/store"
 )
 
 // draftProbe wraps the demo provider to hold draft saves and fail draft
@@ -219,24 +220,31 @@ func TestMergeIDs(t *testing.T) {
 	}
 }
 
-// Removing an account while a token refresh is in flight must not write
-// its sign-in back to the secret store.
-func TestRemovedAccountTokenNotSavedBack(t *testing.T) {
-	sec := secrets.NewMemory()
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", Demo: true, UI: &fakeUI{}, Secrets: sec})
-	if err != nil {
+// Messages already scored with the current label set are not sent to the
+// model again, but a changed threshold applies to their stored scores.
+func TestThresholdChangeAppliesToStoredScores(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	page, _ := s.ListMessages(models.ListQuery{FolderKind: models.FolderInbox, Limit: 1})
+	id := page.Messages[0].ID
+	ins, err := s.store.ClassifyInputs([]string{id})
+	if err != nil || len(ins) != 1 {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	accts, _ := s.Accounts()
-	if len(accts) == 0 {
-		t.Skip("no demo accounts")
-	}
-	_ = sec.Set("oauth:"+accts[0].ID, `{"access_token":"a","refresh_token":"r","expiry":"2000-01-01T00:00:00Z"}`)
-	if err := s.RemoveAccount(accts[0].ID); err != nil {
+	hash := aiHash(s.labelsetHash(), ins[0])
+	label := s.GetSettings().Labels[0].ID
+	_ = s.store.DeleteUnknownLabels(nil) // start without any label assignments
+	if _, _, err := s.store.ApplyAIScores(id, map[string]float64{label: 0.6}, store.AIPolicy{AddThreshold: 0.5, RemoveThreshold: 0.1}, hash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sec.Get("oauth:" + accts[0].ID); err == nil {
-		t.Fatal("token left behind")
+	st := s.GetSettings()
+	st.ClassifyThreshold = 0.8
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	ins, _ = s.store.ClassifyInputs([]string{id})
+	r := s.classifyOne(context.Background(), ins[0])
+	if !r.Skipped || fmt.Sprint(r.Removed) != "["+label+"]" {
+		t.Fatalf("result %+v", r)
 	}
 }

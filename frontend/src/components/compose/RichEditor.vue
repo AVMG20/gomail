@@ -3,7 +3,7 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { Placeholder } from '@tiptap/extensions'
-import { DOMSerializer } from '@tiptap/pm/model'
+import { DOMSerializer, type Node as PMNode } from '@tiptap/pm/model'
 import {
   BoldIcon, ItalicIcon, LinkIcon, ListIcon, ListOrderedIcon, QuoteIcon, UnderlineIcon, ScissorsIcon, CopyIcon,
   ClipboardPasteIcon, SparklesIcon, TextSelectIcon, Link2OffIcon,
@@ -99,8 +99,17 @@ function removeLink() {
 // ---------------------------------------------------------------- context menu
 // Snapshot the selection on right mouse-down, before WebKit moves it to the word under the cursor.
 const snap = ref<{ from: number; to: number } | null>(null)
+let snapAt = 0
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 2 || !editor.value) return
+  const { from, to } = editor.value.state.selection
+  snap.value = { from, to }
+  snapAt = Date.now()
+}
+// A menu opened from the keyboard (Menu key, Shift+F10) has no mouse-down before it:
+// take the current selection rather than a stale snapshot.
+function onContextMenu() {
+  if (!editor.value || Date.now() - snapAt < 1000) return
   const { from, to } = editor.value.state.selection
   snap.value = { from, to }
 }
@@ -134,11 +143,28 @@ function selectAll() {
 
 const improving = ref(false)
 
+/** The text before the signature / quoted message ("On … wrote:" included), or null when there is none. */
+function ownTextRange(doc: PMNode): { from: number; to: number } | null {
+  let end: number | null = null
+  let prev: { node: PMNode; offset: number } | null = null
+  doc.forEach((node, offset) => {
+    if (end !== null) return
+    if (node.type.name === 'signature' || node.type.name === 'blockquote') {
+      end = prev && node.type.name === 'blockquote' && /wrote:|Forwarded message/i.test(prev.node.textContent) ? prev.offset : offset
+    }
+    prev = { node, offset }
+  })
+  return end === null ? null : { from: 0, to: end }
+}
+
 async function improveGrammar() {
   const ed = editor.value
   if (!ed || improving.value) return
   const { state } = ed
-  const sel = snap.value && snap.value.from !== snap.value.to ? snap.value : null
+  // Without a selection only the user's own text is improved: never the signature or the
+  // quoted message (rewriting what someone else wrote would misquote them).
+  const picked = snap.value && snap.value.from !== snap.value.to ? snap.value : null
+  const sel = picked ?? ownTextRange(state.doc)
   const from = sel ? sel.from : 0
   const to = sel ? sel.to : state.doc.content.size
   if (!state.doc.textBetween(from, to, ' ').trim()) {
@@ -147,7 +173,7 @@ async function improveGrammar() {
   }
   // Send HTML when the range spans formatting or several blocks; plain text otherwise.
   const slice = state.doc.slice(from, to)
-  let rich = !sel
+  let rich = !picked // whole blocks (own text or everything) go as HTML
   if (sel) {
     let blocks = 0
     slice.content.descendants((node) => {
@@ -188,8 +214,17 @@ async function improveGrammar() {
     }
     setTimeout(() => editor.value && editor.value.view.dispatch(clearArrived(editor.value.state.tr)), 1300)
     emit('update:modelValue', ed.getHTML())
+    const after = ed.getHTML()
     toast.success('Grammar improved', {
-      action: { label: 'Undo', onClick: () => { ed.commands.setContent(before); emit('update:modelValue', ed.getHTML()) } },
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          // Restoring the old text would also throw away anything typed since.
+          if (ed.getHTML() !== after) return void toast('The message changed since', { description: 'Use Ctrl+Z to step back instead.' })
+          ed.commands.setContent(before)
+          emit('update:modelValue', ed.getHTML())
+        },
+      },
     })
   } catch (e) {
     ed.view.dispatch(clearPending(ed.state.tr))
@@ -212,7 +247,7 @@ defineExpose({ editor, improveGrammar, applySignature })
   <div class="flex min-h-0 flex-1 flex-col">
     <ContextMenu>
       <ContextMenuTrigger as-child>
-        <div class="compose-editor thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3" style="--default-contextmenu: hide" @mousedown.capture="onMouseDown" @click="editor?.chain().focus().run()">
+        <div class="compose-editor thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3" style="--default-contextmenu: hide" @mousedown.capture="onMouseDown" @contextmenu.capture="onContextMenu" @click="editor?.chain().focus().run()">
           <EditorContent :editor="editor" class="h-full" />
         </div>
       </ContextMenuTrigger>

@@ -15,9 +15,11 @@ const kind = ref<'image' | 'pdf' | 'text' | ''>('')
 const text = ref('')
 const error = ref('')
 
+let alive = true
 onMounted(async () => {
   try {
     const data = await api.getAttachmentData(props.messageId, props.attachment.id)
+    if (!alive) return // closed before the data arrived: don't create a URL nobody revokes
     const mime = data.mimeType || props.attachment.mimeType
     const bytes = Uint8Array.from(atob(data.dataBase64), (c) => c.charCodeAt(0))
     if (/^text\//i.test(mime)) {
@@ -37,7 +39,10 @@ onMounted(async () => {
     error.value = errorMessage(e)
   }
 })
-onBeforeUnmount(() => url.value && URL.revokeObjectURL(url.value))
+onBeforeUnmount(() => {
+  alive = false
+  if (url.value) URL.revokeObjectURL(url.value)
+})
 
 function onOpen(v: boolean) {
   open.value = v

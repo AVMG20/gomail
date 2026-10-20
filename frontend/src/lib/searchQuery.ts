@@ -87,5 +87,6 @@ export function operatorCompletions(
 
 /** Replace the last token with a completion (and add a trailing space). */
 export function applyCompletion(query: string, value: string): string {
-  return query.replace(/(\S*)$/, `${value} `)
+  // A function replacement: "$&" or "$$" in a label/contact name stay literal.
+  return query.replace(/(\S*)$/, () => `${value} `)
 }

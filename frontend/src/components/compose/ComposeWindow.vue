@@ -33,6 +33,13 @@ const d = computed(() => props.draft)
 const title = computed(() => d.value.subject.trim() || (d.value.mode === 'forward' ? 'Forward' : d.value.mode === 'new' ? 'New message' : 'Reply'))
 const fileInput = ref<HTMLInputElement | null>(null)
 const toField = ref<InstanceType<typeof RecipientField> | null>(null)
+const ccField = ref<InstanceType<typeof RecipientField> | null>(null)
+const bccField = ref<InstanceType<typeof RecipientField> | null>(null)
+
+/** Recipients typed but not yet turned into chips would otherwise be left out. */
+function commitRecipients() {
+  for (const f of [toField, ccField, bccField]) f.value?.commit()
+}
 const editorRef = ref<InstanceType<typeof RichEditor> | null>(null)
 const subjectInput = ref<HTMLInputElement | null>(null)
 
@@ -68,11 +75,13 @@ async function onFiles(e: Event) {
 }
 
 function sendNow() {
+  commitRecipients()
   void compose.send(d.value.id, settings.settings?.undoSendSeconds ?? 0)
 }
 
 const confirmDiscard = ref(false)
 async function closeWindow() {
+  commitRecipients()
   if (!(await compose.saveAndClose(d.value.id))) confirmDiscard.value = true
 }
 function discard() {
@@ -88,10 +97,17 @@ const subjSel = ref<{ start: number; end: number }>({ start: 0, end: 0 })
 const subjPending = ref<{ start: number; end: number } | null>(null)
 const subjArrived = ref(false)
 
+let subjSnapAt = 0
 function snapSubject(e: MouseEvent) {
   if (e.button !== 2) return
   const el = subjectInput.value
   if (el) subjSel.value = { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 }
+  subjSnapAt = Date.now()
+}
+/** Keyboard-opened menu (no right mouse-down first): use the current selection. */
+function snapSubjectKey() {
+  const el = subjectInput.value
+  if (el && Date.now() - subjSnapAt > 1000) subjSel.value = { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 }
 }
 const subjHasSel = computed(() => subjSel.value.end > subjSel.value.start)
 
@@ -175,7 +191,14 @@ watch(() => d.value.accountId, (id, prev) => {
 
     <!-- Header fields -->
     <div class="divide-border/70 shrink-0 divide-y px-4">
-      <div v-if="accounts.accounts.length > 1" class="flex h-9 items-center gap-1">
+      <!-- Replies and forwards go out from the account that received the message (the backend refuses others). -->
+      <div v-if="accounts.accounts.length > 1 && d.mode !== 'new'" class="flex h-9 items-center gap-1">
+        <span class="text-muted-foreground w-10 shrink-0 text-[13px]">From</span>
+        <span v-if="fromAccount" class="flex items-center gap-2 px-1.5 text-[13px]">
+          <span class="size-2 rounded-full" :style="{ background: fromAccount.color }" />{{ fromAccount.email }}
+        </span>
+      </div>
+      <div v-else-if="accounts.accounts.length > 1" class="flex h-9 items-center gap-1">
         <span class="text-muted-foreground w-10 shrink-0 text-[13px]">From</span>
         <Select v-model="d.accountId">
           <SelectTrigger size="sm" aria-label="From account" class="h-7 border-0 px-1.5 shadow-none focus-visible:ring-0 dark:bg-transparent">
@@ -197,12 +220,12 @@ watch(() => d.value.accountId, (id, prev) => {
         <button v-if="!d.showCc" type="button" class="text-muted-foreground hover:text-foreground mt-2.5 shrink-0 text-xs" @click="d.showCc = true">Cc Bcc</button>
       </div>
       <template v-if="d.showCc">
-        <RecipientField v-model="d.cc" label="Cc" />
-        <RecipientField v-model="d.bcc" label="Bcc" />
+        <RecipientField ref="ccField" v-model="d.cc" label="Cc" />
+        <RecipientField ref="bccField" v-model="d.bcc" label="Bcc" />
       </template>
       <ContextMenu>
         <ContextMenuTrigger as-child>
-          <div class="relative" style="--default-contextmenu: hide" @mousedown.capture="snapSubject">
+          <div class="relative" style="--default-contextmenu: hide" @mousedown.capture="snapSubject" @contextmenu.capture="snapSubjectKey">
             <input
               ref="subjectInput"
               v-model="d.subject"
@@ -254,6 +277,14 @@ watch(() => d.value.accountId, (id, prev) => {
     </RichEditor>
     <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles" />
 
+    <div v-if="d.forwarded?.length" class="border-border flex shrink-0 flex-wrap items-center gap-1.5 border-t px-4 py-2" aria-label="Forwarded attachments">
+      <span v-for="(a, i) in d.forwarded" :key="i" class="bg-muted/60 text-muted-foreground inline-flex h-7 max-w-56 items-center gap-1.5 rounded-md px-2 text-xs" :title="`${a.filename} is forwarded with the original message`">
+        <PaperclipIcon class="size-3.5" />
+        <span class="truncate">{{ a.filename }}</span>
+        <span>{{ formatBytes(a.size) }}</span>
+      </span>
+      <span class="text-muted-foreground ml-auto text-[11px]">Forwarded with the original</span>
+    </div>
     <div v-if="d.attachments.length" class="border-border flex shrink-0 flex-wrap items-center gap-1.5 border-t px-4 py-2">
       <span v-for="a in d.attachments" :key="a.id" class="bg-muted inline-flex h-7 max-w-56 items-center gap-1.5 rounded-md pr-1 pl-2 text-xs">
         <PaperclipIcon class="text-muted-foreground size-3.5" />

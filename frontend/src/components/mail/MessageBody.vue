@@ -233,7 +233,8 @@ function onLoad() {
   }
   doc.addEventListener('load', measure, true) // images
   doc.addEventListener('click', (e) => {
-    const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
+    // <area> (image maps) navigates like a link: never inside the frame itself.
+    const a = (e.target as Element | null)?.closest?.('a[href], area[href]') as HTMLAnchorElement | HTMLAreaElement | null
     if (!a) return
     e.preventDefault()
     const href = a.getAttribute('href') ?? ''

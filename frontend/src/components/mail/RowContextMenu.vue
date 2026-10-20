@@ -28,6 +28,14 @@ const ai = useAiStore()
 const ctxMsg = computed(() => mail.byId.get(props.messageId) ?? null)
 const ctxIds = computed(() => (mail.selection.has(props.messageId) ? [...mail.selection] : [props.messageId]))
 
+/** Bulk actions on a selected row follow the selection, including "all N in this view". */
+async function run(fn: (ids: string[]) => unknown) {
+  const inSelection = mail.selection.has(props.messageId)
+  const ids = inSelection && mail.selectAllQuery ? await mail.targetIds() : ctxIds.value
+  if (inSelection) mail.clearSelection()
+  await fn(ids)
+}
+
 
 async function respond(mode: 'reply' | 'replyAll' | 'forward') {
   const thread = await mail.loadThread(props.messageId)
@@ -43,6 +51,7 @@ const moveTargets = computed(() => {
 })
 async function moveTo(folderId: string) {
   const ids = ctxIds.value
+  mail.selectAllQuery = false // acts on the loaded selection only
   const backendIds = mail.actionIds(ids)
   const name = accounts.folderMap.get(folderId)?.name ?? 'folder'
   mail.removeLocal(ids)
@@ -72,12 +81,12 @@ function toggleCtxLabel(labelId: string) {
       <ContextMenuItem @click="respond('replyAll')"><ReplyAllIcon /> Reply all <ContextMenuShortcut>A</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuItem @click="respond('forward')"><ForwardIcon /> Forward <ContextMenuShortcut>F</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuSeparator />
-      <ContextMenuItem @click="mail.archive(ctxIds)"><ArchiveIcon /> Archive <ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
-      <ContextMenuItem @click="mail.trash(ctxIds)"><Trash2Icon /> Delete <ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
-      <ContextMenuItem @click="mail.setRead(ctxIds, ctxMsg.unread)">
+      <ContextMenuItem @click="run(mail.archive)"><ArchiveIcon /> Archive <ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="run(mail.trash)"><Trash2Icon /> Delete <ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="run((ids) => mail.setRead(ids, ctxMsg!.unread))">
         <component :is="ctxMsg.unread ? MailOpenIcon : MailIcon" /> {{ ctxMsg.unread ? 'Mark as read' : 'Mark as unread' }} <ContextMenuShortcut>U</ContextMenuShortcut>
       </ContextMenuItem>
-      <ContextMenuItem @click="mail.setStarred(ctxIds, !ctxMsg.starred)"><StarIcon /> {{ ctxMsg.starred ? 'Unstar' : 'Star' }} <ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>
+      <ContextMenuItem @click="run((ids) => mail.setStarred(ids, !ctxMsg!.starred))"><StarIcon /> {{ ctxMsg.starred ? 'Unstar' : 'Star' }} <ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuSub>
         <ContextMenuSubTrigger class="gap-2"><TagIcon class="size-4" /> Labels</ContextMenuSubTrigger>

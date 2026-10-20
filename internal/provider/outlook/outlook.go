@@ -854,8 +854,30 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 		}
 	}
 	have := map[string]string{}
+	ids := map[string]bool{}
 	for _, a := range existing.Value {
 		have[attKey(a.Name, int(a.Size))] = a.ID
+		ids[a.ID] = true
+	}
+	// Graph's size includes the attachment's properties, so a file that is
+	// already on the draft (uploaded earlier, or reopened from Drafts) may
+	// report more bytes than its content: match it by name instead of
+	// uploading a duplicate.
+	claimed := map[string]bool{}
+	present := func(key string, a mail.OutgoingAttachment) bool {
+		if _, ok := have[key]; ok {
+			return true
+		}
+		if id, ok := ours[key]; ok && ids[id] {
+			return true
+		}
+		for _, e := range existing.Value {
+			if !claimed[e.ID] && strings.EqualFold(e.Name, a.Filename) && int(e.Size) >= len(a.Data) {
+				claimed[e.ID] = true
+				return true
+			}
+		}
+		return false
 	}
 	for key, id := range ours {
 		if _, keep := want[key]; !keep {
@@ -868,7 +890,7 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 		}
 	}
 	for key, a := range want {
-		if _, ok := have[key]; ok {
+		if present(key, a) {
 			continue
 		}
 		id, err := c.addAttachment(ctx, draftID, a)

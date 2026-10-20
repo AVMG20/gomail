@@ -98,6 +98,30 @@ watch(() => mail.openId, (id) => {
   timer = setTimeout(() => load(id), thread.value.length ? 60 : 0)
 }, { immediate: true })
 
+// A reply arriving while the conversation is open changes its row in the list: show it
+// without resetting what the reader expanded or scrolled to.
+const liveRow = computed(() => {
+  const first = thread.value[0]
+  if (!first) return ''
+  const r = mail.messages.find((m) => m.accountId === first.accountId && m.threadId === first.threadId)
+  return r ? `${r.id}:${r.threadCount ?? 1}` : ''
+})
+watch(liveRow, async (now, old) => {
+  const id = mail.openId
+  if (!old || !now || now === old || !id) return
+  const t = ++token
+  try {
+    mail.invalidateThread(id)
+    const list = await mail.loadThread(id)
+    if (t !== token || mail.openId !== id || !list.some((m) => m.id === id)) return
+    const known = new Set(thread.value.map((m) => m.id))
+    thread.value = list
+    expanded.value = new Set([...expanded.value, ...list.filter((m) => !known.has(m.id)).map((m) => m.id)])
+  } catch {
+    /* keep showing what we have */
+  }
+})
+
 const current = computed(() => mail.openSummary ?? thread.value.find((m) => m.id === mail.openId) ?? null)
 const newest = computed(() => thread.value[thread.value.length - 1] ?? null)
 /** Meeting invitation carried by the conversation (latest one wins). */
@@ -180,7 +204,7 @@ async function moveTo(folderId: string) {
 
 const isDraft = computed(() => !!newest.value?.isDraft || newest.value?.folderIds.some((f) => accounts.folderMap.get(f)?.kind === 'drafts'))
 function editDraft() {
-  if (newest.value) compose.editDraft(newest.value)
+  if (newest.value) void compose.editDraft(newest.value)
 }
 
 const labelingNow = computed(() => !!current.value && ai.labeling.has(current.value.id))

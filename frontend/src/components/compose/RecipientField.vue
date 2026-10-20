@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api, hasMethod } from '@/lib/api'
 import { XIcon } from '@lucide/vue'
-import { displayName, isEmail, parseAddressList } from '@/lib/format'
+import { displayName, isEmail, parseAddress, splitAddressList } from '@/lib/format'
 import type { Address } from '@/lib/types'
 import { useMailStore } from '@/stores/mail'
 
@@ -62,13 +62,10 @@ function add(a: Address) {
 }
 
 function commit(): boolean {
-  const raw = text.value.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean)
+  const raw = splitAddressList(text.value)
   if (!raw.length) return false
-  const parsed = parseAddressList(text.value)
-  parsed.forEach(add)
-  // Keep invalid entries as flagged chips instead of silently dropping them.
-  const ok = new Set(parsed.map((a) => a.email.toLowerCase()))
-  for (const r of raw) if (![...ok].some((e) => r.toLowerCase().includes(e))) add({ name: '', email: r })
+  // Invalid entries become flagged chips (sending refuses them) instead of being dropped.
+  for (const r of raw) add(parseAddress(r) ?? { name: '', email: r })
   text.value = ''
   return true
 }
@@ -106,12 +103,14 @@ function onPaste(e: ClipboardEvent) {
 
 function onBlur() {
   focused.value = false
+  // Delayed so a click on a suggestion wins; whatever is still typed then becomes a chip.
   setTimeout(() => {
-    if (!focused.value && isEmail(text.value.trim())) commit()
+    if (!focused.value && text.value.trim()) commit()
   }, 150)
 }
 
-defineExpose({ focus: () => input.value?.focus() })
+/** Turn typed text into chips now (before send/save, which only read chips). */
+defineExpose({ focus: () => input.value?.focus(), commit })
 </script>
 
 <template>

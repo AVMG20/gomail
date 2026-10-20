@@ -101,11 +101,27 @@ export function colorForString(s: string): string {
   return `hsl(${h % 360} 45% 52%)`
 }
 
+/** Split an address list on , ; and newlines, but not inside "quoted names" or <addresses>. */
+export function splitAddressList(input: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let quoted = false
+  let angle = false
+  for (const c of input) {
+    if (c === '"' && !angle) quoted = !quoted
+    else if (c === '<' && !quoted) angle = true
+    else if (c === '>' && !quoted) angle = false
+    if (!quoted && !angle && (c === ',' || c === ';' || c === '\n')) {
+      out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  out.push(cur)
+  return out.map((s) => s.trim()).filter(Boolean)
+}
+
 export function parseAddressList(input: string): Address[] {
-  return input
-    .split(/[,;\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return splitAddressList(input)
     .map(parseAddress)
     .filter((a): a is Address => !!a)
 }

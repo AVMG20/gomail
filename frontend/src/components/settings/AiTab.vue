@@ -35,6 +35,14 @@ onMounted(async () => {
   if (hasMethod('GetAIUsage')) usage.value = await api.getAIUsage().catch(() => null)
 })
 
+/** An emptied (or half-typed) field is not "0 = no limit": only real numbers are saved. */
+function onBudget(v: string | number) {
+  if (typeof v === 'string' && v.trim() === '') return
+  const n = Number(v)
+  if (!Number.isFinite(n)) return
+  void settings.update({ aiDailyBudgetUsd: Math.max(0, n) }, 600)
+}
+
 async function saveKey() {
   savingKey.value = true
   try {
@@ -110,7 +118,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       <SettingRow title="Daily budget" description="Auto-labeling pauses for the day when AI spend reaches this. 0 = no limit.">
         <div class="flex items-center gap-1.5">
           <span class="text-muted-foreground text-sm">$</span>
-          <Input type="number" min="0" step="0.25" class="h-8 w-24 text-right tabular-nums" :model-value="s.aiDailyBudgetUsd ?? 1" aria-label="Daily AI budget in US dollars" @update:model-value="(v) => settings.update({ aiDailyBudgetUsd: Math.max(0, Number(v) || 0) }, 600)" />
+          <Input type="number" min="0" step="0.25" class="h-8 w-24 text-right tabular-nums" :model-value="s.aiDailyBudgetUsd ?? 1" aria-label="Daily AI budget in US dollars" @update:model-value="onBudget" />
         </div>
       </SettingRow>
     </SettingSection>

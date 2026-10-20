@@ -165,3 +165,27 @@ func TestFreshDeltaCompleteness(t *testing.T) {
 		t.Fatalf("incremental round reported completeness %v", res.Complete)
 	}
 }
+
+// Saving a reopened draft with the attachments it already has on the
+// server must not upload them again (Graph's size includes metadata).
+func TestReopenedDraftAttachmentsNotDuplicated(t *testing.T) {
+	var posts atomic.Int64
+	c := auditClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/attachments"):
+			w.Write([]byte(`{"value":[{"id":"att1","name":"Report.pdf","size":350}]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attachments"):
+			posts.Add(1)
+			w.Write([]byte(`{"id":"new"}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	atts := []mail.OutgoingAttachment{{Filename: "report.pdf", Data: make([]byte, 100)}}
+	if _, err := c.SaveDraft(context.Background(), mail.Outgoing{Subject: "s", Text: "t", Attachments: atts}, "D"); err != nil {
+		t.Fatal(err)
+	}
+	if posts.Load() != 0 {
+		t.Fatalf("%d duplicate uploads", posts.Load())
+	}
+}

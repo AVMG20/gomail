@@ -147,7 +147,9 @@ const sticky = computed(() => {
 })
 
 const onScroll = useThrottleFn(() => {
-  if (!scroller.value) return
+  // While a mailbox loads, the skeleton is short and the browser clamps scrollTop: that is
+  // not the user scrolling, and saving it would overwrite the new mailbox's position.
+  if (!scroller.value || mail.status !== 'ready') return
   scrollTop.value = scroller.value.scrollTop
   mail.saveScroll(scroller.value.scrollTop)
   if (scroller.value.scrollTop < 8) newCount.value = 0

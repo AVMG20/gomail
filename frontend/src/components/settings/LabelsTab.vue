@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { LABEL_COLORS } from '@/lib/color'
 import { buildLabelExport, MAX_IMPORT_BYTES, mergeLabelImport } from '@/lib/labelsIO'
-import type { Label } from '@/lib/types'
+import type { Label, Settings } from '@/lib/types'
 import { useAiStore } from '@/stores/ai'
 import { useSettingsStore } from '@/stores/settings'
 import SettingRow from './SettingRow.vue'
@@ -75,8 +75,25 @@ function importLabels(text: string) {
     toast.error(r.error)
     return
   }
+  // The file may also carry AI prompts: say so, and offer to keep the current ones.
+  const cur = settings.settings
+  const prev: Partial<Settings> = {}
+  const replaced: string[] = []
+  if (cur && r.patch.classifyInstructions !== undefined && r.patch.classifyInstructions !== cur.classifyInstructions) {
+    prev.classifyInstructions = cur.classifyInstructions
+    replaced.push('labeling instructions')
+  }
+  if (cur && r.patch.grammarSystemPrompt !== undefined && r.patch.grammarSystemPrompt !== cur.grammarSystemPrompt) {
+    prev.grammarSystemPrompt = cur.grammarSystemPrompt
+    replaced.push('grammar prompt')
+  }
   void settings.update(r.patch, 0)
-  toast.success(`Imported labels: ${r.added} added, ${r.updated} updated`, r.skipped ? { description: `${r.skipped} skipped (empty or duplicate names)` } : undefined)
+  const notes = [r.skipped ? `${r.skipped} skipped (empty or duplicate names).` : '', replaced.length ? `It also replaced your ${replaced.join(' and ')}.` : ''].filter(Boolean)
+  toast.success(`Imported labels: ${r.added} added, ${r.updated} updated`, {
+    description: notes.join(' ') || undefined,
+    duration: replaced.length ? 15000 : undefined,
+    action: replaced.length ? { label: 'Keep mine', onClick: () => void settings.update(prev, 0) } : undefined,
+  })
 }
 
 async function onImportFile(e: Event) {

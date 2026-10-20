@@ -37,15 +37,19 @@ const emptyTargets = computed(() => folderIds.value.filter((id) => {
   const provider = f ? accounts.accountMap.get(f.accountId)?.provider : ''
   return !(kind.value === 'trash' && provider === 'gmail')
 }))
+/** Gmail's Trash is left out of "Empty Trash" in the unified view. */
+const skippedFolders = computed(() => folderIds.value.length - emptyTargets.value.length)
+/** What emptying deletes: the emptiable folders only (the view may also show Gmail's Trash). */
+const emptyCount = computed(() => (skippedFolders.value ? emptyTargets.value.reduce((n, id) => n + (accounts.folderMap.get(id)?.total ?? 0), 0) : mail.total))
 const emptiable = computed(() => (kind.value === 'trash' || kind.value === 'spam') && hasMethod('EmptyFolder') && emptyTargets.value.length > 0)
 const unread = computed(() => folderIds.value.reduce((n, id) => n + (accounts.folderMap.get(id)?.unread ?? 0), 0))
 
 async function emptyFolder() {
   busy.value = true
   try {
+    const targets = new Set(emptyTargets.value)
     await Promise.all(emptyTargets.value.map((id) => api.emptyFolder(id)))
-    mail.messages = []
-    mail.total = 0
+    mail.removeLocal(mail.messages.filter((m) => m.folderIds.some((f) => targets.has(f))).map((m) => m.id))
     toast(`${folderName.value} emptied`)
     accounts.refreshCounts()
     void mail.softRefresh()
@@ -106,7 +110,10 @@ function labelFolder() {
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Empty {{ folderName }}?</AlertDialogTitle>
-          <AlertDialogDescription>{{ mail.total.toLocaleString() }} conversation{{ mail.total === 1 ? '' : 's' }} will be permanently deleted{{ folderIds.length > 1 ? ' from all accounts' : '' }}. This can’t be undone.</AlertDialogDescription>
+          <AlertDialogDescription>
+            {{ emptyCount.toLocaleString() }} {{ skippedFolders ? 'message' : 'conversation' }}{{ emptyCount === 1 ? '' : 's' }} will be permanently deleted{{ emptyTargets.length > 1 ? ' from all accounts' : '' }}. This can’t be undone.
+            <template v-if="skippedFolders"> Gmail’s Trash isn’t included: Gmail empties it after 30 days.</template>
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

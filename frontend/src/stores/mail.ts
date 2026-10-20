@@ -20,6 +20,12 @@ export interface LabelFilter {
 }
 
 const PAGE = 60
+/** The backend's page size cap (store.MaxPageSize). */
+const MAX_PAGE = 200
+/** softRefresh re-fetches at most this many loaded rows. */
+const REFRESH_MAX = 1000
+/** The backend's cap on messages per bulk action (syncer.MaxBulk). */
+export const MAX_BULK = 5000
 const FILTERS_KEY = 'gomail.labelFilters.v1'
 const MAILBOX_KEY = 'gomail.mailbox.v1'
 const LAST_BY_ACCOUNT_KEY = 'gomail.lastMailbox.v1'
@@ -177,9 +183,19 @@ export const useMailStore = defineStore('mail', () => {
     const t = ++token
     const m0 = mutations
     try {
-      const limit = Math.min(Math.max(PAGE, messages.value.length), 500)
-      const page = await api.listMessages({ ...query.value, limit })
+      // Re-fetch as many rows as are loaded (in backend-sized pages, up to a cap), so rows
+      // loaded by scrolling don't vanish on every sync.
+      const want = Math.min(Math.max(PAGE, messages.value.length), REFRESH_MAX)
+      const first = await api.listMessages({ ...query.value, limit: Math.min(want, MAX_PAGE) })
       if (t !== token) return
+      const page = { ...first, messages: [...first.messages] }
+      while (page.messages.length < want && page.nextCursor) {
+        const more = await api.listMessages({ ...query.value, limit: Math.min(want - page.messages.length, MAX_PAGE), cursor: page.nextCursor })
+        if (t !== token) return
+        page.messages.push(...more.messages)
+        page.nextCursor = more.nextCursor
+        page.hasMoreRemote = more.hasMoreRemote
+      }
       if (m0 !== mutations) {
         // An optimistic update happened while this was in flight: its data predates it.
         setTimeout(() => void softRefresh(), 150)
@@ -404,14 +420,19 @@ export const useMailStore = defineStore('mail', () => {
     selectAllQuery.value = false
   }
 
-  /** All ids in the current view (for "mark all as read" fallbacks). */
-  function targetIdsForQuery(): Promise<string[]> {
-    return api.resolveQueryIds({ ...query.value, cursor: '' }, 10000)
+  /** All ids in the current view (for "mark all as read" fallbacks), at most MAX_BULK. */
+  async function targetIdsForQuery(): Promise<string[]> {
+    const ids = await api.resolveQueryIds({ ...query.value, cursor: '' }, MAX_BULK)
+    if (ids.length >= MAX_BULK) {
+      // The backend acts on at most MAX_BULK messages at once: say so instead of silently stopping there.
+      toast.warning(`Only the newest ${MAX_BULK.toLocaleString()} messages are included`, { description: 'Repeat the action for the rest.' })
+    }
+    return ids
   }
 
   /** Ids targeted by a bulk action: explicit selection, or the whole query. */
   async function targetIds(): Promise<string[]> {
-    if (selectAllQuery.value) return api.resolveQueryIds({ ...query.value, cursor: '' }, 10000)
+    if (selectAllQuery.value) return targetIdsForQuery()
     return [...selection.value]
   }
 
@@ -472,20 +493,34 @@ export const useMailStore = defineStore('mail', () => {
     mutations++
   }
 
-  /** Folder id to send messages back to on undo. */
+  /** Folder id to send a message back to on undo, decided when the action runs. */
   function originFolder(m: MessageSummary): string | undefined {
     if (mailbox.value.folderId) return mailbox.value.folderId
-    return accounts.folderOf(m.accountId, mailbox.value.kind)?.id ?? accounts.folderOf(m.accountId, 'inbox')?.id
+    if (mailbox.value.kind !== 'all') {
+      const f = accounts.folderOf(m.accountId, mailbox.value.kind)
+      if (f) return f.id
+    }
+    // Search across all mail: the folder the message is in (not the catch-all archive).
+    const own = (m.folderIds ?? []).map((id) => accounts.folderMap.get(id)).filter((f) => !!f)
+    return (own.find((f) => !['archive', 'trash', 'spam', 'starred'].includes(f!.kind)) ?? own[0])?.id ?? accounts.folderOf(m.accountId, 'inbox')?.id
   }
 
-  async function moveBack(items: MessageSummary[]) {
-    const groups = new Map<string, string[]>()
-    for (const m of items) {
-      const f = originFolder(m)
-      if (!f) continue
-      groups.set(f, [...(groups.get(f) ?? []), m.conversationId || m.id])
+  /** Undo of archive/trash: put the messages back where they were, then refresh. */
+  function undoMove(items: MessageSummary[]) {
+    const key = mailboxKey(mailbox.value)
+    const origins = new Map(items.map((m) => [m.id, originFolder(m)] as const))
+    return async () => {
+      // Rows only come back if the same list is still shown.
+      if (mailboxKey(mailbox.value) === key) restoreLocal(items)
+      const groups = new Map<string, string[]>()
+      for (const m of items) {
+        const f = origins.get(m.id)
+        if (!f) continue
+        groups.set(f, [...(groups.get(f) ?? []), m.conversationId || m.id])
+      }
+      await Promise.all([...groups].map(([f, ids]) => api.moveToFolder(ids, f))).catch((e) => toast.error('Undo failed', { description: errorMessage(e) }))
+      void softRefresh()
     }
-    await Promise.all([...groups].map(([f, ids]) => api.moveToFolder(ids, f)))
   }
 
   function plural(n: number, word: string) {
@@ -496,20 +531,14 @@ export const useMailStore = defineStore('mail', () => {
     if (!ids.length) return
     const backendIds = actionIds(ids) // before the rows leave the list
     const items = snapshot(ids)
+    const undo = undoMove(items)
     const removes = mailbox.value.kind !== 'archive'
     if (removes) removeLocal(ids)
     try {
       await api.archive(backendIds)
       announce(`${plural(ids.length, 'conversation')} archived`)
       toast(`${ids.length === 1 ? 'Conversation' : plural(ids.length, 'conversation')} archived`, {
-        action: {
-          label: 'Undo',
-          onClick: async () => {
-            restoreLocal(items)
-            await moveBack(items).catch((e) => toast.error('Undo failed', { description: errorMessage(e) }))
-            void softRefresh()
-          },
-        },
+        action: { label: 'Undo', onClick: undo },
       })
     } catch (e) {
       if (removes) restoreLocal(items)
@@ -520,25 +549,22 @@ export const useMailStore = defineStore('mail', () => {
 
   async function trash(ids: string[]) {
     if (!ids.length) return
+    if (mailbox.value.kind === 'trash') {
+      toast('Already in Trash', { description: 'Messages in Trash are deleted for good when Trash is emptied.' })
+      return
+    }
     const backendIds = actionIds(ids) // before the rows leave the list
     const items = snapshot(ids)
-    const removes = mailbox.value.kind !== 'trash'
-    if (removes) removeLocal(ids)
+    const undo = undoMove(items)
+    removeLocal(ids)
     try {
       await api.trash(backendIds)
       announce(`${plural(ids.length, 'conversation')} moved to Trash`)
       toast(`${ids.length === 1 ? 'Moved' : plural(ids.length, 'message') + ' moved'} to Trash`, {
-        action: {
-          label: 'Undo',
-          onClick: async () => {
-            restoreLocal(items)
-            await moveBack(items).catch((e) => toast.error('Undo failed', { description: errorMessage(e) }))
-            void softRefresh()
-          },
-        },
+        action: { label: 'Undo', onClick: undo },
       })
     } catch (e) {
-      if (removes) restoreLocal(items)
+      restoreLocal(items)
       toast.error('Delete failed', { description: errorMessage(e) })
     }
     accounts.refreshCounts()

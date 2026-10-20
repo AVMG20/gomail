@@ -42,6 +42,8 @@ export interface Draft {
   remoteAccountId?: string
   /** Restored after the app closed during the undo-send delay (never sent). */
   interrupted?: boolean
+  /** Forward: the original's files, which the server attaches itself (shown read-only). */
+  forwarded?: { filename: string; size: number }[]
 }
 
 const DRAFTS_KEY = 'gomail.drafts.v1'
@@ -166,13 +168,15 @@ export const useComposeStore = defineStore('compose', () => {
       const sig = accounts.accountMap.get(d.accountId)?.signature ?? ''
       d.html = sig ? `<p></p>${signatureBlock(sig)}` : ''
     }
-    // Minimise other windows; keep at most four drafts in the dock (queued sends are never dropped).
+    // Minimise other windows; keep at most four drafts in the dock. Sends in progress are never
+    // dropped, nor drafts whose latest edits aren't on the server yet (the dock grows instead).
     drafts.value.forEach((x) => (x.minimized = true))
     const next = [...drafts.value, d]
-    const visible = next.filter((x) => !x.queued)
-    if (visible.length > 4) {
-      const drop = visible[0]
+    const others = next.filter((x) => x !== d && !x.queued && !x.sending)
+    const drop = others.length > 3 ? others.find((x) => !draftHasContent(x) || (x.remoteId && !remoteTimers.has(x.id) && !remoteInflight.has(x.id))) : undefined
+    if (drop) {
       drafts.value = next.filter((x) => x !== drop)
+      if (draftHasContent(drop)) toast('Draft moved to Drafts', { description: drop.subject || '(no subject)' })
     } else drafts.value = next
     return drafts.value[drafts.value.length - 1]
   }
@@ -214,19 +218,35 @@ export const useComposeStore = defineStore('compose', () => {
       : `<p>On ${escapeHtml(longDate(m.date))}, ${escapeHtml(displayName(m.from))} wrote:</p>`
     const sig = accounts.accountMap.get(m.accountId)?.signature ?? ''
     const html = `<p></p>${signatureBlock(sig)}<p></p>${header}<blockquote>${await quotedBody(m)}</blockquote>`
+    // Forwards carry the original's files (attached by the backend), minus images embedded by Content-ID.
+    const forwarded = mode === 'forward' ? (m.attachments ?? []).filter((a) => !(a.inline && a.contentId)).map((a) => ({ filename: a.filename, size: a.size })) : undefined
     return create({
       mode, accountId: m.accountId, to, cc, showCc: cc.length > 0,
-      subject: prefixSubject(mode === 'forward' ? 'Fwd' : 'Re', m.subject), html, replyToId: m.id,
+      subject: prefixSubject(mode === 'forward' ? 'Fwd' : 'Re', m.subject), html, replyToId: m.id, forwarded,
     })
   }
 
-  /** Continue editing a draft from the Drafts folder. */
-  function editDraft(m: Message) {
+  /** Continue editing a draft from the Drafts folder. Its files are loaded first: the next
+   *  autosave replaces the server draft, which would otherwise lose them. */
+  async function editDraft(m: Message) {
     const existing = drafts.value.find((d) => d.remoteId === m.id)
     if (existing) return focus(existing.id)
+    const files = (m.attachments ?? []).filter((a) => !(a.inline && a.contentId))
+    let attachments: DraftAttachment[] = []
+    try {
+      attachments = await Promise.all(files.map(async (a) => {
+        const data = await api.getAttachmentData(m.id, a.id)
+        return { id: uid('att'), filename: data.filename || a.filename, mimeType: data.mimeType || a.mimeType, size: data.size ?? a.size, dataBase64: data.dataBase64 }
+      }))
+    } catch (e) {
+      toast.error('Couldn’t open the draft', { description: `Its attachments couldn’t be loaded: ${errorMessage(e)}` })
+      return
+    }
+    if (drafts.value.some((d) => d.remoteId === m.id)) return // opened meanwhile
     create({
       mode: 'new', accountId: m.accountId, to: m.to, cc: m.cc, bcc: m.bcc, showCc: m.cc.length + m.bcc.length > 0,
       subject: m.subject === '(no subject)' ? '' : m.subject, html: m.bodyHtml || textToHtml(m.bodyText), remoteId: m.id, remoteAccountId: m.accountId,
+      attachments,
     })
   }
 
@@ -244,6 +264,11 @@ export const useComposeStore = defineStore('compose', () => {
     }
     if (!hasMethod('SaveDraft')) return false
     try {
+      // A first autosave still running would otherwise create a second server draft.
+      const t = remoteTimers.get(id)
+      if (t) clearTimeout(t)
+      remoteTimers.delete(id)
+      await remoteInflight.get(id)
       dropForeignRemote(d)
       const accountId = d.accountId
       d.remoteId = await api.saveDraft(toRequest(d), d.remoteId ?? '')
@@ -258,13 +283,15 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  /** Discard: also remove the server copy. */
-  function discard(id: string) {
+  /** Discard: also remove the server copy (once a save in flight has told us its id). */
+  async function discard(id: string) {
     const d = drafts.value.find((x) => x.id === id)
     const t = remoteTimers.get(id)
     if (t) clearTimeout(t)
-    if (d?.remoteId && hasMethod('DeleteDraft')) void api.deleteDraft(d.remoteId).catch(() => {})
+    remoteTimers.delete(id)
     close(id)
+    await remoteInflight.get(id)
+    if (d?.remoteId && hasMethod('DeleteDraft')) void api.deleteDraft(d.remoteId).catch(() => {})
   }
 
   function focus(id: string) {
