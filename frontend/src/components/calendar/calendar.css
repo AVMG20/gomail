@@ -90,6 +90,11 @@
 .gm-fc .fc-timegrid-event .gm-ev-time { font-size: 11px; }
 .gm-fc .gm-ev-loc { font-size: 11px; opacity: 0.9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gm-fc .gm-ev-line { display: flex; min-width: 0; gap: 4px; overflow: hidden; white-space: nowrap; }
+/* Long titles: up to two lines in timed events that have the room, wrap in the agenda. */
+.gm-fc .fc .fc-timegrid-event:not(.fc-timegrid-event-short) .gm-ev-title {
+  white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
+.gm-fc .fc .fc-list-event .gm-ev-title { white-space: normal; overflow-wrap: anywhere; }
 .gm-fc .fc .fc-timegrid-event-short .fc-event-main { flex-direction: row; gap: 6px; align-items: baseline; padding-top: 0; padding-bottom: 0; }
 .gm-fc .fc .fc-timegrid-event-short .gm-ev-title { flex: 0 1 auto; min-width: 0; }
 .gm-fc .fc .fc-timegrid-event-short .gm-ev-time { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

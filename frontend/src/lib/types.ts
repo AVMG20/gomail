@@ -53,7 +53,7 @@ export interface Calendar {
   canEdit: boolean
   visible: boolean
   /** Video meetings this calendar can create: "meet" (Google), "teams" (Microsoft) or "" (none). */
-  videoCallProvider?: 'meet' | 'teams' | '' | string
+  videoCallProvider?: 'meet' | 'teams' | 'skype' | '' | string
 }
 
 export type AttendeeResponse = 'accepted' | 'tentative' | 'declined' | 'needsAction' | string

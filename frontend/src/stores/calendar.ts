@@ -248,7 +248,6 @@ export const useCalendarStore = defineStore('calendar', () => {
   /** Save edits. Recurring + "series" refetches (every occurrence changes). */
   async function update(ev: CalendarEvent, input: EventInput, scope: RecurrenceScope, quiet = false, seriesTimesResolved = false): Promise<boolean> {
     rememberCalendar(input.calendarId)
-    const before = events.value
     if (scope === 'series' && ev.isRecurring && !seriesTimesResolved) {
       // The editor shows one occurrence; for "all events" apply its time change to the
       // series' own first date instead of moving the whole series to this occurrence.
@@ -272,7 +271,8 @@ export const useCalendarStore = defineStore('calendar', () => {
       if (!quiet) toast.success('Event saved')
       return true
     } catch (e) {
-      events.value = before
+      // Put back just this event (a range fetch may have replaced the list meanwhile).
+      if (events.value.some((x) => x.id === ev.id)) replaceLocal(ev.id, ev)
       if (!conflict(e)) toast.error('Couldn’t save the event', { description: errorMessage(e) })
       return false
     }
@@ -282,10 +282,10 @@ export const useCalendarStore = defineStore('calendar', () => {
    * Drag-move / resize with an Undo toast. For a whole series, pass the master's
    * new input and its input before the move (Undo writes that back).
    */
-  async function move(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, scope: RecurrenceScope, series?: { next: EventInput; before: EventInput }) {
+  async function move(ev: CalendarEvent, times: Pick<EventInput, 'start' | 'end' | 'allDay'>, scope: RecurrenceScope, series?: { next: EventInput; before: EventInput }): Promise<boolean> {
     const input = series ? series.next : { ...eventToInput(ev), ...times }
     const ok = await update(ev, input, scope, true, !!series)
-    if (!ok) return
+    if (!ok) return false
     toast('Event moved', {
       description: ev.title,
       action: {
@@ -293,10 +293,10 @@ export const useCalendarStore = defineStore('calendar', () => {
         onClick: () => void (series ? update(ev, series.before, 'series', true, true) : update({ ...ev, ...times }, eventToInput(ev), scope, true)),
       },
     })
+    return true
   }
 
   async function remove(ev: CalendarEvent, scope: RecurrenceScope, fromUndo = false) {
-    const before = events.value
     if (scope === 'series' && ev.isRecurring) events.value = events.value.filter((e) => (e.seriesId || e.id) !== (ev.seriesId || ev.id))
     else replaceLocal(ev.id, null)
     try {
@@ -309,20 +309,21 @@ export const useCalendarStore = defineStore('calendar', () => {
         action: undoable ? { label: 'Undo', onClick: () => void create(eventToInput(ev)) } : undefined,
       })
     } catch (e) {
-      events.value = before
+      if (scope === 'series' && ev.isRecurring) void fetchEvents()
+      else if (!events.value.some((x) => x.id === ev.id)) events.value = [...events.value, ev]
       if (!conflict(e)) toast.error('Couldn’t delete the event', { description: errorMessage(e) })
     }
   }
 
   async function respond(ev: CalendarEvent, response: AttendeeResponse) {
-    const before = events.value
     const series = ev.seriesId || ev.id
-    events.value = events.value.map((e) => ((e.seriesId || e.id) === series ? { ...e, myResponse: response } : e))
+    const setResponse = (r: AttendeeResponse) => (events.value = events.value.map((e) => ((e.seriesId || e.id) === series ? { ...e, myResponse: r } : e)))
+    setResponse(response)
     try {
       await api.respondToEvent(ev.id, response)
       toast.success(response === 'accepted' ? 'Accepted' : response === 'declined' ? 'Declined' : 'Marked as maybe', { description: ev.title })
     } catch (e) {
-      events.value = before
+      setResponse(ev.myResponse)
       toast.error('Couldn’t send your response', { description: errorMessage(e) })
     }
   }

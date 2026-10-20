@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // A small card anchored next to a rectangle (a calendar slot or event chip).
 // Placed to the right of the anchor, flipping left/up to stay inside the window.
-// Closes on Escape and outside pointer-down; focus moves into the card.
+// Closes on Escape and outside pointer-down; focus moves into the card, Tab
+// cycles inside it, and focus goes back where it was when the card closes.
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 export interface AnchorRect { left: number; top: number; width: number; height: number }
 
 const props = withDefaults(defineProps<{ anchor: AnchorRect; width?: number; label: string }>(), { width: 340 })
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; key: [KeyboardEvent] }>()
 const el = ref<HTMLElement | null>(null)
 const pos = ref({ left: 0, top: 0 })
 
@@ -38,8 +39,23 @@ function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     e.stopPropagation()
     emit('close')
+    return
   }
+  if (e.key === 'Tab' && el.value) {
+    const items = [...el.value.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), textarea, select, [tabindex]:not([tabindex="-1"])')]
+      .filter((n) => n.offsetParent !== null)
+    if (!items.length) return
+    const i = items.indexOf(document.activeElement as HTMLElement)
+    const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : i === -1 || i === items.length - 1 ? 0 : i + 1
+    e.preventDefault()
+    items[next].focus()
+    return
+  }
+  emit('key', e)
 }
+
+// Where focus was before the card opened (an event chip, a slot, a button).
+const opener = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
 
 onMounted(async () => {
   await nextTick()
@@ -53,6 +69,11 @@ onMounted(async () => {
   window.addEventListener('resize', place)
 })
 onBeforeUnmount(() => {
+  // Give focus back unless the user already moved it somewhere else.
+  const a = document.activeElement
+  if (opener?.isConnected && opener !== document.body && (!a || a === document.body || el.value?.contains(a))) {
+    queueMicrotask(() => opener.focus({ preventScroll: true }))
+  }
   document.removeEventListener('pointerdown', onDown, true)
   window.removeEventListener('resize', place)
 })

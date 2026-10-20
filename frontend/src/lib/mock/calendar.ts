@@ -110,6 +110,13 @@ export class MockCalendar {
       isOrganizer: false, myResponse: 'needsAction', attendees: [{ ...PEOPLE.priya, response: 'accepted' }, { ...me, response: 'needsAction' }],
       meetingUrl: 'https://teams.microsoft.com/l/meetup-join/leadership',
     })
+    // Overlap + very long title + organised in another time zone.
+    this.add({
+      calendarId: 'cal_work', title: 'Northwind kickoff with the New York office: scope, timelines, staffing and the long list of open questions',
+      start: wd(3, '15:00'), end: wd(3, '16:30'), timeZone: 'America/New_York', meetingUrl: 'https://zoom.us/j/5550199',
+      attendees: [{ ...PEOPLE.priya, response: 'accepted' }],
+    })
+    this.add({ calendarId: 'cal_work', title: 'Release freeze starts', start: wd(2, '17:00'), end: wd(2, '17:00'), reminders: [] })
     this.add({ calendarId: 'cal_work', title: 'Focus time', start: wd(5, '09:00'), end: wd(5, '12:00'), status: 'tentative', reminders: [] })
     this.add({ calendarId: 'cal_atlas', title: 'Team offsite (Zandvoort)', start: toYmd(addDays(monday, 9)), end: toYmd(addDays(monday, 12)), allDay: true, location: 'Zandvoort aan Zee', reminders: [] })
     this.add({ calendarId: 'cal_work', title: 'Sprint planning', start: wd(1, '13:30', 1), end: wd(1, '15:00', 1), attendees: [{ ...PEOPLE.priya, response: 'accepted' }, { ...PEOPLE.jonas, response: 'accepted' }] })
@@ -120,6 +127,7 @@ export class MockCalendar {
     this.add({ calendarId: 'cal_personal', title: 'Dentist', start: at(8, '09:30'), end: at(8, '10:15'), location: 'Tandartspraktijk De Pijp', reminders: [60] })
     this.add({ calendarId: 'cal_personal', title: 'Lisbon trip', start: ymd(17), end: ymd(21), allDay: true, location: 'Lisbon', reminders: [] })
     this.add({ calendarId: 'cal_personal', title: 'Flight KL1689 AMS → LIS', start: at(17, '07:10'), end: at(17, '09:40'), location: 'Schiphol', timeZone: 'Europe/Amsterdam' })
+    this.add({ calendarId: 'cal_personal', title: 'Night train to Vienna', start: at(11, '20:30'), end: at(12, '09:15'), location: 'Amsterdam Centraal', reminders: [120] })
     this.add({ calendarId: 'cal_personal', title: 'Gym', start: wd(1, '07:00'), end: wd(1, '08:00'), recurrence: 'FREQ=WEEKLY;BYDAY=MO,TH', reminders: [] })
     this.add({ calendarId: 'cal_family', title: 'Mom’s birthday', start: ymd(5), end: ymd(6), allDay: true, recurrence: 'FREQ=YEARLY', reminders: [1440] })
     this.add({ calendarId: 'cal_birthdays', title: 'Sam’s birthday', start: ymd(2), end: ymd(3), allDay: true, recurrence: 'FREQ=YEARLY', organizer: { name: 'Birthdays', email: '' }, isOrganizer: false, reminders: [] })

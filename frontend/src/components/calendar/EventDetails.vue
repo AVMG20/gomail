@@ -3,12 +3,13 @@
 // RSVP buttons, Edit / Delete / Email guests.
 import { computed } from 'vue'
 import {
-  CalendarIcon, CheckIcon, CircleHelpIcon, ClockIcon, MailIcon, MapPinIcon, PencilIcon, RepeatIcon, Trash2Icon, UsersIcon, VideoIcon, XIcon,
+  CalendarIcon, CheckIcon, GlobeIcon, CircleHelpIcon, ClockIcon, MailIcon, MapPinIcon, PencilIcon, RepeatIcon, Trash2Icon, UsersIcon, VideoIcon, XIcon,
 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import FloatingCard, { type AnchorRect } from '@/components/common/FloatingCard.vue'
 import { api } from '@/lib/api'
-import { describeRepeat, formatEventWhen, needsScopeChoice, parseRRule } from '@/lib/calendar'
+import { describeRepeat, formatEventWhen, formatEventWhenInZone, needsScopeChoice, parseRRule } from '@/lib/calendar'
+import { isEditableTarget } from '@/lib/platform'
 import { isSafeExternalUrl } from '@/lib/format'
 import type { AttendeeResponse, CalendarEvent } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
@@ -37,6 +38,7 @@ const guests = computed(() => {
   if (org?.email && !list.some((a) => a.email.toLowerCase() === org.email.toLowerCase())) list.unshift({ ...org, response: 'accepted' })
   return list
 })
+const otherZone = computed(() => formatEventWhenInZone(ev.value))
 const canRespond = computed(() => !ev.value.isOrganizer && !!ev.value.myResponse)
 
 const RESPONSES: { value: AttendeeResponse; label: string }[] = [
@@ -66,6 +68,18 @@ async function del() {
   await cal.remove(ev.value, scope)
 }
 
+// Card shortcuts: E edit, Delete/Backspace delete, Y/M/N respond (Esc closes, Tab cycles).
+function onKey(e: KeyboardEvent) {
+  if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)) return
+  const k = e.key.toLowerCase()
+  if (k === 'e' && canEdit.value) edit()
+  else if ((k === 'delete' || k === 'backspace') && canEdit.value) void del()
+  else if (canRespond.value && (k === 'y' || k === 'm' || k === 'n')) void cal.respond(ev.value, k === 'y' ? 'accepted' : k === 'm' ? 'tentative' : 'declined')
+  else return
+  e.preventDefault()
+  e.stopPropagation()
+}
+
 function emailGuests() {
   const to = guests.value.filter((g) => g.email && g.email.toLowerCase() !== myEmail.value).map((g) => ({ name: g.name, email: g.email }))
   compose.composeWith({ to, subject: ev.value.title, body: `${formatEventWhen(ev.value)}${ev.value.location ? `\n${ev.value.location}` : ''}\n\n` })
@@ -74,18 +88,19 @@ function emailGuests() {
 </script>
 
 <template>
-  <FloatingCard :anchor="anchor" :width="360" :label="ev.title || 'Event'" @close="emit('close')">
+  <FloatingCard :anchor="anchor" :width="360" :label="ev.title || 'Event'" @close="emit('close')" @key="onKey">
     <div class="p-4">
       <div class="flex items-start gap-3">
         <span class="mt-1.5 size-3 shrink-0 rounded-[4px]" :style="{ background: calendar?.color ?? 'var(--muted-foreground)' }" />
         <div class="min-w-0 flex-1">
-          <h3 :class="['text-base leading-snug font-semibold', ev.myResponse === 'declined' && 'text-muted-foreground line-through']">{{ ev.title || 'Untitled event' }}</h3>
+          <h3 :class="['text-base leading-snug font-semibold break-words [overflow-wrap:anywhere]', ev.myResponse === 'declined' && 'text-muted-foreground line-through']">{{ ev.title || 'Untitled event' }}</h3>
           <p class="text-muted-foreground mt-0.5 text-[13px]">{{ formatEventWhen(ev) }}</p>
+          <p v-if="otherZone" class="text-muted-foreground mt-0.5 flex items-center gap-1.5 text-xs" :title="ev.timeZone"><GlobeIcon class="size-3" /> {{ otherZone }}</p>
           <p v-if="repeat" class="text-muted-foreground mt-0.5 flex items-center gap-1.5 text-xs"><RepeatIcon class="size-3" /> {{ repeat }}</p>
         </div>
         <div class="-mt-1 -mr-1 flex shrink-0">
-          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Edit event" autofocus @click="edit"><PencilIcon /></Button>
-          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Delete event" class="hover:text-destructive" @click="del"><Trash2Icon /></Button>
+          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Edit event" aria-keyshortcuts="E" @click="edit"><PencilIcon /></Button>
+          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Delete event" aria-keyshortcuts="Delete" class="hover:text-destructive" @click="del"><Trash2Icon /></Button>
           <Button variant="ghost" size="icon-sm" aria-label="Close" @click="emit('close')"><XIcon /></Button>
         </div>
       </div>

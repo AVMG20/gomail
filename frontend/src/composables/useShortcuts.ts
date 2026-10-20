@@ -81,6 +81,8 @@ export function useShortcuts() {
     const inWidget = !!(e.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="menubar"], [data-no-shortcuts]')
     if (typing || inWidget || ui.anyDialogOpen()) return
 
+    // The calendar owns mod+B (its own sidebar) and has nothing to select-all.
+    if (ui.mainView === 'calendar' && mod && (key.toLowerCase() === 'b' || key.toLowerCase() === 'a')) return
     if (mod && key.toLowerCase() === 'b') {
       e.preventDefault()
       ui.folderSidebarOpen = !ui.folderSidebarOpen
@@ -102,9 +104,11 @@ export function useShortcuts() {
         return
       }
       const map: Record<string, string> = { i: 'inbox', s: 'starred', t: 'sent', d: 'drafts', a: 'archive' }
+      // The second key of a g… sequence is always consumed, so it never also
+      // triggers a calendar key (g d = Drafts, not Day view).
+      e.preventDefault()
       if (map[key]) {
         ui.mainView = 'mail'
-        e.preventDefault()
         mail.goToKind(map[key])
       }
       return

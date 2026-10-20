@@ -60,9 +60,9 @@ const description = ref(base.description ?? '')
 const calendarId = ref(base.calendarId && cal.writableCalendars.some((c) => c.id === base.calendarId) ? base.calendarId : cal.defaultCalendar)
 const addVideo = ref(false)
 const videoProvider = computed(() => cal.calendarMap.get(calendarId.value)?.videoCallProvider ?? '')
-const videoLabel = computed(() => (videoProvider.value === 'teams' ? 'Teams meeting' : videoProvider.value === 'meet' ? 'Google Meet' : 'video call'))
-/** The event already has a Meet/Teams link from the provider. */
-const providerLink = computed(() => /^https:\/\/(meet\.google\.com|teams\.microsoft\.com|teams\.live\.com)\//i.test(meetingUrl.value.trim()))
+const videoLabel = computed(() => ({ teams: 'Teams meeting', meet: 'Google Meet', skype: 'Skype call' })[videoProvider.value] ?? 'video call')
+/** The event already has a Meet/Teams/Skype link from the provider. */
+const providerLink = computed(() => /^https:\/\/(meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|join\.skype\.com)\//i.test(meetingUrl.value.trim()))
 const saving = ref(false)
 const error = ref('')
 

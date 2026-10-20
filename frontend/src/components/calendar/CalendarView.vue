@@ -146,14 +146,14 @@ async function onMoved(arg: EventDropArg | EventResizeDoneArg, kind: 'drop' | 'r
     }
     try {
       const master = await api.getEvent(ev.seriesId || ev.id)
-      await cal.move(ev, times, 'series', { next: seriesMoveInput(master, startDelta, endDelta), before: eventToInput(master) })
+      if (!(await cal.move(ev, times, 'series', { next: seriesMoveInput(master, startDelta, endDelta), before: eventToInput(master) }))) arg.revert()
     } catch (e) {
       arg.revert()
       toast.error('Couldn’t move the series', { description: errorMessage(e) })
     }
     return
   }
-  await cal.move(ev, times, 'this')
+  if (!(await cal.move(ev, times, 'this'))) arg.revert()
 }
 
 // ------------------------------------------------------------ rendering hooks
@@ -162,6 +162,9 @@ function onMount(arg: EventMountArg) {
   const ev = arg.event.extendedProps.ev as CalendarEvent | undefined
   if (!ev) return
   arg.el.style.setProperty('--ev', arg.event.extendedProps.color as string)
+  arg.el.dataset.evId = ev.id
+  arg.el.title = arg.event.title
+  arg.el.dataset.evStart = String(arg.event.start?.getTime() ?? 0)
   // Keyboard access: Tab to an event, Enter/Space opens its details.
   if (!arg.el.hasAttribute('tabindex')) arg.el.setAttribute('tabindex', '0')
   arg.el.setAttribute('role', 'button')
@@ -207,6 +210,10 @@ function onDatesSet(arg: DatesSetArg) {
 }
 
 const hour12 = localeUses12h(locale)
+// Working hours by default; follow the clock during the day (computed once, so
+// option updates don't scroll the grid back).
+const nowHour = new Date().getHours()
+const scrollTime = `${String(nowHour >= 9 && nowHour <= 19 ? nowHour - 1 : 7).padStart(2, '0')}:30:00`
 const compact = computed(() => settings.settings?.density === 'compact')
 
 const options = computed<CalendarOptions>(() => ({
@@ -226,10 +233,12 @@ const options = computed<CalendarOptions>(() => ({
   editable: true,
   eventResizableFromStart: false,
   dayMaxEvents: true,
+  // Overlapping events side by side instead of stacked on top of each other.
+  slotEventOverlap: false,
+  eventMinHeight: 18,
   slotDuration: '00:30:00',
   snapDuration: '00:15:00',
-  // Working hours by default; follow the clock during the day.
-  scrollTime: `${String(new Date().getHours() >= 9 && new Date().getHours() <= 19 ? new Date().getHours() - 1 : 7).padStart(2, '0')}:30:00`,
+  scrollTime,
   scrollTimeReset: false,
   slotLabelFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12, hour12 },
   eventTimeFormat: { hour: 'numeric', minute: '2-digit', omitZeroMinute: hour12, hour12 },
@@ -284,19 +293,66 @@ function openNew() {
   openEditor({ draft: { start: toRfc3339(start), end: toRfc3339(end), allDay: false } })
 }
 
+// ------------------------------------------------------------ keyboard
+
+/** Rendered event chips in chronological order (one per event; multi-day segments collapse). */
+function eventEls(): HTMLElement[] {
+  const seen = new Set<string>()
+  return [...document.querySelectorAll<HTMLElement>('.gm-fc .fc-event[data-ev-id]')]
+    .filter((el) => el.offsetParent !== null && !el.classList.contains('fc-event-mirror'))
+    .map((el, i) => ({ el, i, t: Number(el.dataset.evStart) }))
+    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .filter(({ el }) => !seen.has(el.dataset.evId!) && !!seen.add(el.dataset.evId!))
+    .map(({ el }) => el)
+}
+
+/** ↑/↓ (or j/k) walk the events; from nowhere, start at the next upcoming one. */
+function focusEvent(dir: 1 | -1) {
+  const els = eventEls()
+  if (!els.length) return
+  const cur = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>('[data-ev-id]')
+  let i = cur ? els.findIndex((el) => el.dataset.evId === cur.dataset.evId) : -1
+  if (i === -1) {
+    const now = Date.now()
+    i = els.findIndex((el) => Number(el.dataset.evStart) >= now)
+    if (i === -1) i = dir > 0 ? 0 : els.length - 1
+  } else i = Math.min(els.length - 1, Math.max(0, i + dir))
+  els[i].focus()
+  els[i].scrollIntoView({ block: 'nearest' })
+}
+
 function onKey(e: KeyboardEvent) {
-  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
+  if (e.defaultPrevented || e.altKey) return
   if (isEditableTarget(e.target) || ui.anyDialogOpen() || editorRequest.value) return
   if ((e.target as Element | null)?.closest?.('[role="dialog"], [role="menu"], [role="listbox"]')) return
   const k = e.key
+  if (e.metaKey || e.ctrlKey) {
+    if (k.toLowerCase() === 'b') {
+      sidebarOpen.value = !sidebarOpen.value
+      e.preventDefault()
+    }
+    return
+  }
   const view = VIEWS.find((v) => v.key === k)
   if (view) setView(view.id)
   else if (k === 't') go(0)
   else if (k === 'ArrowLeft') go(-1)
   else if (k === 'ArrowRight') go(1)
+  else if (k === 'ArrowDown' || k === 'j') focusEvent(1)
+  else if (k === 'ArrowUp' || k === 'k') focusEvent(-1)
   else if (k === 'n') openNew()
   else return
   e.preventDefault()
+}
+
+function closeDetails() {
+  const id = details.value?.event.id
+  details.value = null
+  // The chip that opened the card may have been re-rendered meanwhile; refocus it by id.
+  setTimeout(() => {
+    if (!id || (document.activeElement && document.activeElement !== document.body)) return
+    document.querySelector<HTMLElement>(`.gm-fc [data-ev-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true })
+  }, 0)
 }
 
 watch(() => ui.newEventPending, (v) => {
@@ -397,7 +453,7 @@ const consentMissing = computed(() => accounts.accounts.filter((a) => a.calendar
     </section>
 
     <QuickCreate v-if="quick" :key="quick.start.getTime()" :anchor="quick.anchor" :start="quick.start" :end="quick.end" :all-day="quick.allDay" @close="closeQuick" />
-    <EventDetails v-if="details" :key="details.event.id" :anchor="details.anchor" :event="details.event" @close="details = null" />
+    <EventDetails v-if="details" :key="details.event.id" :anchor="details.anchor" :event="details.event" @close="closeDetails" />
     <EventEditor v-if="editorRequest" :key="editorRequest.event?.id ?? 'new'" />
     <!-- While the editor (a modal) is open it hosts the prompts itself, nested, so they stay clickable. -->
     <ScopePrompt v-if="!editorRequest" />

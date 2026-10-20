@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  addDays, buildRRule, defaultCalendarId, editableCalendars, effectiveWeekStart, expandOccurrences, fromYmd, isEventShown, localeUses12h, localeWeekStart,
+  addDays, buildRRule, defaultCalendarId, formatEventWhen, formatEventWhenInZone, editableCalendars, effectiveWeekStart, expandOccurrences, fromYmd, isEventShown, localeUses12h, localeWeekStart,
   needsScopeChoice, overlaps, parseRRule, scopeTargetId, seriesMoveInput, shiftTimes, stepDate, toRfc3339, toYmd, utcToZoned, viewRange,
   zonedToUtc, zoneOffsetMinutes,
 } from '@/lib/calendar'
@@ -240,5 +240,36 @@ describe('calendar store: series edits from an occurrence', async () => {
     expect(input.title).toBe('Renamed')
     expect(new Date(input.start).toISOString()).toBe('2026-09-01T10:00:00.000Z')
     expect(new Date(input.end).toISOString()).toBe('2026-09-01T10:30:00.000Z')
+  })
+
+  it('a failed move puts back only that event and offers no Undo', async () => {
+    setActivePinia(createPinia())
+    const cal = useCalendarStore()
+    const a = ev({ id: 'a' })
+    const b = ev({ id: 'b', title: 'Other' })
+    cal.events = [a, b]
+    vi.spyOn(api, 'updateEvent').mockImplementation(async () => {
+      // A range fetch lands while the write is in flight.
+      cal.events = [cal.events[0], { ...b, title: 'Other (fresh)' }]
+      throw new Error('offline')
+    })
+    const ok = await cal.move(a, { start: '2026-10-20T11:00:00+02:00', end: '2026-10-20T11:15:00+02:00', allDay: false }, 'this')
+    expect(ok).toBe(false)
+    expect(cal.events.find((e) => e.id === 'a')!.start).toBe(a.start)
+    expect(cal.events.find((e) => e.id === 'b')!.title).toBe('Other (fresh)')
+  })
+})
+
+describe('event time display', () => {
+  it('shows a zero-length event as a single time', () => {
+    const t = formatEventWhen(ev({ start: '2026-10-20T17:00:00+02:00', end: '2026-10-20T17:00:00+02:00' }), 'en-GB')
+    expect(t).not.toContain('–')
+  })
+  it('adds the organiser’s clock for events in another zone', () => {
+    const e = ev({ start: '2026-10-20T15:00:00+02:00', end: '2026-10-20T16:30:00+02:00', timeZone: 'America/New_York' })
+    expect(formatEventWhenInZone(e, 'en-GB', 'Europe/Amsterdam')).toBe('Tue 20 Oct · 9:00 – 10:30 New York time')
+    expect(formatEventWhenInZone({ ...e, timeZone: 'Europe/Amsterdam' }, 'en-GB', 'Europe/Amsterdam')).toBe('')
+    expect(formatEventWhenInZone({ ...e, timeZone: 'Europe/Paris' }, 'en-GB', 'Europe/Amsterdam')).toBe('')
+    expect(formatEventWhenInZone({ ...e, allDay: true }, 'en-GB', 'Europe/Amsterdam')).toBe('')
   })
 })
