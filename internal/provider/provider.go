@@ -111,6 +111,28 @@ const MaxFolderOp = 20000
 // ErrUnsupported is returned for operations a provider can't do.
 var ErrUnsupported = errors.New("not supported by this account")
 
+// ErrDraftGone is returned when a draft doesn't exist (any more).
+var ErrDraftGone = errors.New("that draft no longer exists")
+
+// PartialError reports an action that failed for some messages only; the
+// others were applied on the server.
+type PartialError struct {
+	Failed []string // remote ids the action was not applied to
+	Err    error
+}
+
+func (e *PartialError) Error() string { return e.Err.Error() }
+func (e *PartialError) Unwrap() error { return e.Err }
+
+// Partial returns err as a PartialError listing failed, unless every id
+// failed (then err is returned unchanged) or err is nil.
+func Partial(err error, failed []string, total int) error {
+	if err == nil || len(failed) == 0 || len(failed) >= total {
+		return err
+	}
+	return &PartialError{Failed: failed, Err: err}
+}
+
 // Parallel runs fn over items with at most n concurrent calls and returns
 // the first error (after all started calls finish).
 func Parallel[T any](ctx context.Context, n int, items []T, fn func(context.Context, T) error) error {

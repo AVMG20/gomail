@@ -45,7 +45,11 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("203.0.113.0/24"),  // documentation
 	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, broadcast
 	netip.MustParsePrefix("64:ff9b::/96"),    // NAT64 (could map to private v4)
+	netip.MustParsePrefix("64:ff9b:1::/48"),  // local-use NAT64
 	netip.MustParsePrefix("2001:db8::/32"),   // documentation
+	netip.MustParsePrefix("2002::/16"),       // 6to4 (embeds any IPv4, private ones too)
+	netip.MustParsePrefix("fec0::/10"),       // deprecated site-local
+	netip.MustParsePrefix("::/96"),           // deprecated IPv4-compatible
 }
 
 // Resolver is used to check hosts reached through a proxy (tests replace it).

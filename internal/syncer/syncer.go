@@ -81,6 +81,7 @@ type Engine struct {
 	wg       sync.WaitGroup
 	wake     chan struct{}
 	backfill backfillState
+	local    localChanges
 }
 
 // New creates an engine; call Start to begin periodic syncing.
@@ -485,10 +486,12 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 	if err := e.cfg.Store.ReplaceFolders(acct.ID, folders); err != nil {
 		return nil, false, err
 	}
+	started := time.Now()
 	res, err := p.Sync(ctx, provider.SyncRequest{State: state, Folders: folders, Limits: e.cfg.Limits, Progress: report})
 	if err != nil {
 		return nil, false, err
 	}
+	e.keepLocalChanges(acct.ID, folders, res.Upserts, started)
 	if report != nil {
 		report("saving", 0, len(res.Upserts))
 	}

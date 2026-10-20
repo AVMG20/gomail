@@ -368,12 +368,14 @@ func (c *Client) initial(ctx context.Context, req provider.SyncRequest) (mail.Sy
 	}
 	seen := map[string]bool{}
 	var ids []string
+	listed := make([][]string, len(specs))
 	for i, s := range specs {
 		req.Report("listing", i, len(specs))
 		list, err := c.listIDs(ctx, s.label, s.q, max(1, s.n))
 		if err != nil {
 			return mail.SyncResult{}, err
 		}
+		listed[i] = list
 		for _, id := range list {
 			if !seen[id] {
 				seen[id] = true
@@ -385,7 +387,51 @@ func (c *Client) initial(ctx context.Context, req provider.SyncRequest) (mail.Sy
 	if err != nil {
 		return mail.SyncResult{}, err
 	}
-	return mail.SyncResult{Upserts: msgs, State: map[string]string{"historyId": p.HistoryID}, Initial: true}, nil
+	// Each listing is newest first, so a folder is complete from the
+	// oldest listed message on (or entirely when the listing wasn't cut).
+	dates := make(map[string]time.Time, len(msgs))
+	for _, m := range msgs {
+		dates[m.RemoteID] = m.Date
+	}
+	since := func(i int) (time.Time, bool) {
+		if len(listed[i]) < max(1, specs[i].n) {
+			return time.Time{}, true
+		}
+		var oldest time.Time
+		for _, id := range listed[i] {
+			if d, ok := dates[id]; ok && (oldest.IsZero() || d.Before(oldest)) {
+				oldest = d
+			}
+		}
+		return oldest, !oldest.IsZero()
+	}
+	complete := map[string]time.Time{}
+	var inbox, archived time.Time
+	inboxOK, archivedOK := false, false
+	for i, s := range specs {
+		t, ok := since(i)
+		switch {
+		case !ok:
+		case s.label == "STARRED":
+		case s.label == "":
+			archived, archivedOK = t, true
+		default:
+			complete[s.label] = t
+			if s.label == "INBOX" {
+				inbox, inboxOK = t, true
+			}
+		}
+	}
+	if inboxOK && archivedOK {
+		// All Mail is Inbox plus everything archived: complete from the
+		// later of the two cut-off dates.
+		if inbox.After(archived) {
+			complete[AllMail] = inbox
+		} else {
+			complete[AllMail] = archived
+		}
+	}
+	return mail.SyncResult{Upserts: msgs, State: map[string]string{"historyId": p.HistoryID}, Initial: true, Complete: complete}, nil
 }
 
 type gHistory struct {
@@ -493,6 +539,9 @@ func (c *Client) attachmentData(ctx context.Context, remoteID, attachmentID stri
 
 const maxInlineBytes = 15 << 20
 
+// maxExternalBody caps text parts Gmail serves separately (like attachments).
+const maxExternalBody = 20 << 20
+
 func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) {
 	g, err := c.full(ctx, remoteID)
 	if err != nil {
@@ -535,6 +584,10 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 		isBody := p.Filename == "" && !strings.HasPrefix(disp, "attachment") && (p.MimeType == "text/html" || p.MimeType == "text/plain")
 		if isBody {
 			data, _ := decodeB64URL(p.Body.Data)
+			if p.Body.Data == "" && p.Body.AttachmentID != "" && p.Body.Size < maxExternalBody {
+				// Large bodies are served like attachments.
+				data, _ = c.attachmentData(ctx, remoteID, p.Body.AttachmentID)
+			}
 			text := mailmime.DecodeCharset(data, charsetOf(p.header("Content-Type")))
 			if p.MimeType == "text/html" {
 				if b.HTML != "" {
@@ -613,7 +666,7 @@ func (c *Client) Attachment(ctx context.Context, remoteID, partID string) ([]byt
 // ---- actions ----
 
 func (c *Client) batchModify(ctx context.Context, ids []string, add, remove []string) error {
-	for _, chunk := range provider.Chunk(ids, 1000) {
+	for i, chunk := range provider.Chunk(ids, 1000) {
 		body := map[string]any{"ids": chunk}
 		if len(add) > 0 {
 			body["addLabelIds"] = add
@@ -622,7 +675,8 @@ func (c *Client) batchModify(ctx context.Context, ids []string, add, remove []st
 			body["removeLabelIds"] = remove
 		}
 		if err := c.api.JSONRetry(ctx, http.MethodPost, "messages/batchModify", body, nil); err != nil {
-			return err
+			// Earlier chunks were applied.
+			return provider.Partial(err, ids[i*1000:], len(ids))
 		}
 	}
 	return nil
@@ -645,9 +699,24 @@ func (c *Client) SetStarred(ctx context.Context, ids []string, starred bool) err
 func (c *Client) Move(ctx context.Context, ids []string, target mail.Folder) error {
 	switch target.Kind {
 	case models.FolderTrash:
-		return provider.Parallel(ctx, workers, ids, func(ctx context.Context, id string) error {
-			return c.api.JSONRetry(ctx, http.MethodPost, "messages/"+url.PathEscape(id)+"/trash", nil, nil)
+		var mu sync.Mutex
+		done := map[string]bool{}
+		err := provider.Parallel(ctx, workers, ids, func(ctx context.Context, id string) error {
+			if err := c.api.JSONRetry(ctx, http.MethodPost, "messages/"+url.PathEscape(id)+"/trash", nil, nil); err != nil {
+				return err
+			}
+			mu.Lock()
+			done[id] = true
+			mu.Unlock()
+			return nil
 		})
+		var failed []string
+		for _, id := range ids {
+			if !done[id] {
+				failed = append(failed, id)
+			}
+		}
+		return provider.Partial(err, failed, len(ids))
 	case models.FolderSpam:
 		return c.batchModify(ctx, ids, []string{"SPAM"}, []string{"INBOX", "TRASH"})
 	case models.FolderInbox:
@@ -746,7 +815,10 @@ func (c *Client) forwardAttachments(ctx context.Context, remoteID string) ([]mai
 	}
 	var atts []mailmime.Attachment
 	for _, a := range body.Attachments {
-		if a.Inline {
+		// Only parts the HTML embeds by Content-ID stay behind; files sent
+		// with "Content-Disposition: inline" (Apple Mail) are real
+		// attachments and must be forwarded.
+		if a.Inline && a.ContentID != "" {
 			continue
 		}
 		data, err := c.Attachment(ctx, remoteID, a.ID)
@@ -778,7 +850,13 @@ func (c *Client) build(ctx context.Context, out mail.Outgoing) ([]byte, string, 
 		switch out.Mode {
 		case "reply", "replyAll":
 			m.InReplyTo = o.MessageID
-			m.References = mailmime.ReferencesFor(o.References, o.MessageID)
+			refs := o.References
+			if refs == "" {
+				// RFC 5322 3.6.4: without References, the parent's
+				// In-Reply-To names its own parent.
+				refs = mailmime.MessageIDs(o.InReplyTo)
+			}
+			m.References = mailmime.ReferencesFor(refs, o.MessageID)
 			threadID = o.ThreadID
 		case "forward":
 			atts, err := c.forwardAttachments(ctx, o.RemoteID)
@@ -929,7 +1007,7 @@ func (c *Client) DraftID(ctx context.Context, messageRemoteID string) (string, e
 		}
 		page = resp.NextPageToken
 	}
-	return "", errors.New("that draft no longer exists")
+	return "", provider.ErrDraftGone
 }
 
 // ---- older mail & search ----
@@ -937,7 +1015,8 @@ func (c *Client) DraftID(ctx context.Context, messageRemoteID string) (string, e
 func (c *Client) ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error) {
 	label, q := folder.RemoteID, ""
 	if folder.RemoteID == AllMail {
-		label, q = "", "-in:inbox -in:spam -in:trash"
+		// Inbox mail is part of All Mail (and of its cursor).
+		label, q = "", "-in:spam -in:trash"
 	}
 	if !before.IsZero() {
 		q = strings.TrimSpace(q + " before:" + strconv.FormatInt(before.Unix(), 10))

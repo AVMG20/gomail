@@ -58,6 +58,102 @@ func (e *Engine) changed(accounts ...string) {
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{})
 }
 
+// localChanges tracks optimistic local changes whose push to the provider
+// is in flight or finished recently, so a sync whose snapshot predates the
+// push doesn't undo them.
+type localChanges struct {
+	mu       sync.Mutex
+	inflight map[string]int       // local message id -> pushes in flight
+	settled  map[string]time.Time // local message id -> when the last push finished
+}
+
+func (l *localChanges) begin(ids []string) func() {
+	l.mu.Lock()
+	if l.inflight == nil {
+		l.inflight, l.settled = map[string]int{}, map[string]time.Time{}
+	}
+	for _, id := range ids {
+		l.inflight[id]++
+	}
+	l.mu.Unlock()
+	return func() {
+		now := time.Now()
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		for _, id := range ids {
+			if l.inflight[id]--; l.inflight[id] <= 0 {
+				delete(l.inflight, id)
+			}
+			l.settled[id] = now
+		}
+	}
+}
+
+// fresh reports whether id changed locally after since (or still is).
+func (l *localChanges) fresh(id string, since time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inflight[id] > 0 || !l.settled[id].Before(since)
+}
+
+func (l *localChanges) prune(before time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id, t := range l.settled {
+		if t.Before(before) {
+			delete(l.settled, id)
+		}
+	}
+}
+
+// keepLocalChanges gives synced messages that changed locally after the
+// sync started (or whose push is still running) their local read, star and
+// folder state: the provider's snapshot may predate the change.
+func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups []mail.Message, started time.Time) {
+	e.local.prune(started.Add(-10 * time.Minute))
+	var ids []string
+	idx := map[string]int{}
+	for i, m := range ups {
+		id := store.MessageID(accountID, m.RemoteID)
+		if e.local.fresh(id, started) {
+			ids = append(ids, id)
+			idx[id] = i
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	sums, err := e.cfg.Store.Summaries(ids)
+	if err != nil {
+		return
+	}
+	local, err := e.cfg.Store.Folders(accountID)
+	if err != nil {
+		return
+	}
+	remoteOf := map[string]string{}
+	for _, f := range local {
+		remoteOf[f.ID] = f.RemoteID
+	}
+	known := map[string]bool{}
+	for _, f := range folders {
+		known[f.RemoteID] = true
+	}
+	for _, sm := range sums {
+		m := &ups[idx[sm.ID]]
+		m.Unread, m.Starred = sm.Unread, sm.Starred
+		var fr []string
+		for _, fid := range sm.FolderIDs {
+			if r, ok := remoteOf[fid]; ok && known[r] {
+				fr = append(fr, r)
+			}
+		}
+		if len(fr) > 0 {
+			m.FolderRemoteIDs = fr
+		}
+	}
+}
+
 // perAccount runs push for each account concurrently; failed accounts are
 // reverted with revert. It returns a combined human-readable error.
 func (e *Engine) perAccount(groups map[string][]models.MessageSummary, what string,
@@ -68,13 +164,15 @@ func (e *Engine) perAccount(groups map[string][]models.MessageSummary, what stri
 	var wg sync.WaitGroup
 	for acct, ms := range groups {
 		wg.Add(1)
+		done := e.local.begin(localIDs(ms))
 		go func(acct string, ms []models.MessageSummary) {
 			defer wg.Done()
+			defer done()
 			ctx, cancel := context.WithTimeout(e.ctx, 2*time.Minute)
 			defer cancel()
 			if err := safe.Call(what, func() error { return push(ctx, acct, ms) }); err != nil {
 				slog.Warn("action failed", "action", what, "account", acct, "err", err)
-				revert(acct, ms)
+				revert(acct, failedOnly(ms, err))
 				a, _ := e.cfg.Store.Account(acct)
 				mu.Lock()
 				errs = append(errs, fmt.Sprintf("Couldn't %s on %s: %s", what, a.Email, HumanError(a, err)))
@@ -89,6 +187,26 @@ func (e *Engine) perAccount(groups map[string][]models.MessageSummary, what stri
 		return errors.New(joinErrs(errs))
 	}
 	return nil
+}
+
+// failedOnly narrows ms to the messages a provider.PartialError names; the
+// others were applied on the server and keep their optimistic state.
+func failedOnly(ms []models.MessageSummary, err error) []models.MessageSummary {
+	var pe *provider.PartialError
+	if !errors.As(err, &pe) {
+		return ms
+	}
+	set := map[string]bool{}
+	for _, id := range pe.Failed {
+		set[id] = true
+	}
+	var out []models.MessageSummary
+	for _, m := range ms {
+		if set[m.RemoteID] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func joinErrs(errs []string) string {

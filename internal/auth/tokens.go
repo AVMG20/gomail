@@ -50,6 +50,11 @@ type TokenSource struct {
 	tok   *oauth2.Token
 	save  func(*oauth2.Token) error
 	label string // account email, for error messages
+	// unsaved is set while the current token couldn't be persisted; the
+	// save is retried on later calls (a rotated refresh token must not be
+	// lost when the app quits).
+	unsaved   bool
+	lastRetry time.Time
 }
 
 // NewTokenSource wraps tok. save is called whenever the token changes.
@@ -62,6 +67,10 @@ func (t *TokenSource) AccessToken(ctx context.Context) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.tok.Valid() && time.Until(t.tok.Expiry) > 30*time.Second {
+		if t.unsaved && t.save != nil && time.Since(t.lastRetry) > 30*time.Second {
+			t.lastRetry = time.Now()
+			t.unsaved = t.save(t.tok) != nil
+		}
 		return t.tok.AccessToken, nil
 	}
 	if t.tok.RefreshToken == "" {
@@ -86,9 +95,11 @@ func (t *TokenSource) AccessToken(ctx context.Context) (string, error) {
 	t.tok = nt
 	if t.save != nil {
 		if err := t.save(nt); err != nil {
+			t.unsaved, t.lastRetry = true, time.Now()
 			return "", fmt.Errorf("could not store the refreshed sign-in: %w", err)
 		}
 	}
+	t.unsaved = false
 	return nt.AccessToken, nil
 }
 

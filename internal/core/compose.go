@@ -14,6 +14,7 @@ import (
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/mailmime"
 	"github.com/AVMG20/gomail/internal/models"
+	"github.com/AVMG20/gomail/internal/provider"
 	"github.com/AVMG20/gomail/internal/safe"
 	"github.com/AVMG20/gomail/internal/store"
 	"github.com/AVMG20/gomail/internal/syncer"
@@ -99,7 +100,7 @@ func (s *Service) buildOutgoing(req models.ComposeRequest, draft bool) (models.A
 			return acct, out, errors.New("replies must be sent from the account that received the message")
 		}
 		out.Original = &mail.Message{RemoteID: orig.RemoteID, ThreadID: orig.ThreadID, MessageID: orig.MessageID,
-			References: orig.References, Subject: orig.Subject}
+			InReplyTo: orig.InReplyTo, References: orig.References, Subject: orig.Subject}
 		if out.Subject == "" {
 			if out.Mode == "forward" {
 				out.Subject = mailmime.ForwardSubject(orig.Subject)
@@ -137,10 +138,16 @@ func (s *Service) Send(req models.ComposeRequest) error {
 	defer cancel()
 	if req.DraftID != "" {
 		h, err := s.resolveDraft(ctx, req.DraftID)
-		s.drafts.cancel(req.DraftID)
+		if err != nil && !draftMissing(err) {
+			// Sending as a new message would leave the draft behind.
+			return fmt.Errorf("sending failed: %s", syncer.HumanError(acct, err))
+		}
+		if err == nil {
+			s.drafts.cancel(h.String()) // also waits for an autosave in flight
+		}
 		switch {
 		case err != nil:
-			slog.Warn("draft lookup failed, sending as a new message", "err", err)
+			slog.Warn("draft no longer exists, sending as a new message", "err", err)
 		case h.accountID != acct.ID:
 			// The From account changed: discard the old draft.
 			if op, err := s.provider(h.accountID); err == nil {
@@ -179,18 +186,26 @@ func parseDraftHandle(id string) (draftHandle, bool) {
 	return draftHandle{acct, remote}, ok && acct != "" && remote != ""
 }
 
+var errNotDraft = errors.New("that message is not a draft")
+
+// draftMissing reports whether a resolveDraft error means there is no such
+// draft (as opposed to a transient failure looking it up).
+func draftMissing(err error) bool {
+	return errors.Is(err, provider.ErrDraftGone) || errors.Is(err, errNotDraft)
+}
+
 // resolveDraft accepts a draft handle or the local id of a message in a
 // Drafts folder.
 func (s *Service) resolveDraft(ctx context.Context, id string) (draftHandle, error) {
 	if h, ok := parseDraftHandle(id); ok {
-		return h, nil
+		return s.drafts.resolve(h), nil
 	}
 	m, _, err := s.store.Message(strings.TrimPrefix(id, store.ConversationPrefix))
 	if err != nil {
-		return draftHandle{}, errors.New("that draft no longer exists")
+		return draftHandle{}, provider.ErrDraftGone
 	}
 	if !m.IsDraft {
-		return draftHandle{}, errors.New("that message is not a draft")
+		return draftHandle{}, errNotDraft
 	}
 	p, err := s.provider(m.AccountID)
 	if err != nil {
@@ -207,23 +222,77 @@ func (s *Service) resolveDraft(ctx context.Context, id string) (draftHandle, err
 type draftSaver struct {
 	mu      sync.Mutex
 	entries map[string]*draftEntry // by handle string
+	// moved maps the handle of a draft that was recreated (deleted
+	// elsewhere) to its new handle, for saves still using the old one.
+	moved map[string]string
 }
 
 type draftEntry struct {
 	last    time.Time
 	pending *mail.Outgoing
 	timer   *time.Timer
+	// flushing is closed when the coalesced save in flight finishes.
+	flushing chan struct{}
 }
 
+// flushWait bounds how long send/discard wait for an autosave in flight.
+var flushWait = 30 * time.Second
+
+// cancel drops pending autosaves of a draft and waits for one in flight,
+// so it can't land (and recreate the draft) after a send or discard.
 func (d *draftSaver) cancel(handle string) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if e, ok := d.entries[handle]; ok {
+	e, ok := d.entries[handle]
+	var flushing chan struct{}
+	if ok {
 		if e.timer != nil {
 			e.timer.Stop()
 		}
+		flushing = e.flushing
 		delete(d.entries, handle)
 	}
+	d.mu.Unlock()
+	waitFlush(flushing)
+}
+
+func waitFlush(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	case <-time.After(flushWait):
+	}
+}
+
+// resolve follows recreated drafts to their current handle.
+func (d *draftSaver) resolve(h draftHandle) draftHandle {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := 0; i < 8; i++ {
+		next, ok := d.moved[h.String()]
+		if !ok {
+			break
+		}
+		h, _ = parseDraftHandle(next)
+	}
+	return h
+}
+
+// recreated records that the draft old now lives at rid.
+func (d *draftSaver) recreated(old draftHandle, rid string) draftHandle {
+	h := draftHandle{old.accountID, rid}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.moved == nil {
+		d.moved = map[string]string{}
+	}
+	d.moved[old.String()] = h.String()
+	if e, ok := d.entries[old.String()]; ok {
+		delete(d.entries, old.String())
+		d.entries[h.String()] = e
+	}
+	return h
 }
 
 // SaveDraft creates or updates a draft and returns its handle. Saves of the
@@ -239,6 +308,10 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 	var h draftHandle
 	if draftID != "" {
 		if h, err = s.resolveDraft(ctx, draftID); err != nil {
+			if !draftMissing(err) {
+				// Creating a new draft would leave the original behind.
+				return "", fmt.Errorf("saving the draft failed: %s", syncer.HumanError(acct, err))
+			}
 			h = draftHandle{}
 		}
 	}
@@ -285,14 +358,15 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 		return key, nil
 	}
 	e.last, e.pending = time.Now(), nil
+	flushing := e.flushing
 	s.drafts.mu.Unlock()
+	waitFlush(flushing) // an older coalesced save must not land after this one
 	rid, err := p.SaveDraft(ctx, out, h.remoteID)
 	if err != nil {
 		return "", fmt.Errorf("saving the draft failed: %s", syncer.HumanError(acct, err))
 	}
-	if rid != h.remoteID { // recreated (deleted elsewhere)
-		s.drafts.cancel(key)
-		h.remoteID = rid
+	if rid != "" && rid != h.remoteID { // recreated (deleted elsewhere)
+		h = s.drafts.recreated(h, rid)
 	}
 	return h.String(), nil
 }
@@ -348,7 +422,17 @@ func (s *Service) flushDraft(key string) {
 	}
 	out := *e.pending
 	e.pending, e.timer, e.last = nil, nil, time.Now()
+	done := make(chan struct{})
+	e.flushing = done
 	s.drafts.mu.Unlock()
+	defer func() {
+		s.drafts.mu.Lock()
+		if e.flushing == done {
+			e.flushing = nil
+		}
+		s.drafts.mu.Unlock()
+		close(done)
+	}()
 	h, _ := parseDraftHandle(key)
 	p, err := s.provider(h.accountID)
 	if err != nil {
@@ -356,8 +440,13 @@ func (s *Service) flushDraft(key string) {
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
 	defer cancel()
-	if _, err := p.SaveDraft(ctx, out, h.remoteID); err != nil {
+	rid, err := p.SaveDraft(ctx, out, h.remoteID)
+	if err != nil {
 		slog.Warn("autosaving draft failed", "account", h.accountID, "err", err)
+		return
+	}
+	if rid != "" && rid != h.remoteID { // recreated (deleted elsewhere)
+		s.drafts.recreated(h, rid)
 	}
 }
 

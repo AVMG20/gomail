@@ -203,6 +203,15 @@ func (a *autoStore) keyringFailed(op string, err error) {
 
 func (a *autoStore) Get(key string) (string, error) {
 	if a.keyringOK() {
+		// A fallback copy is always newer than the keyring's (a working
+		// keyring Set removes it): it was written while the keyring was
+		// unavailable. Move it back into the keyring.
+		if v, err := a.file.Get(key); err == nil {
+			if a.kr.Set(key, v) == nil {
+				_ = a.file.Delete(key)
+			}
+			return v, nil
+		}
 		v, err := a.kr.Get(key)
 		if err == nil {
 			return v, nil

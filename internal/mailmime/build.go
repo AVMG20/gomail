@@ -311,6 +311,17 @@ func ForwardSubject(s string) string {
 	return "Fwd: " + t
 }
 
+// MessageIDs keeps the <message-id> tokens of an In-Reply-To style header.
+func MessageIDs(h string) string {
+	var out []string
+	for _, f := range strings.Fields(h) {
+		if strings.HasPrefix(f, "<") && strings.HasSuffix(f, ">") && len(f) > 2 {
+			out = append(out, f)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // ReferencesFor computes the References header for a reply.
 func ReferencesFor(parentRefs, parentMessageID string) string {
 	refs := strings.Fields(parentRefs)

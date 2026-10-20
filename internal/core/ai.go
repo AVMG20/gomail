@@ -38,7 +38,10 @@ type job struct {
 	cancel context.CancelFunc
 }
 
-type autoRun struct{ cancel context.CancelFunc }
+type autoRun struct {
+	cancel context.CancelFunc
+	ids    []string // the batch's messages (classified ones are skipped)
+}
 
 type jobManager struct {
 	mu        sync.Mutex
@@ -169,6 +172,12 @@ func (s *Service) classifyOne(ctx context.Context, in store.ClassifyInput) model
 	hash := aiHash(s.labelsetHash(), in)
 	if in.AIHash == hash && in.AIScores != nil {
 		res.Scores, res.Skipped = in.AIScores, true
+		// No new scores needed, but the thresholds or provider-label
+		// policy may have changed since: apply them to the stored scores.
+		added, removed, err := s.store.ApplyAIScores(in.ID, in.AIScores, s.policy(), hash)
+		if err == nil {
+			res.Added, res.Removed = added, removed
+		}
 		return res
 	}
 	st := s.Settings()
@@ -257,6 +266,9 @@ func (s *Service) runClassification(ctx context.Context, jobID string, ids []str
 		stats.p.Cost += r.Cost
 		if r.Skipped {
 			stats.p.Skipped++
+			if len(r.Added)+len(r.Removed) > 0 {
+				stats.accs[accountOf[ids[i]]] = true // policy re-applied
+			}
 		} else if r.Error != "" {
 			stats.p.Failed++
 		} else if len(r.Added)+len(r.Removed) > 0 {
@@ -480,12 +492,17 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 	}
 	s.goBG(func() {
 		ctx, cancel := context.WithCancel(s.ctx)
-		run := &autoRun{cancel: cancel}
+		run := &autoRun{cancel: cancel, ids: todo}
 		s.jobs.mu.Lock()
 		if prev, ok := s.jobs.others[accountID]; ok {
-			prev.cancel() // a newer batch supersedes the old one for this account
+			// A newer batch supersedes the old one for this account and
+			// takes over what it hadn't labeled yet (already classified
+			// messages are skipped).
+			prev.cancel()
+			run.ids = mergeIDs(todo, prev.ids, maxAutoPerSync)
 		}
 		s.jobs.others[accountID] = run
+		todo := run.ids
 		s.jobs.mu.Unlock()
 		defer func() {
 			cancel()
@@ -498,6 +515,24 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 		_, final := s.runClassification(ctx, autoJobID, todo, true)
 		s.emit(models.EventClassifyFinished, final)
 	})
+}
+
+// mergeIDs returns a followed by the ids of b not in a, at most limit.
+func mergeIDs(a, b []string, limit int) []string {
+	seen := make(map[string]bool, len(a))
+	out := make([]string, 0, min(len(a)+len(b), limit))
+	for _, l := range [][]string{a, b} {
+		for _, id := range l {
+			if len(out) >= limit {
+				return out
+			}
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out
 }
 
 // ---- usage & budget ----

@@ -51,6 +51,9 @@ type Client struct {
 	wellKnown map[string]string            // folder id -> kind ("" = hidden)
 	byKind    map[string]string            // kind -> folder id
 	added     map[string]map[string]string // draft id -> attachment key -> id (attachments we uploaded)
+
+	wellKnownDone bool                   // wellKnown is complete (not a partial lookup)
+	draftLocks    map[string]*sync.Mutex // draft id -> serializes saves of that draft
 }
 
 // New creates a client. base "" means production Graph.
@@ -163,7 +166,8 @@ func batchError(r batchResp) error {
 	return &httpx.Error{Service: "Microsoft Graph", Status: r.Status, Code: env.Error.Code, Message: env.Error.Message}
 }
 
-// batchEach runs one request per id and returns the first error.
+// batchEach runs one request per id and returns the first error (a
+// provider.PartialError when only some ids failed).
 func (c *Client) batchEach(ctx context.Context, ids []string, mk func(id string) batchReq) error {
 	reqs := make([]batchReq, len(ids))
 	for i, id := range ids {
@@ -175,16 +179,24 @@ func (c *Client) batchEach(ctx context.Context, ids []string, mk func(id string)
 	if err != nil {
 		return err
 	}
-	for i := range ids {
+	var first error
+	var failed []string
+	for i, id := range ids {
 		r, ok := resps[strconv.Itoa(i)]
+		var err error
 		if !ok {
-			return errors.New("Microsoft Graph returned an incomplete batch response")
+			err = errors.New("Microsoft Graph returned an incomplete batch response")
+		} else if err = batchError(r); r.Status == http.StatusNotFound {
+			err = nil
 		}
-		if err := batchError(r); err != nil && r.Status != http.StatusNotFound {
-			return err
+		if err != nil {
+			failed = append(failed, id)
+			if first == nil {
+				first = err
+			}
 		}
 	}
-	return nil
+	return provider.Partial(first, failed, len(ids))
 }
 
 // ---- profile & folders ----
@@ -218,7 +230,7 @@ const folderSelect = "$select=id,displayName,parentFolderId,childFolderCount,tot
 
 func (c *Client) loadWellKnown(ctx context.Context) error {
 	c.mu.Lock()
-	done := c.wellKnown != nil
+	done := c.wellKnownDone
 	c.mu.Unlock()
 	if done {
 		return nil
@@ -232,9 +244,14 @@ func (c *Client) loadWellKnown(ctx context.Context) error {
 		return err
 	}
 	wk, byKind := map[string]string{}, map[string]string{}
+	partial := false
 	for _, w := range wellKnown {
 		r := resps[w.name]
 		if r.Status != http.StatusOK {
+			// 404: the mailbox has no such folder. Anything else (an
+			// outage that outlasted the retries) is looked up again next
+			// time instead of being cached for the client's lifetime.
+			partial = partial || r.Status != http.StatusNotFound
 			continue
 		}
 		var f struct {
@@ -248,7 +265,7 @@ func (c *Client) loadWellKnown(ctx context.Context) error {
 		}
 	}
 	c.mu.Lock()
-	c.wellKnown, c.byKind = wk, byKind
+	c.wellKnown, c.byKind, c.wellKnownDone = wk, byKind, !partial
 	c.mu.Unlock()
 	return nil
 }
@@ -432,7 +449,7 @@ func deltaKey(folderID string) string { return "delta:" + folderID }
 
 func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncResult, error) {
 	lim := req.Limits.WithDefaults()
-	res := mail.SyncResult{State: map[string]string{}, Removed: map[string][]string{}}
+	res := mail.SyncResult{State: map[string]string{}, Removed: map[string][]string{}, Complete: map[string]time.Time{}}
 	known := map[string]bool{}
 	custom := 0
 	for i, f := range req.Folders {
@@ -454,16 +471,17 @@ func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncR
 		}
 		link := req.State[deltaKey(f.RemoteID)]
 		initial := link == ""
-		upserts, removed, newLink, err := c.syncFolder(ctx, f.RemoteID, link, limit)
+		upserts, removed, newLink, since, err := c.syncFolder(ctx, f.RemoteID, link, limit)
 		if isSyncStateGone(err) {
 			initial = true
-			upserts, removed, newLink, err = c.syncFolder(ctx, f.RemoteID, "", limit)
+			upserts, removed, newLink, since, err = c.syncFolder(ctx, f.RemoteID, "", limit)
 		}
 		if err != nil {
 			return mail.SyncResult{}, fmt.Errorf("syncing %s: %w", f.Name, err)
 		}
 		if initial {
 			res.Initial = true
+			res.Complete[f.RemoteID] = since
 		}
 		res.Upserts = append(res.Upserts, upserts...)
 		if len(removed) > 0 {
@@ -490,8 +508,9 @@ func isSyncStateGone(err error) bool {
 }
 
 // syncFolder runs one delta round. With an empty link it starts a new delta
-// sequence restricted to (roughly) the newest limit messages.
-func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit int) (ups []mail.Message, removed []string, deltaLink string, err error) {
+// sequence restricted to (roughly) the newest limit messages; since is then
+// the receivedDateTime it covers completely from (zero: the whole folder).
+func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit int) (ups []mail.Message, removed []string, deltaLink string, since time.Time, err error) {
 	next := link
 	if next == "" {
 		// Find the receivedDateTime of the limit-th newest message so the
@@ -506,24 +525,25 @@ func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit in
 		q.Set("$orderby", "receivedDateTime desc")
 		q.Set("$select", "receivedDateTime")
 		if err := c.api.JSON(ctx, http.MethodGet, "me/mailFolders/"+url.PathEscape(folderID)+"/messages?"+q.Encode(), nil, &top); err != nil {
-			return nil, nil, "", err
+			return nil, nil, "", time.Time{}, err
 		}
 		d := url.Values{}
 		d.Set("$select", messageSelect)
 		if len(top.Value) >= limit && limit > 0 {
 			oldest := top.Value[len(top.Value)-1].ReceivedDateTime
 			d.Set("$filter", "receivedDateTime ge "+oldest.UTC().Format("2006-01-02T15:04:05Z"))
+			since = oldest.UTC().Truncate(time.Second)
 		}
 		next = "me/mailFolders/" + url.PathEscape(folderID) + "/messages/delta?" + d.Encode()
 	}
 	for pages := 0; next != ""; pages++ {
 		if pages > 500 {
-			return nil, nil, "", errors.New("too many delta pages")
+			return nil, nil, "", time.Time{}, errors.New("too many delta pages")
 		}
 		resp, err := c.api.Do(ctx, httpx.Request{Method: http.MethodGet, Path: next,
 			Headers: map[string]string{"Prefer": `IdType="ImmutableId", odata.maxpagesize=100`}})
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, "", time.Time{}, err
 		}
 		var page struct {
 			Value     []gMessage `json:"value"`
@@ -533,7 +553,7 @@ func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit in
 		err = json.NewDecoder(resp.Body).Decode(&page)
 		resp.Body.Close()
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("unexpected delta response: %w", err)
+			return nil, nil, "", time.Time{}, fmt.Errorf("unexpected delta response: %w", err)
 		}
 		for _, g := range page.Value {
 			if g.Removed != nil {
@@ -550,7 +570,7 @@ func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit in
 		}
 		next = page.NextLink
 	}
-	return ups, removed, deltaLink, nil
+	return ups, removed, deltaLink, since, nil
 }
 
 // ---- bodies ----
@@ -766,6 +786,9 @@ func attKey(name string, size int) string { return fmt.Sprintf("%s|%d", strings.
 func (c *Client) SaveDraft(ctx context.Context, out mail.Outgoing, draftID string) (string, error) {
 	msg := draftFields(out)
 	if draftID != "" {
+		// Saves of one draft can overlap (autosave flush vs. send); they
+		// share its attachment bookkeeping, so run them one at a time.
+		defer c.lockDraft(draftID)()
 		err := c.api.JSON(ctx, http.MethodPatch, c.msgPath(draftID), msg, nil)
 		if httpx.StatusOf(err) == http.StatusNotFound {
 			draftID = "" // sent or deleted elsewhere: start over
@@ -901,7 +924,24 @@ func (c *Client) DraftID(_ context.Context, messageRemoteID string) (string, err
 func (c *Client) forget(draftID string) {
 	c.mu.Lock()
 	delete(c.added, draftID)
+	delete(c.draftLocks, draftID)
 	c.mu.Unlock()
+}
+
+// lockDraft locks one draft's saves and returns the unlock function.
+func (c *Client) lockDraft(draftID string) func() {
+	c.mu.Lock()
+	if c.draftLocks == nil {
+		c.draftLocks = map[string]*sync.Mutex{}
+	}
+	l := c.draftLocks[draftID]
+	if l == nil {
+		l = &sync.Mutex{}
+		c.draftLocks[draftID] = l
+	}
+	c.mu.Unlock()
+	l.Lock()
+	return l.Unlock
 }
 
 // ---- older mail & search ----

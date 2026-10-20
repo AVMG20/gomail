@@ -108,6 +108,12 @@ type SyncResult struct {
 	// Initial is true when this round was a full (re)synchronisation; the
 	// engine then doesn't announce the messages as new mail.
 	Initial bool
+	// Complete maps folder remote id -> date from which this round listed
+	// the folder completely (a zero time: the whole folder). Cached
+	// messages of such a folder dated after it that the round didn't
+	// return have left the folder; the date also seeds the older-mail
+	// cursor. Set by full (re)synchronisations.
+	Complete map[string]time.Time
 }
 
 // Outgoing is a message to send.

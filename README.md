@@ -11,17 +11,19 @@ It runs natively on Linux, macOS and Windows.
 - **Labels first.** Labels work across every account. Each label has a short description ("invoices, receipts and bank statements") that tells the AI when it applies. Gmail labels and Outlook categories are imported too, and you can export and import label sets as JSON.
 - **AI labeling with Jev.** Label one message, a whole folder or all your mail, with a cost estimate, a daily budget and a cancel button. New mail can be labeled automatically. AI is optional, and mail is only sent to the model when you label or improve something.
 - **Per-mailbox views.** Unified inboxes or one account at a time, conversation view, multi-select label filters remembered per folder, and an "Unread" toggle.
-- **One calendar for every mailbox.** Google and Outlook calendars side by side, with a switch per mailbox and a checkbox per calendar. Create events by clicking or dragging, move and resize them, RSVP to invitations right from the email, and handle recurring events with "this event / all events". Day, week, month and agenda views; press `g c` to open it.
+- **One calendar for every mailbox.** Google and Outlook calendars side by side in day, week, month and agenda views (`g c` opens it). Show or hide calendars with checkboxes (Alt/Option-click shows only one); right-click a mailbox to disable its calendar, mute its reminders or sync it now. Create events by clicking or dragging, move and resize them with Undo, add a Google Meet or Teams meeting with one switch (or paste any Zoom/Webex link), and handle recurring events with "this event / all events". RSVP to invitations right from the email, see an event's original time when it was scheduled in another time zone, and get desktop reminders that open the event. Fully usable from the keyboard.
 - **Search everywhere with ⌘K / Ctrl+K.** One palette for mail search across all accounts (with `from:`, `label:`, `is:unread`, `has:attachment` and `in:` operators), jumping to folders, toggling labels and running commands.
 - **Writing.** Rich text, signatures per account, contact autocomplete, attachments, drafts that sync to the server, undo send, and AI grammar help that keeps your tone (right-click in the editor).
 - **Reading.** Safe sandboxed HTML rendering, remote images blocked until you allow them, one-click unsubscribe, attachment previews, and simple emails rendered in dark colors in dark mode.
-- **Made for the keyboard.** j/k, e, #, r, a, f, l and more. Press `?` for the full list.
+- **Made for the keyboard.** j/k, e, #, r, a, f, l in mail; t, d/w/m/a, arrows and ↑/↓ between events in the calendar. Press `?` for the full list.
 - **Yours to style.** Light, dark or system theme, accent color, corner radius, compact density, text size and an optional single-pane layout.
 - **Private by design.** Your own OAuth app, tokens in the OS keychain, and everything stored locally in SQLite.
 
 | Dark mode | Command palette | Labels |
 |---|---|---|
 | ![Dark mode](docs/screenshots/inbox-dark.png) | ![Command palette](docs/screenshots/command-palette.png) | ![Labels settings](docs/screenshots/labels.png) |
+
+![The unified calendar: Gmail and Outlook calendars in one week view](docs/screenshots/calendar.png)
 
 ## Install
 

@@ -150,7 +150,7 @@ func scrubStyleBlocks(s string) string {
 }
 
 var (
-	remoteRe      = regexp.MustCompile(`(?i)\b(src|background|srcset)\s*=\s*["']?[^"'>]*?\bhttps?:|url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//|image-set\(`)
+	remoteRe      = regexp.MustCompile(`(?i)\b(src|background)\s*=\s*["']?\s*(https?:)?//|\bsrcset\s*=\s*["']?[^"'>]*?\bhttps?:|url\(\s*(&#34;|&#39;|&quot;|["'])?\s*(https?:)?//|image-set\(`)
 	imageSetRe    = regexp.MustCompile(`(?i)(-webkit-)?image-set\([^)]*\)`)
 	remoteAttrRe  = regexp.MustCompile(`(?i)\s(src|background)\s*=\s*"\s*(https?:)?//[^"]*"`)
 	remoteSetRe   = regexp.MustCompile(`(?i)\ssrcset\s*=\s*"[^"]*"`)

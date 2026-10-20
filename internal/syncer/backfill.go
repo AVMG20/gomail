@@ -23,6 +23,37 @@ type backfillState struct {
 	mu         sync.Mutex
 	next       int                  // round-robin cursor over candidates
 	lastNotify map[string]time.Time // per account, throttles messages:changed
+	failures   map[string]int       // per folder id: consecutive failed pages
+	retryAt    map[string]time.Time // per folder id: skipped until then
+}
+
+// backfillRetry is the pause after n consecutive failures of one folder.
+func backfillRetry(n int) time.Duration {
+	d := time.Minute << min(n-1, 6) // 1 min doubling, capped at ~1 h
+	return min(d, time.Hour)
+}
+
+func (b *backfillState) failed(folderID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failures == nil {
+		b.failures, b.retryAt = map[string]int{}, map[string]time.Time{}
+	}
+	b.failures[folderID]++
+	b.retryAt[folderID] = time.Now().Add(backfillRetry(b.failures[folderID]))
+}
+
+func (b *backfillState) succeeded(folderID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.failures, folderID)
+	delete(b.retryAt, folderID)
+}
+
+func (b *backfillState) waiting(folderID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return time.Now().Before(b.retryAt[folderID])
 }
 
 // backfillFolders are the folders worth backfilling: Gmail's All Mail
@@ -103,10 +134,10 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 		}
 		state, _ := e.cfg.Store.SyncState(a.ID)
 		for _, f := range backfillFolders(a, folders) {
-			if state["olderdone:"+f.ID] == "1" || f.Total == 0 {
+			if state["olderdone:"+f.ID] == "1" || f.Total == 0 || e.backfill.waiting(f.ID) {
 				continue
 			}
-			oldest, err := e.cfg.Store.OldestInFolder(f.ID)
+			oldest, err := e.cfg.Store.OlderCursor(a.ID, f.ID)
 			if err != nil || oldest.IsZero() || (!cutoff.IsZero() && oldest.Before(cutoff)) {
 				continue
 			}
@@ -134,10 +165,14 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 	if err != nil {
 		if IsNetworkError(err) {
 			e.setOnline(false)
+		} else {
+			// Don't retry a failing folder every few seconds.
+			e.backfill.failed(c.folder.ID)
 		}
 		slog.Debug("backfill page failed", "account", c.acct.ID, "folder", c.folder.Name, "err", err)
 		return false
 	}
+	e.backfill.succeeded(c.folder.ID)
 	if len(msgs) == 0 {
 		_ = e.cfg.Store.SetOlderDone(c.acct.ID, c.folder.ID, true)
 		return true
@@ -146,6 +181,7 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 		slog.Warn("backfill store failed", "account", c.acct.ID, "err", err)
 		return false
 	}
+	_ = e.cfg.Store.AdvanceOlderCursor(c.acct.ID, c.folder.ID, messageDates(msgs))
 	oldest := c.oldest
 	for _, m := range msgs {
 		if m.Date.Before(oldest) {
@@ -167,6 +203,14 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 		e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: c.acct.ID})
 	}
 	return true
+}
+
+func messageDates(msgs []mail.Message) []time.Time {
+	out := make([]time.Time, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.Date
+	}
+	return out
 }
 
 // BackfillStep runs one backfill step now (tests).

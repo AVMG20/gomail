@@ -399,7 +399,12 @@ func (s *Service) tokenSource(acct models.Account) (*auth.TokenSource, error) {
 		return nil, err
 	}
 	id := acct.ID
-	ts := auth.NewTokenSource(cfg, tok, acct.Email, func(t *oauth2.Token) error { return auth.SaveToken(s.secrets, id, t) })
+	ts := auth.NewTokenSource(cfg, tok, acct.Email, func(t *oauth2.Token) error {
+		if _, err := s.store.Account(id); err != nil {
+			return nil // removed meanwhile: don't write its sign-in back
+		}
+		return auth.SaveToken(s.secrets, id, t)
+	})
 	s.tokens[acct.ID] = ts
 	return ts, nil
 }
@@ -628,6 +633,8 @@ func (s *Service) RemoveAccount(accountID string) error {
 	s.forgetClients(accountID)
 	s.engine.Forget(accountID)
 	s.attCache.dropAccount(accountID)
+	// A refresh that was in flight may have saved the token again.
+	_ = s.secrets.Delete(auth.TokenKey(accountID))
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 	s.emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
 	return nil

@@ -157,3 +157,12 @@
 .dark .gm-fc .gm-list-day.gm-today { color: color-mix(in oklab, var(--primary) 60%, white); }
 .gm-fc .fc .fc-day-other .fc-daygrid-day-top { opacity: 1; }
 .gm-fc .fc .fc-daygrid-day.fc-day-today:not(.fc-day-other) .fc-daygrid-day-number { color: var(--primary-foreground); }
+
+/* Keyboard focus. FullCalendar marks a focused event with ::before/::after
+   overlays; on an agenda row (a <tr>) WebKit turns those into extra table cells
+   and an unpositioned overlay that greys out the whole list. Use a ring instead. */
+.gm-fc .fc .fc-event:focus::before,
+.gm-fc .fc .fc-event:focus::after { content: none; }
+.gm-fc .fc .fc-event:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.gm-fc .fc .fc-list-event:focus-visible { outline-offset: -2px; }
+.gm-fc .fc .fc-list-event:focus-visible td { background: var(--muted); }

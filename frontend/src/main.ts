@@ -12,8 +12,6 @@ import { installErrorHandlers } from './lib/errors'
 const cached = readCachedTheme()
 if (cached) applyTheme(cached, false)
 
-if (import.meta.env.VITE_E2E) void import('./e2eHook') // TEMPORARY
-
 // Load the Wails runtime + generated bindings first (lazy chunk; skipped in the browser mock).
 void initBackend()
   .catch((e) => console.error('[gomail] failed to initialise the backend bridge', e))

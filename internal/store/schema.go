@@ -352,6 +352,31 @@ ALTER TABLE accounts ADD COLUMN calendar_muted INTEGER NOT NULL DEFAULT 0; -- no
 	// build shipped a different migration 7 that dropped calendar_enabled
 	// and didn't add calendar_muted; goMigrations[8] repairs such databases.
 	`SELECT 1;`,
+	// 9: an update that changes a message's thread and its unread flag at
+	// once was counted twice (the rethread trigger already moves the unread
+	// state): count unread changes only within a thread, and recount.
+	`
+DROP TRIGGER folder_threads_unread;
+CREATE TRIGGER folder_threads_unread AFTER UPDATE OF unread ON messages
+	WHEN old.unread != new.unread AND old.thread_id = new.thread_id BEGIN
+	UPDATE folder_threads SET unread = unread + (new.unread - old.unread)
+	WHERE thread_key = new.thread_key AND folder_id IN (SELECT folder_id FROM message_folders WHERE message_id = new.id);
+END;
+DELETE FROM folder_threads;
+INSERT INTO folder_threads(folder_id, thread_key, msgs, unread)
+	SELECT mf.folder_id, m.thread_key, count(*), sum(m.unread)
+	FROM message_folders mf JOIN messages m ON m.id = mf.message_id GROUP BY mf.folder_id, m.thread_key;
+`,
+	// 10: labels the user removed by hand; classification doesn't add them
+	// back.
+	`
+CREATE TABLE label_rejections (
+	message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	label_id   TEXT NOT NULL,
+	created_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(message_id, label_id)
+) WITHOUT ROWID;
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

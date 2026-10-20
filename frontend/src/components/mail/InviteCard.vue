@@ -54,15 +54,14 @@ function viewInCalendar() {
       <span class="text-[9px] font-semibold uppercase">{{ eventDate(invite.start, invite.allDay).toLocaleDateString(undefined, { month: 'short' }) }}</span>
       <span class="text-foreground text-sm font-semibold">{{ eventDate(invite.start, invite.allDay).getDate() }}</span>
     </div>
-    <div class="min-w-48 flex-1 basis-48">
+    <!-- Text takes at least ~17rem; the buttons wrap below it before the time gets cut. -->
+    <div class="min-w-0 flex-[1_1_17rem]">
       <p :class="['truncate text-[13px] font-semibold', cancelled && 'line-through']">{{ invite.title || 'Invitation' }}</p>
-      <p class="text-muted-foreground truncate text-xs">
-        {{ cancelled ? 'Cancelled · ' : '' }}{{ formatEventWhen(invite) }}
-        <template v-if="invite.organizer?.email"> · from {{ displayName(invite.organizer) }}</template>
-      </p>
+      <p class="text-muted-foreground text-xs">{{ cancelled ? 'Cancelled · ' : '' }}{{ formatEventWhen(invite) }}</p>
+      <p v-if="invite.organizer?.email" class="text-muted-foreground truncate text-xs">from {{ displayName(invite.organizer) }}</p>
       <p v-if="invite.location" class="text-muted-foreground mt-0.5 flex items-center gap-1 truncate text-xs"><MapPinIcon class="size-3 shrink-0" /> {{ invite.location }}</p>
     </div>
-    <div class="flex items-center gap-1.5">
+    <div class="flex flex-wrap items-center gap-1.5">
       <template v-if="canRespond || pending">
         <Button
           v-for="o in OPTIONS"

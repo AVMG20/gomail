@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +28,10 @@ var aliasRe = regexp.MustCompile(`\bm\.`)
 // latestInThread restricts w to the newest message (by date, id) of each
 // thread among the messages matching w.
 func latestInThread(w *where) {
+	// Trashed messages form their own conversation (like sameThread), so a
+	// newer trashed reply doesn't hide the live thread.
 	inner := []string{"n.account_id = m.account_id", "n.thread_key = m.thread_key",
+		"((n.folder_kinds & 32) != 0) = ((m.folder_kinds & 32) != 0)",
 		"(n.date > m.date OR (n.date = m.date AND n.id > m.id))"}
 	for _, c := range w.conds {
 		inner = append(inner, aliasRe.ReplaceAllString(c, "n."))
@@ -57,7 +61,7 @@ func (s *Store) ListMessages(q models.ListQuery, opt ListOptions) (models.Messag
 	// with a matching message (cheaper than counting latest-per-thread rows).
 	countExpr := `count(*)`
 	if opt.Conversations {
-		countExpr = `count(DISTINCT m.account_id || char(0) || m.thread_key)`
+		countExpr = `count(DISTINCT m.account_id || char(0) || m.thread_key || char(0) || ((m.folder_kinds & 32) != 0))`
 	}
 	fast, ok, err := s.fastConversationCount(q, opt)
 	switch {
@@ -378,6 +382,47 @@ func (s *Store) OldestInFolder(folderID string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return fromMillis(ms.Int64), nil
+}
+
+func olderCursorKey(folderID string) string { return "oldercursor:" + folderID }
+
+// OlderCursor returns the date below which older mail of a folder is
+// fetched next: the recorded cursor, else the oldest cached message.
+func (s *Store) OlderCursor(accountID, folderID string) (time.Time, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM sync_state WHERE account_id = ? AND key = ?`, accountID, olderCursorKey(folderID)).Scan(&v)
+	if err == nil {
+		if ms, perr := strconv.ParseInt(v, 10, 64); perr == nil {
+			return fromMillis(ms), nil
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, err
+	}
+	return s.OldestInFolder(folderID)
+}
+
+// AdvanceOlderCursor moves a folder's older-mail cursor down to the oldest
+// of a fetched page of older mail.
+func (s *Store) AdvanceOlderCursor(accountID, folderID string, page []time.Time) error {
+	var oldest time.Time
+	for _, d := range page {
+		if oldest.IsZero() || d.Before(oldest) {
+			oldest = d
+		}
+	}
+	if oldest.IsZero() {
+		return nil
+	}
+	cur, err := s.OlderCursor(accountID, folderID)
+	if err != nil {
+		return err
+	}
+	if !cur.IsZero() && !oldest.Before(cur) {
+		return nil
+	}
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		return saveSyncState(tx, accountID, map[string]string{olderCursorKey(folderID): strconv.FormatInt(toMillis(oldest), 10)})
+	})
 }
 
 // SetOlderDone records that the server has no older mail for a folder.

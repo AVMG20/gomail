@@ -113,6 +113,13 @@ func (f *flaky) SetLabel(ctx context.Context, ids []string, name string, add boo
 	return f.Provider.SetLabel(ctx, ids, name, add)
 }
 
+func (f *flaky) ListOlder(ctx context.Context, folder mail.Folder, before time.Time, limit int) ([]mail.Message, error) {
+	if err := f.err("older"); err != nil {
+		return nil, err
+	}
+	return f.Provider.ListOlder(ctx, folder, before, limit)
+}
+
 func (f *flaky) MarkFolderRead(ctx context.Context, folder mail.Folder) error {
 	if err := f.err("folderread"); err != nil {
 		return err

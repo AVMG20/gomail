@@ -355,24 +355,37 @@ func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder) (int, er
 	if err != nil {
 		return 0, err
 	}
-	before, err := s.store.OldestInFolder(f.ID)
-	if err != nil {
-		return 0, err
-	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	msgs, err := p.ListOlder(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind}, before, olderPageSize)
-	if err != nil {
-		return 0, err
+	// A page may hold only mail that is cached already (listing windows
+	// overlap); keep going a few pages so the call makes progress.
+	for range 5 {
+		before, err := s.store.OlderCursor(f.AccountID, f.ID)
+		if err != nil {
+			return 0, err
+		}
+		msgs, err := p.ListOlder(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind}, before, olderPageSize)
+		if err != nil {
+			return 0, err
+		}
+		if len(msgs) == 0 {
+			_ = s.store.SetOlderDone(f.AccountID, f.ID, true) // nothing older on the server
+			return 0, nil
+		}
+		n, err := s.engine.Ingest(f.AccountID, msgs)
+		if err != nil {
+			return 0, err
+		}
+		dates := make([]time.Time, len(msgs))
+		for i, m := range msgs {
+			dates[i] = m.Date
+		}
+		_ = s.store.AdvanceOlderCursor(f.AccountID, f.ID, dates)
+		if n > 0 {
+			return n, nil
+		}
 	}
-	n, err := s.engine.Ingest(f.AccountID, msgs)
-	if err != nil {
-		return 0, err
-	}
-	if n == 0 {
-		_ = s.store.SetOlderDone(f.AccountID, f.ID, true) // nothing older on the server
-	}
-	return n, nil
+	return 0, nil
 }
 
 type remoteSearches struct {

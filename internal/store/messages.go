@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -328,6 +329,14 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 				touched = append(touched, MessageID(accountID, rid))
 			}
 		}
+		// A full listing of a folder (from a date on) also tells which
+		// cached messages left it while we couldn't follow changes (e.g.
+		// expired history after a long time offline).
+		left, err := reconcileComplete(tx, accountID, r, folderIDs, kinds)
+		if err != nil {
+			return err
+		}
+		touched = append(touched, left...)
 		for _, chunk := range chunks(touched, 400) {
 			if _, err := tx.Exec(`DELETE FROM messages WHERE id IN (`+placeholders(len(chunk))+`) AND NOT EXISTS
 				(SELECT 1 FROM message_folders mf WHERE mf.message_id = messages.id)`, anySlice(chunk)...); err != nil {
@@ -370,6 +379,79 @@ func (s *Store) ApplySync(accountID string, r mail.SyncResult, labelIDs map[stri
 	}
 	res.newWords = nil
 	return res, err
+}
+
+// reconcileComplete drops folder memberships that a complete listing
+// (r.Complete) no longer reports, and seeds the older-mail cursors. It
+// returns the ids of the messages it changed.
+func reconcileComplete(tx *sql.Tx, accountID string, r mail.SyncResult, folderIDs map[string]string, kinds *kindsUpdater) ([]string, error) {
+	if len(r.Complete) == 0 {
+		return nil, nil
+	}
+	listed := make(map[string]bool, len(r.Upserts))
+	for _, m := range r.Upserts {
+		listed[MessageID(accountID, m.RemoteID)] = true
+	}
+	var changed []string
+	state := map[string]string{}
+	for fr, since := range r.Complete {
+		fid, ok := folderIDs[fr]
+		if !ok {
+			continue
+		}
+		from := int64(math.MinInt64)
+		if !since.IsZero() {
+			from = toMillis(since)
+		}
+		ids, err := queryList(tx, `SELECT mf.message_id FROM message_folders mf JOIN messages m ON m.id = mf.message_id
+			WHERE mf.folder_id = ? AND m.date > ?`, fid, from)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			if listed[id] {
+				continue
+			}
+			if _, err := tx.Exec(`DELETE FROM message_folders WHERE folder_id = ? AND message_id = ?`, fid, id); err != nil {
+				return nil, err
+			}
+			if err := kinds.update(id); err != nil {
+				return nil, err
+			}
+			changed = append(changed, id)
+		}
+		if since.IsZero() {
+			state[olderDoneKey(fid)] = "1"
+			continue
+		}
+		var cur string
+		err = tx.QueryRow(`SELECT value FROM sync_state WHERE account_id = ? AND key = ?`, accountID, olderCursorKey(fid)).Scan(&cur)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		// Keep a deeper cursor from earlier backfilling.
+		if c, err := strconv.ParseInt(cur, 10, 64); err != nil || c > toMillis(since) {
+			state[olderCursorKey(fid)] = strconv.FormatInt(toMillis(since), 10)
+		}
+	}
+	return changed, saveSyncState(tx, accountID, state)
+}
+
+func queryList(tx *sql.Tx, q string, args ...any) ([]string, error) {
+	rows, err := tx.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // providerLabeler replaces the provider-sourced label assignments of a
@@ -861,9 +943,17 @@ func (s *Store) AddLabels(ids []string, labelID string) error {
 			return err
 		}
 		defer st.Close()
+		unreject, err := tx.Prepare(`DELETE FROM label_rejections WHERE message_id = ? AND label_id = ?`)
+		if err != nil {
+			return err
+		}
+		defer unreject.Close()
 		now := time.Now().UnixMilli()
 		for _, id := range ids {
 			if _, err := st.Exec(labelID, now, id); err != nil {
+				return err
+			}
+			if _, err := unreject.Exec(id, labelID); err != nil {
 				return err
 			}
 		}
@@ -872,7 +962,8 @@ func (s *Store) AddLabels(ids []string, labelID string) error {
 }
 
 // RemoveLabels removes a label from messages whatever its source. Removing
-// a provider/system assignment records an override so sync doesn't re-add it.
+// a provider/system assignment records an override so sync doesn't re-add
+// it, and every removal records a rejection so classification doesn't.
 func (s *Store) RemoveLabels(ids []string, labelID string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
 		for _, chunk := range chunks(ids, 500) {
@@ -883,6 +974,10 @@ func (s *Store) RemoveLabels(ids []string, labelID string) error {
 				return err
 			}
 			if _, err := tx.Exec(`DELETE FROM message_labels WHERE label_id = ? AND message_id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO label_rejections(message_id, label_id, created_at)
+				SELECT id, ?, `+fmt.Sprint(time.Now().UnixMilli())+` FROM messages WHERE id IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
 				return err
 			}
 		}
@@ -905,7 +1000,8 @@ type AIPolicy struct {
 //   - provider/system assignments are removed when CorrectProvider and
 //     P < RemoveThreshold, recording an override so the next sync doesn't
 //     re-add them;
-//   - unassigned labels are added with source "ai" when P >= AddThreshold.
+//   - unassigned labels are added with source "ai" when P >= AddThreshold,
+//     unless the user removed that label from the message by hand.
 //
 // Labels missing from scores are left alone. It returns the added and
 // removed label ids.
@@ -929,6 +1025,14 @@ func (s *Store) ApplyAIScores(msgID string, scores map[string]float64, p AIPolic
 			cur[l] = src
 		}
 		rows.Close()
+		rejected, err := queryList(tx, `SELECT label_id FROM label_rejections WHERE message_id = ?`, msgID)
+		if err != nil {
+			return err
+		}
+		isRejected := map[string]bool{}
+		for _, l := range rejected {
+			isRejected[l] = true
+		}
 		now := time.Now().UnixMilli()
 		ids := make([]string, 0, len(scores))
 		for l := range scores {
@@ -939,7 +1043,7 @@ func (s *Store) ApplyAIScores(msgID string, scores map[string]float64, p AIPolic
 			pr := scores[l]
 			switch src, ok := cur[l]; {
 			case !ok:
-				if pr >= p.AddThreshold {
+				if pr >= p.AddThreshold && !isRejected[l] { // never re-add what the user removed
 					if _, err := tx.Exec(`INSERT INTO message_labels(message_id, label_id, source, confidence, created_at) VALUES(?, ?, 'ai', ?, ?)`,
 						msgID, l, pr, now); err != nil {
 						return err
@@ -979,7 +1083,7 @@ func (s *Store) ApplyAIScores(msgID string, scores map[string]float64, p AIPolic
 // longer exist.
 func (s *Store) DeleteUnknownLabels(valid []string) error {
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
-		for _, table := range []string{"message_labels", "label_overrides"} {
+		for _, table := range []string{"message_labels", "label_overrides", "label_rejections"} {
 			q := `DELETE FROM ` + table
 			if len(valid) > 0 {
 				q += ` WHERE label_id NOT IN (` + placeholders(len(valid)) + `)`

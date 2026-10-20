@@ -200,6 +200,14 @@ func (s *Store) tx(ctx context.Context, f func(*sql.Tx) error) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		// A panic in f must not leave the write transaction open (every
+		// later write would wait on it).
+		if p := recover(); p != nil {
+			_ = t.Rollback()
+			panic(p)
+		}
+	}()
 	if err := f(t); err != nil {
 		_ = t.Rollback()
 		return err

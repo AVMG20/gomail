@@ -48,17 +48,16 @@ type Parsed struct {
 	Unsubscribe imail.Unsubscribe
 }
 
+var unsubURIRe = regexp.MustCompile(`<([^<>]*)>`)
+
 // ParseListUnsubscribe parses List-Unsubscribe and List-Unsubscribe-Post
 // (RFC 2369 / RFC 8058). Only http(s) and mailto URIs are kept; one-click
 // requires an https URL.
 func ParseListUnsubscribe(header, post string) imail.Unsubscribe {
 	var u imail.Unsubscribe
-	for _, part := range strings.Split(header, ",") {
-		part = strings.TrimSpace(part)
-		if !strings.HasPrefix(part, "<") || !strings.HasSuffix(part, ">") {
-			continue
-		}
-		uri := strings.TrimSpace(part[1 : len(part)-1])
+	// Take each <...> group: URLs may contain commas themselves.
+	for _, g := range unsubURIRe.FindAllStringSubmatch(header, -1) {
+		uri := strings.TrimSpace(g[1])
 		pu, err := url.Parse(uri)
 		if err != nil {
 			continue

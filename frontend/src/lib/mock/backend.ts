@@ -561,7 +561,8 @@ class MockBackend {
   // ---------------------------------------------------------------- calendar
   async ListCalendars(): Promise<Calendar[]> {
     await latency(30, 90)
-    const consent = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent && a.calendarEnabled !== false).map((a) => a.id))
+    // Like the backend: a disabled mailbox's calendars stay listed (shown grayed out); only its events go.
+    const consent = new Set(this.accounts.map((a) => this.cal.decorateAccount(a)).filter((a) => a.calendarConsent).map((a) => a.id))
     return clone(this.cal.calendars.filter((c) => consent.has(c.accountId)))
   }
 
