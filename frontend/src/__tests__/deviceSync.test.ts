@@ -86,4 +86,107 @@ describe('sync between computers', () => {
     await settings.flush()
     expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ theme: 'dark', density: 'comfortable' }))
   })
+
+  it('keeps an edit whose save starts while the settings are re-read', async () => {
+    vi.useFakeTimers()
+    setActivePinia(createPinia())
+    const settings = useSettingsStore()
+    settings.settings = { theme: 'light', density: 'comfortable', primaryColor: 'blue' } as Settings
+    let answer: (s: Settings) => void = () => {}
+    // The backend as it was before the edit was saved, with another computer's color.
+    vi.spyOn(api, 'getSettings').mockImplementation(() => new Promise((r) => (answer = r)))
+    const save = vi.spyOn(api, 'saveSettings').mockResolvedValue()
+    const edited = settings.update({ theme: 'dark' }, 50)
+    const reloading = settings.reload()
+    await vi.advanceTimersByTimeAsync(60) // the save is due while the re-read is out
+    answer({ theme: 'light', density: 'comfortable', primaryColor: 'green' } as Settings)
+    await reloading
+    await edited
+    expect(settings.settings?.theme).toBe('dark')
+    expect(settings.settings?.primaryColor).toBe('green')
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ theme: 'dark', primaryColor: 'green' }))
+    vi.useRealTimers()
+  })
+
+  it('reads what another computer changed before saving over it', async () => {
+    setActivePinia(createPinia())
+    const settings = useSettingsStore()
+    settings.settings = { theme: 'light', density: 'comfortable' } as Settings
+    const read = vi.spyOn(api, 'getSettings').mockRejectedValueOnce(new Error('busy')).mockResolvedValue({ theme: 'light', density: 'compact' } as Settings)
+    const save = vi.spyOn(api, 'saveSettings').mockResolvedValue()
+    await settings.reload() // settings:changed, but the re-read failed
+    await settings.update({ theme: 'dark' }, 0)
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ theme: 'dark', density: 'compact' }))
+  })
+})
+
+describe('Settings → Sync', () => {
+  const off = normSyncStatus({ available: true, connected: false })
+  const on = normSyncStatus({ available: true, connected: true, serverUrl: 'https://gomail.avmg.nl' })
+  const text = () => document.body.textContent ?? ''
+
+  it('says why sync is off when this computer lost its code', async () => {
+    vi.spyOn(api, 'getDeviceSyncStatus').mockResolvedValue({ ...off, error: 'This computer’s sync code is missing from the keychain.' })
+    const { app, el } = mount()
+    await vi.waitFor(() => expect(q(el, 'sync-off-error')?.textContent).toContain('missing from the keychain'))
+    app.unmount()
+  })
+
+  it('says sync is on when only showing the new code failed', async () => {
+    const { toast } = await import('vue-sonner')
+    const error = vi.spyOn(toast, 'error')
+    vi.spyOn(api, 'getDeviceSyncStatus').mockResolvedValue(off)
+    vi.spyOn(api, 'connectDeviceSync').mockResolvedValue(on)
+    vi.spyOn(api, 'getDeviceSyncCode').mockRejectedValueOnce(new Error('keychain locked')).mockResolvedValue('zoo zoo vote')
+    const { app, el } = mount()
+    await vi.waitFor(() => expect(q(el, 'sync-turn-on')).not.toBeNull())
+    q(el, 'sync-turn-on')!.click()
+    await vi.waitFor(() => expect(error).toHaveBeenCalled())
+    const [title, opts] = error.mock.calls[0] as [string, { action: { label: string; onClick: () => void } }]
+    expect(title).toMatch(/^Sync is on/)
+    expect(opts.action.label).toBe('Show sync code')
+    expect(q(el, 'sync-show-code')).not.toBeNull()
+    opts.action.onClick()
+    await vi.waitFor(() => expect(q(el, 'sync-code')?.querySelectorAll('li')).toHaveLength(3))
+    app.unmount()
+  })
+
+  it('warns that turning off forgets the code, and offers to show it first', async () => {
+    vi.spyOn(api, 'getDeviceSyncStatus').mockResolvedValue(on)
+    vi.spyOn(api, 'getDeviceSyncCode').mockResolvedValue('zoo zoo vote')
+    const off = vi.spyOn(api, 'disconnectDeviceSync').mockResolvedValue()
+    const { app, el } = mount()
+    await vi.waitFor(() => expect(q(el, 'sync-show-code')).not.toBeNull())
+    ;[...el.querySelectorAll('button')].find((b) => b.textContent?.includes('Turn off'))!.click()
+    await vi.waitFor(() => expect(text()).toContain('This computer forgets the sync code'))
+    q(document.body, 'sync-off-show-code')!.click()
+    await vi.waitFor(() => expect(q(el, 'sync-code')?.querySelectorAll('li')).toHaveLength(3))
+    expect(off).not.toHaveBeenCalled()
+    app.unmount()
+  })
+})
+
+describe('removing a mailbox', () => {
+  it('says the other computers remove it too while sync is on', async () => {
+    const { default: MailboxPage } = await import('@/components/settings/MailboxPage.vue')
+    const { useAccountsStore } = await import('@/stores/accounts')
+    const { useUiStore } = await import('@/stores/ui')
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const settings = useSettingsStore()
+    await settings.load()
+    const accounts = useAccountsStore()
+    await accounts.load()
+    const id = accounts.accounts[0].id
+    vi.spyOn(api, 'getDeviceSyncStatus').mockResolvedValue(normSyncStatus({ available: true, connected: true }))
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const app = createApp({ render: () => h(MailboxPage, { accountId: id }) })
+    app.use(pinia)
+    app.mount(el)
+    useUiStore().focusAccount = { id, field: 'remove' }
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="remove-synced"]')?.textContent).toContain('other computers remove it too'))
+    app.unmount()
+  })
 })

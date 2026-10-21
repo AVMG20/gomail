@@ -48,9 +48,18 @@ async function turnOn() {
   busy.value = 'create'
   try {
     status.value = await api.connectDeviceSync({ serverUrl: server.value.trim(), create: true, code: '', includeSecrets: true })
-    shownCode.value = await api.getDeviceSyncCode()
   } catch (e) {
     toast.error('Couldn’t turn on sync', { description: errorMessage(e) })
+    busy.value = null
+    return
+  }
+  try {
+    shownCode.value = await api.getDeviceSyncCode()
+  } catch (e) {
+    toast.error('Sync is on, but the sync code couldn’t be shown', {
+      description: errorMessage(e),
+      action: { label: 'Show sync code', onClick: () => void showCode() },
+    })
   } finally {
     busy.value = null
   }
@@ -74,6 +83,10 @@ async function toggleCode() {
     shownCode.value = ''
     return
   }
+  await showCode()
+}
+
+async function showCode() {
   busy.value = 'code'
   try {
     shownCode.value = await api.getDeviceSyncCode()
@@ -82,6 +95,12 @@ async function toggleCode() {
   } finally {
     busy.value = null
   }
+}
+
+/** From the turn-off dialog: show the code on the page, to save it first. */
+function showCodeFirst() {
+  confirmOff.value = false
+  void showCode()
 }
 
 async function copyCode() {
@@ -189,6 +208,9 @@ const statusLine = computed(() => {
         title="Sync between computers"
         description="Keep settings, mailboxes, labels and rules the same on your computers. Everything is encrypted on this computer before it’s sent: the server can’t read it."
       >
+        <p v-if="status.error" class="text-destructive flex items-start gap-1 pb-1 text-xs" role="alert" data-testid="sync-off-error">
+          <TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /> {{ status.error }}
+        </p>
         <SettingRow title="Turn on sync" description="For your first computer. gomail makes a sync code to enter on your others.">
           <Button size="sm" :disabled="!!busy" data-testid="sync-turn-on" @click="turnOn">
             <LoaderIcon v-if="busy === 'create'" class="animate-spin" /> Turn on sync
@@ -217,18 +239,22 @@ const statusLine = computed(() => {
     <SettingSection v-if="status.available" title="What syncs">
       <SettingRow title="Synced" description="Settings, mailboxes and their order, signatures, labels, rules, Not-junk senders, labels you and Jev put on mail, and which calendars you show." />
       <SettingRow title="Through Gmail and Outlook" description="Your mail, folders, archive, junk, read and starred state: they sync through your mail provider as always." />
-      <SettingRow title="Only on this computer" description="Zoom, startup and tray choices, how much mail is kept here, how often it’s checked and synced." />
+      <SettingRow title="Only on this computer" description="Zoom, notifications, reading pane, startup and tray choices, how much mail is kept here, how often it’s checked and synced." />
     </SettingSection>
 
     <AlertDialog v-model:open="confirmOff">
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Turn off sync on this computer?</AlertDialogTitle>
-          <AlertDialogDescription>Settings and mail on this computer stay as they are, and your other computers keep syncing. To sync again, use the code from one of them.</AlertDialogDescription>
+          <AlertDialogDescription>
+            This computer forgets the sync code. If you haven’t saved it somewhere, do that first: you need it to sync again. Settings and mail here stay as they are,
+            and your other computers keep syncing.
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction @click="turnOff">Turn off</AlertDialogAction>
+          <Button v-if="!shownCode" variant="outline" data-testid="sync-off-show-code" @click="showCodeFirst">Show sync code</Button>
+          <AlertDialogAction data-testid="sync-off-confirm" @click="turnOff">Turn off</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
