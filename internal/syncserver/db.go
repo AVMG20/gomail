@@ -67,15 +67,36 @@ func hashWithSalt(salt, key []byte) []byte {
 	return h.Sum(nil)
 }
 
-// createAccount stores an account; false when the id is taken.
-func (d *db) createAccount(id string, salt, authKey []byte) (bool, error) {
-	res, err := d.sql.Exec(`INSERT INTO accounts(id, salt, auth_hash, created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`,
-		id, salt, hashWithSalt(salt, authKey), time.Now().UnixMilli())
+type createResult int
+
+const (
+	accountCreated createResult = iota
+	accountExists               // the id is taken
+	accountsFull                // the server has max accounts
+)
+
+// createAccount stores an account, unless there are max (0 = no limit).
+func (d *db) createAccount(id string, salt, authKey []byte, max int) (createResult, error) {
+	tx, err := d.sql.BeginTx(context.Background(), nil)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+	defer tx.Rollback()
+	var exists, count int
+	if err := tx.QueryRow(`SELECT count(*) FILTER (WHERE id = ?), count(*) FROM accounts`, id).Scan(&exists, &count); err != nil {
+		return 0, err
+	}
+	switch {
+	case exists > 0:
+		return accountExists, nil
+	case max > 0 && count >= max:
+		return accountsFull, nil
+	}
+	if _, err := tx.Exec(`INSERT INTO accounts(id, salt, auth_hash, created_at) VALUES(?,?,?,?)`,
+		id, salt, hashWithSalt(salt, authKey), time.Now().UnixMilli()); err != nil {
+		return 0, err
+	}
+	return accountCreated, tx.Commit()
 }
 
 // dummySalt keeps a login for an unknown account as slow as a real one.

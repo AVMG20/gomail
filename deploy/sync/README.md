@@ -43,6 +43,8 @@ the synced data, so keep the code somewhere safe.
    | `SIGNUPS`    | `open`  | `open`: anyone who reaches the server can turn on sync (make a new sync code). `closed`: only codes already in use keep working. |
    | `QUOTA_MB`   | `64`    | Storage per sync account. |
    | `MAX_DOC_MB` | `16`    | Largest single document. |
+   | `MAX_ACCOUNTS` | `1000` | Most sync accounts the server takes (`0`: no limit). |
+   | `TRUST_PROXY` | `1`    | Count rate limits per client address from `X-Forwarded-For`. It is only believed from a private or local address (Coolify's proxy). |
    | `LOG_LEVEL`  | `info`  | `debug`, `info`, `warn` or `error`. |
 
 6. **Deploy.** Click *Deploy*. The first build takes a minute or two. The
@@ -64,7 +66,8 @@ that page first and enter it, on every computer.
 ### Lock it down
 
 With `SIGNUPS=open`, anyone who finds the server can create a sync account
-and use up to `QUOTA_MB` of disk. Once all your computers are connected, set
+and use up to `QUOTA_MB` of disk (at most `MAX_ACCOUNTS` of them). Once all
+your computers are connected, set
 `SIGNUPS=closed` and redeploy: your code keeps working, new codes are
 refused. Turn it back to `open` when you need a new sync account (you don't
 for a new computer: it uses the existing code).
@@ -97,12 +100,17 @@ docker run -d --name gomail-sync -p 127.0.0.1:8080:8080 -v gomail-sync-data:/dat
 
 Put any HTTPS reverse proxy in front of it (gomail only connects over
 `https://`, except to `localhost`). Set `TRUST_PROXY=1` when the proxy sets
-`X-Forwarded-For`, so rate limits count per client.
+`X-Forwarded-For` and reaches the server from a private or local address,
+so rate limits count per client.
 
 ## Limits and behavior
 
 - Sign-ups and logins are rate limited per client address (30 per 10
-  minutes) and logins per account (10 per 15 minutes).
+  minutes; IPv6 per /64), and logins per account and address (10 per 15
+  minutes).
+- Uploads and downloads of a document may take up to 15 minutes, other
+  requests a minute. On shutdown the server finishes the requests it is
+  handling.
 - Documents are replaced as a whole, with a revision check: a computer that
   uploads a stale copy is refused, merges the newer one and tries again, so
   changes from two computers are both kept (per setting, the last change

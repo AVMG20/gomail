@@ -294,7 +294,26 @@ func TestClientIPBehindProxy(t *testing.T) {
 	if ip := (&Server{}).clientIP(r); ip != "10.0.0.2" {
 		t.Fatalf("direct: %s", ip)
 	}
-	if ip := (&Server{cfg: Config{TrustProxy: true}}).clientIP(r); ip != "203.0.113.9" {
+	proxied := &Server{cfg: Config{TrustProxy: true}}
+	if ip := proxied.clientIP(r); ip != "203.0.113.9" {
 		t.Fatalf("proxied: %s", ip)
+	}
+	// Only the proxy (a private or loopback peer) is believed: a client
+	// that reaches the server directly can't pick its address.
+	r.RemoteAddr = "198.51.100.7:1234"
+	if ip := proxied.clientIP(r); ip != "198.51.100.7" {
+		t.Fatalf("direct client with the header: %s", ip)
+	}
+	r.RemoteAddr = "127.0.0.1:1234"
+	r.Header.Set("X-Forwarded-For", "not an address")
+	if ip := proxied.clientIP(r); ip != "127.0.0.1" {
+		t.Fatalf("bad header: %s", ip)
+	}
+	// IPv6 clients count per /64.
+	for _, a := range []string{"2001:db8:1:2:aaaa::1", "2001:db8:1:2:bbbb::9"} {
+		r.Header.Set("X-Forwarded-For", a)
+		if ip := proxied.clientIP(r); ip != "2001:db8:1:2::/64" {
+			t.Fatalf("%s: %s", a, ip)
+		}
 	}
 }

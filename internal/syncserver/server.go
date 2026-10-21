@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AVMG20/gomail/internal/syncapi"
@@ -36,12 +38,21 @@ type Config struct {
 	MaxDocBytes int
 	QuotaBytes  int64
 	MaxDocs     int
+	// MaxAccounts caps the number of accounts, so open sign-ups can't
+	// fill the disk (0 = no limit).
+	MaxAccounts int
 	// TrustProxy takes the client address from X-Forwarded-For (the last
-	// entry, added by the reverse proxy) for rate limiting. Only enable it
-	// behind a proxy that sets the header.
+	// entry, added by the reverse proxy) for rate limiting, for requests
+	// that come from a private or loopback address (the proxy). Only
+	// enable it behind a proxy that sets the header.
 	TrustProxy bool
 	// SessionTTL is how long a login lasts (default 30 days).
 	SessionTTL time.Duration
+	// RequestTimeout bounds reading a request and writing the answer
+	// (default 1 minute); DocTimeout does for documents, which can be
+	// large on a slow connection (default 15 minutes).
+	RequestTimeout time.Duration
+	DocTimeout     time.Duration
 }
 
 // Defaults for Config.
@@ -50,16 +61,22 @@ const (
 	DefaultQuotaBytes  = 64 << 20
 	DefaultMaxDocs     = 64
 	DefaultSessionTTL  = 30 * 24 * time.Hour
+	DefaultRequestTime = time.Minute
+	DefaultDocTime     = 15 * time.Minute
 	authKeySize        = 32
 )
 
 // Server serves the sync API.
 type Server struct {
-	cfg       Config
-	db        *db
-	mux       *http.ServeMux
-	byIP      *limiter // sign-ups and logins per client address
-	byAccount *limiter // logins per account
+	cfg     Config
+	db      *db
+	mux     *http.ServeMux
+	byIP    *limiter // sign-ups and logins per client address
+	byLogin *limiter // logins per account and client address
+
+	mu      sync.Mutex
+	closed  bool
+	running sync.WaitGroup // requests being handled
 }
 
 // New opens (creating) the database in cfg.DataDir.
@@ -76,6 +93,12 @@ func New(cfg Config) (*Server, error) {
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = DefaultSessionTTL
 	}
+	if cfg.RequestTimeout <= 0 {
+		cfg.RequestTimeout = DefaultRequestTime
+	}
+	if cfg.DocTimeout <= 0 {
+		cfg.DocTimeout = DefaultDocTime
+	}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -84,7 +107,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("opening the database: %w", err)
 	}
 	s := &Server{cfg: cfg, db: d, mux: http.NewServeMux(),
-		byIP: newLimiter(30, 10*time.Minute), byAccount: newLimiter(10, 15*time.Minute)}
+		byIP: newLimiter(30, 10*time.Minute), byLogin: newLimiter(10, 15*time.Minute)}
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("POST /v1/register", s.register)
 	s.mux.HandleFunc("POST /v1/login", s.login)
@@ -94,11 +117,48 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// Close closes the database.
-func (s *Server) Close() error { return s.db.close() }
+// Close waits for the requests being handled, then closes the database.
+// Requests that arrive meanwhile get 503.
+func (s *Server) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.running.Wait()
+	return s.db.close()
+}
+
+// HTTPServer returns an http.Server for the API on addr. Reading a request
+// and writing the answer are bounded per request (see ServeHTTP).
+func (s *Server) HTTPServer(addr string) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           s,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    16 << 10,
+	}
+}
 
 // ServeHTTP implements http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		writeError(w, http.StatusServiceUnavailable, syncapi.ErrInternal, "the server is shutting down; try again shortly")
+		return
+	}
+	s.running.Add(1)
+	s.mu.Unlock()
+	defer s.running.Done()
+	// A document can take long on a slow connection; the rest can't.
+	limit := s.cfg.RequestTimeout
+	if strings.HasPrefix(r.URL.Path, "/v1/docs/") {
+		limit = s.cfg.DocTimeout
+	}
+	// (And some time more to answer one that was too slow.)
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(limit))
+	_ = rc.SetWriteDeadline(time.Now().Add(limit + s.cfg.RequestTimeout))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	s.mux.ServeHTTP(w, r)
@@ -132,13 +192,18 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	salt := make([]byte, 16)
 	_, _ = rand.Read(salt)
-	created, err := s.db.createAccount(account, salt, key)
+	res, err := s.db.createAccount(account, salt, key, s.cfg.MaxAccounts)
 	if err != nil {
 		s.internal(w, "register", err)
 		return
 	}
-	if !created {
+	switch res {
+	case accountExists:
 		writeError(w, http.StatusConflict, syncapi.ErrAccountExists, "this account exists already")
+		return
+	case accountsFull:
+		slog.Warn("sign-up refused: the server has MAX_ACCOUNTS accounts")
+		writeError(w, http.StatusForbidden, syncapi.ErrSignupsClosed, "this server is full and takes no new sync accounts")
 		return
 	}
 	slog.Info("account created")
@@ -153,8 +218,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, 4<<10, &req) {
 		return
 	}
+	// Per account and address: someone who knows an account id can't
+	// lock its devices out.
+	ip := s.clientIP(r)
 	account, key, ok := credentials(w, req.Account, req.AuthKey)
-	if !ok || !s.limit(w, s.byAccount, account) {
+	if !ok || !s.limit(w, s.byLogin, account+" "+ip) {
 		return
 	}
 	good, err := s.db.checkAccount(account, key)
@@ -166,7 +234,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, syncapi.ErrBadCredentials, "no sync account for this code")
 		return
 	}
-	s.byAccount.reset(account)
+	s.byLogin.reset(account + " " + ip)
 	raw := make([]byte, 32)
 	_, _ = rand.Read(raw)
 	token := base64.RawURLEncoding.EncodeToString(raw)
@@ -304,21 +372,31 @@ func (s *Server) limit(w http.ResponseWriter, l *limiter, key string) bool {
 	return ok
 }
 
-// clientIP is the address rate limits count against.
+// clientIP is the address rate limits count against: the peer's, or with
+// TrustProxy, for a peer on a private or loopback address (the reverse
+// proxy), the address it added to X-Forwarded-For. An IPv6 client counts
+// by its /64 network (one connection usually has all of it).
 func (s *Server) clientIP(r *http.Request) string {
-	if s.cfg.TrustProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
-				return ip
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if s.cfg.TrustProxy && ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
+		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+			parts := strings.Split(xff[len(xff)-1], ",")
+			if fwd := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); fwd != nil {
+				ip = fwd
 			}
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	switch {
+	case ip == nil:
+		return host
+	case ip.To4() == nil:
+		return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 	}
-	return host
+	return ip.String()
 }
 
 func (s *Server) internal(w http.ResponseWriter, op string, err error) {
@@ -331,9 +409,12 @@ func readJSON(w http.ResponseWriter, r *http.Request, limit int64, v any) bool {
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(v); err != nil {
 		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
+		switch {
+		case errors.As(err, &tooBig):
 			writeError(w, http.StatusRequestEntityTooLarge, syncapi.ErrTooLarge, "the request is too large")
-		} else {
+		case errors.Is(err, os.ErrDeadlineExceeded), errors.Is(err, io.ErrUnexpectedEOF):
+			writeError(w, http.StatusRequestTimeout, syncapi.ErrBadRequest, "the upload was cut off or too slow; try again")
+		default:
 			writeError(w, http.StatusBadRequest, syncapi.ErrBadRequest, "malformed request")
 		}
 		return false

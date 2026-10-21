@@ -13,6 +13,8 @@ type limiter struct {
 	window time.Duration
 	now    func() time.Time
 	hits   map[string]*window
+	swept  time.Time // when finished windows were last forgotten
+	sweeps int       // tests
 }
 
 type window struct {
@@ -30,12 +32,16 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	if len(l.hits) > 10000 { // forget finished windows now and then
+	// Forget finished windows once a window (a scan per window, not per
+	// attempt).
+	if now.Sub(l.swept) >= l.window {
 		for k, w := range l.hits {
 			if now.Sub(w.start) >= l.window {
 				delete(l.hits, k)
 			}
 		}
+		l.swept = now
+		l.sweeps++
 	}
 	w, ok := l.hits[key]
 	if !ok || now.Sub(w.start) >= l.window {

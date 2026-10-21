@@ -11,7 +11,9 @@
 //	               (default open; existing ones keep working when closed)
 //	MAX_DOC_MB     largest document (default 16)
 //	QUOTA_MB       storage per account (default 64)
-//	TRUST_PROXY    1 = count rate limits per X-Forwarded-For address (behind a proxy)
+//	MAX_ACCOUNTS   most sync accounts the server takes (default 1000; 0 = no limit)
+//	TRUST_PROXY    1 = count rate limits per X-Forwarded-For address, for
+//	               requests from a private or loopback address (the proxy)
 //	LOG_LEVEL      debug | info | warn | error (default info)
 package main
 
@@ -68,27 +70,23 @@ func run() error {
 		return err
 	}
 	cfg.QuotaBytes = int64(quota)
+	if cfg.MaxAccounts, err = strconv.Atoi(env("MAX_ACCOUNTS", "1000")); err != nil || cfg.MaxAccounts < 0 {
+		return errors.New("MAX_ACCOUNTS must be a number (0 = no limit)")
+	}
 	srv, err := syncserver.New(cfg)
 	if err != nil {
 		return err
 	}
+	// Closed after the server stopped: it waits for requests still running.
 	defer srv.Close()
 
 	addr := env("ADDR", ":8080")
-	hs := &http.Server{
-		Addr:              addr,
-		Handler:           srv,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       2 * time.Minute,
-		WriteTimeout:      2 * time.Minute,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    16 << 10,
-	}
+	hs := srv.HTTPServer(addr)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	errc := make(chan error, 1)
 	go func() { errc <- hs.ListenAndServe() }()
-	slog.Info("gomail-sync listening", "addr", addr, "dataDir", cfg.DataDir, "signups", cfg.Signups)
+	slog.Info("gomail-sync listening", "addr", addr, "dataDir", cfg.DataDir, "signups", cfg.Signups, "maxAccounts", cfg.MaxAccounts)
 	select {
 	case err := <-errc:
 		return err

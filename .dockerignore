@@ -1,0 +1,14 @@
+# The build context of deploy/sync/Dockerfile is the repository root; the
+# image needs only go.mod, go.sum, cmd/gomail-sync and internal/.
+.git
+.github
+.claude
+.task
+**/node_modules
+frontend
+build
+bin
+docs
+/gomail
+*.db
+*.db-*

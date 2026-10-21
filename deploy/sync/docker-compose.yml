@@ -15,9 +15,10 @@ services:
       - SIGNUPS=${SIGNUPS:-open}
       - QUOTA_MB=${QUOTA_MB:-64}
       - MAX_DOC_MB=${MAX_DOC_MB:-16}
-      # Rate limits count per client address from X-Forwarded-For (set by
-      # Coolify's proxy).
-      - TRUST_PROXY=1
+      - MAX_ACCOUNTS=${MAX_ACCOUNTS:-1000}
+      # Rate limits count per client address from X-Forwarded-For, set by
+      # Coolify's proxy (only believed from a private or loopback address).
+      - TRUST_PROXY=${TRUST_PROXY:-1}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - gomail-sync-data:/data
