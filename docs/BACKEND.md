@@ -626,6 +626,62 @@ includesSecrets, settings, extra, accounts, secrets?}`:
   applied right away to messages and calendars already present, and
   otherwise on ingest (`ApplySync`, `ReplaceCalendars`).
 
+## Sync between computers
+
+Settings → Sync keeps several installs the same through a `gomail-sync`
+server (`cmd/gomail-sync`, `internal/syncserver`; deployment in
+[deploy/sync/README.md](../deploy/sync/README.md)). The default server is
+`https://gomail.avmg.nl`.
+
+**Sync code and keys.** `ConnectDeviceSync({create: true})` makes a sync
+code: 24 words from the BIP39 English list (`internal/devsync/code.go`),
+256 random bits plus an 8-bit checksum, encoded exactly like a BIP39
+mnemonic. Other computers call `ConnectDeviceSync({code})`; `ParseCode`
+ignores case, spacing, line breaks and numbering, takes four-letter
+abbreviations, names a word that isn't in the list and rejects a bad
+checksum. HKDF-SHA256 derives three values from the code's entropy: the
+account id (sent), the auth key (sent; the server stores a salted SHA-256)
+and the AES-256-GCM key (never sent). The code is kept in the OS keychain
+(`devicesync:code`); `GetDeviceSyncCode` returns it for the next computer.
+
+**Documents.** The engine (`internal/devsync`) syncs a few documents of keyed
+JSON values, each encrypted (gzip, then AES-GCM with the document name as
+associated data) and stored with a revision. A key's entry carries its
+value and the time it was written; merging takes the newer entry per key,
+and deletions leave tombstones (forgotten after 180 days).
+`internal/core/devsync.go` maps app state to documents. Mailboxes are named
+`provider:email` and labels by a per-computer sync id, because local ids
+differ:
+
+| Document | Keys |
+|---|---|
+| `accounts` | `a/<mailbox>` name, color, signature, order, calendar switches; `c/<mailbox>` calendar choices (shown, color, reminders muted); with sign-in sync on: `t/<mailbox>` refresh token, `s/openrouter`, `s/oauth` (OAuth app); `secrets` the switch itself |
+| `settings` | `g/<field>` for the fields in `syncedSettings`; `m/<mailbox>/<choice>` muted, auto-label, AI corrections off, Junk stays put, Not-junk senders, hidden folders (by remote id) |
+| `labels` | `l/<mailbox>/<sync id>` labels, `l/*/junk`, `r/<mailbox>/<field>/<action>/<text>` rules, `q/<mailbox>` quiet labels, `x/<mailbox>` deleted imported labels |
+| `marks-<hash>` | one per mailbox: label decisions per remote message id (manual, AI with confidence, rejected, override, already labeled by Jev) |
+
+Not synced: `deviceSettings` (zoom, launch at login, tray, close to tray,
+mail kept, check intervals, `deviceSyncInterval`) and everything the
+provider already syncs (mail, folders, archive/junk/trash moves, read and
+starred state). `TestDeviceSyncClassifiesEverySetting` fails until a new
+settings field is put in one of the lists.
+
+**Rounds.** On start, every `deviceSyncInterval` minutes (1 by default;
+5, 15, 30, 60, or -1 for only on start and "Sync now"), after waking, when
+back online and on `SyncDevicesNow`. A round compares each document with its
+local shadow (the entries as last merged, stored encrypted in the settings
+table) to find this computer's changes, fetches the server's copy if its
+revision moved, merges, applies what other computers changed, and uploads
+with the revision it read; a 409 means another computer was faster, so it
+merges again. Applying makes the local state equal the shadow, so nothing
+is sent back. Values a computer had before it first synced count as oldest:
+a computer that joins takes the synced settings and adds what only it has.
+Keys this computer can't hold yet (a mailbox it doesn't have) are kept and
+applied once it can. A sign-in from another computer is only used for a
+mailbox without a working one; a rotated refresh token isn't uploaded again.
+After applying, the backend emits `settings:changed` (the UI re-reads its
+settings) and `devicesync:status` carries `DeviceSyncStatus`.
+
 ## Data directory
 
 | OS      | Default                                   |

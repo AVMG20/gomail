@@ -18,6 +18,7 @@ It runs natively on Linux, macOS and Windows.
 - **Made for the keyboard.** j/k, e, #, r, a, f, l in mail; t, d/w/m/a, arrows and ↑/↓ between events in the calendar. Press `?` for the full list.
 - **Yours to style.** Light, dark or system theme, accent color, corner radius, compact density, text size and an optional single-pane layout.
 - **Private by design.** Your own OAuth app, tokens in the OS keychain, and everything stored locally in SQLite.
+- **Sync between computers.** Turn on sync in Settings → Sync and enter the 24-word sync code on your other computers: settings, mailboxes, labels, rules and label decisions stay the same everywhere, end-to-end encrypted. Use the default server or [host your own](deploy/sync/README.md).
 
 | Dark mode | Command palette | Labels |
 |---|---|---|
