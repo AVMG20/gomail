@@ -41,10 +41,11 @@ async function checkNow() {
     </SettingSection>
 
     <SettingSection title="Sync & storage" all-mailboxes>
-      <SettingRow title="Mail kept on this computer" stacked>
+      <SettingRow title="How far back to download" stacked>
         <template #description>
-          gomail copies your recent mail to this computer, so it opens instantly and works offline. Older mail isn’t deleted: it stays
-          in your Gmail or Outlook account. To read it in gomail, scroll to the bottom of a folder and click “Load older mail”, or search for it.
+          gomail downloads mail from this period in the background, so it opens instantly and works offline. It never removes mail from
+          this computer. Older mail stays in your Gmail or Outlook account: scroll to the bottom of a folder and click “Load older mail”,
+          or search for it.
         </template>
         <Select :model-value="String(settings.settings.syncDepthDays ?? 90)" @update:model-value="(v) => settings.update({ syncDepthDays: Number(v) })">
           <SelectTrigger class="w-56"><SelectValue /></SelectTrigger>
