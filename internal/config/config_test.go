@@ -375,3 +375,15 @@ func TestMigrateAutoLabel(t *testing.T) {
 		t.Fatal("normalized settings migrated again")
 	}
 }
+
+func TestSyncIntervalPerMailbox(t *testing.T) {
+	s := models.Settings{SyncIntervalMinutes: 1, SyncIntervals: map[string]int{"a": 15, "b": 0, " ": 5, "c": 99999}}
+	Normalize(&s)
+	if len(s.SyncIntervals) != 1 || SyncInterval(s, "a") != 15 {
+		t.Fatalf("intervals %+v", s.SyncIntervals)
+	}
+	// Mailboxes without their own choice check every 5 minutes (not the old global setting).
+	if SyncInterval(s, "b") != DefaultSyncInterval || DefaultSyncInterval != 5 {
+		t.Fatalf("default %d", SyncInterval(s, "b"))
+	}
+}

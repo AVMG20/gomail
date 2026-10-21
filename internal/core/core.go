@@ -161,8 +161,8 @@ func New(opts Options) (*Service, error) {
 		Emit:          notifyingEmitter{s},
 		Provider:      s.provider,
 		ResolveLabels: s.resolveProviderLabels,
-		Interval: func() time.Duration {
-			return time.Duration(s.Settings().SyncIntervalMinutes) * time.Minute
+		Interval: func(accountID string) time.Duration {
+			return time.Duration(config.SyncInterval(s.Settings(), accountID)) * time.Minute
 		},
 		OnNewMessages:  s.onNewMessages,
 		BeforeAnnounce: s.applyRules,

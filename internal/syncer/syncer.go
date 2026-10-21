@@ -39,8 +39,8 @@ type Config struct {
 	// ResolveLabels makes sure provider labels exist locally and returns
 	// lower-cased provider label name -> local label id.
 	ResolveLabels func(accountID string, labels []mail.Label) map[string]string
-	// Interval returns the periodic sync interval.
-	Interval func() time.Duration
+	// Interval returns an account's periodic sync interval.
+	Interval func(accountID string) time.Duration
 	// OnNewMessages is called after a sync stored new messages.
 	OnNewMessages func(accountID string, ids []string, initial bool)
 	// BeforeAnnounce runs on newly stored messages before they are announced
@@ -249,13 +249,13 @@ func (e *Engine) syncDue(all bool) {
 		slog.Error("list accounts", "err", err)
 		return
 	}
-	interval := 5 * time.Minute
-	if e.cfg.Interval != nil {
-		interval = e.cfg.Interval()
-	}
 	for _, a := range accts {
 		if a.NeedsReauth {
 			continue // waits for ReauthAccount
+		}
+		interval := 5 * time.Minute
+		if e.cfg.Interval != nil {
+			interval = e.cfg.Interval(a.ID)
 		}
 		st := e.state(a.ID)
 		e.mu.Lock()

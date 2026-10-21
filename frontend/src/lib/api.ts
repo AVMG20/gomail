@@ -299,6 +299,7 @@ export function normSettings(s: Settings): Settings {
     labelRules: s.labelRules ?? [],
     quietLabels: s.quietLabels ?? {},
     notJunkSenders: s.notJunkSenders ?? {},
+    syncIntervals: s.syncIntervals ?? {},
     mutedMailboxes: s.mutedMailboxes ?? [],
     hiddenFolders: s.hiddenFolders ?? [],
     autoLabelAccounts: s.autoLabelAccounts ?? [],

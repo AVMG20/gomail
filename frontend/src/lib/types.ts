@@ -365,7 +365,10 @@ export type Density = 'comfortable' | 'compact'
 export interface Settings {
   theme: ThemeMode | string
   density: Density | string
+  /** Older versions' global interval; each mailbox now has its own (syncIntervals). */
   syncIntervalMinutes: number
+  /** Per mailbox: how often (minutes) gomail checks for new mail. Unset = every 5 minutes. */
+  syncIntervals?: Record<string, number>
   showRemoteImages: boolean
   /** Links to these domains (and their subdomains) open without asking. */
   trustedLinkDomains?: string[]

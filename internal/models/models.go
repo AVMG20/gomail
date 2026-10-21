@@ -297,6 +297,10 @@ type Settings struct {
 	Theme               string  `json:"theme"`   // "system" | "light" | "dark"
 	Density             string  `json:"density"` // "comfortable" | "compact"
 	SyncIntervalMinutes int     `json:"syncIntervalMinutes"`
+	// SyncIntervals maps an account id to how often (minutes) its mail is
+	// checked in the background; mailboxes without an entry use
+	// DefaultSyncInterval. SyncIntervalMinutes is only kept for older versions.
+	SyncIntervals map[string]int `json:"syncIntervals"`
 	ShowRemoteImages    bool    `json:"showRemoteImages"`
 	PrimaryColor        string  `json:"primaryColor"`     // hex accent color, e.g. "#2563eb"
 	Radius              float64 `json:"radius"`           // UI corner radius in rem (default 0.5)

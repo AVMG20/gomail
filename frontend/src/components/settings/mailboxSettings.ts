@@ -12,6 +12,11 @@ import { useAccountsStore } from '@/stores/accounts'
 import { useSettingsStore } from '@/stores/settings'
 
 const JUNK = 'junk'
+/** How often a mailbox is checked when it has no interval of its own (Go: config.DefaultSyncInterval). */
+export const DEFAULT_SYNC_INTERVAL = 5
+/** The background check intervals offered (minutes; Go: config.SyncIntervalChoices). */
+export const SYNC_INTERVALS = [1, 5, 15, 30, 60]
+export const intervalLabel = (m: number) => `Every ${m === 1 ? 'minute' : m === 60 ? 'hour' : `${m} minutes`}`
 const THEN_PLACE: Record<string, string> = { archive: 'the archive', junk: 'Junk', trash: 'Trash' }
 /** Labels whose "When added" is being applied to existing mail right now. */
 const applying = ref(new Set<string>())
@@ -37,6 +42,15 @@ export function useMailboxSettings() {
   // ---- mute: no new-mail notifications and no unread count on badges or in All inboxes.
   const isMuted = (accountId: string) => muted.value.has(accountId)
   const setMuted = (accountId: string, on: boolean) => setNotify(accountId, !on)
+
+  // ---- background sync: each mailbox on its own interval (minutes), every 5 minutes unless changed
+  const syncInterval = (accountId: string) => settings.settings?.syncIntervals?.[accountId] ?? DEFAULT_SYNC_INTERVAL
+  function setSyncInterval(accountId: string, minutes: number) {
+    const next = { ...(settings.settings?.syncIntervals ?? {}) }
+    if (minutes === DEFAULT_SYNC_INTERVAL) delete next[accountId]
+    else next[accountId] = minutes
+    void settings.update({ syncIntervals: next }, 0)
+  }
 
   // ---- other folders (Gmail labels-as-folders aside: Outlook folders like an old "GitHub")
   const hiddenFolders = computed(() => new Set(settings.settings?.hiddenFolders ?? []))
@@ -138,7 +152,7 @@ export function useMailboxSettings() {
   }
 
   return {
-    notifies, setNotify, isMuted, setMuted, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel,
+    notifies, setNotify, isMuted, setMuted, syncInterval, setSyncInterval, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel,
     autoLabels, setAutoLabel, corrects, setCorrects, setThen, applyThen, isApplying, placeOf, junkOptions, junkList, setGoesToJunk,
   }
 }

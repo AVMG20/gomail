@@ -200,7 +200,7 @@ func newTestEnv(t *testing.T) *testEnv {
 			}
 			return out
 		},
-		Interval: func() time.Duration { return time.Hour },
+		Interval: func(string) time.Duration { return time.Hour },
 		OnNewMessages: func(acct string, ids []string, initial bool) {
 			te.mu.Lock()
 			te.newIDs[acct] += len(ids)
@@ -642,5 +642,35 @@ func TestQuietSyncSkipsMessagesChanged(t *testing.T) {
 	}
 	if te.rec.count(models.EventMessagesChanged) == before {
 		t.Fatal("sync with new mail emitted no messages:changed")
+	}
+}
+
+// Each mailbox is checked on its own interval.
+func TestPerAccountInterval(t *testing.T) {
+	te := newTestEnv(t)
+	ctx := context.Background()
+	if err := te.e.SyncNow(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	te.e.cfg.Interval = func(id string) time.Duration {
+		if id == demo.GmailAccountID {
+			return 0 // due right away
+		}
+		return time.Hour
+	}
+	before := map[string]int{}
+	for id, p := range te.provs {
+		before[id] = p.calls["folders"]
+	}
+	te.e.syncDue(false)
+	te.e.wg.Wait()
+	for id, p := range te.provs {
+		want := before[id]
+		if id == demo.GmailAccountID {
+			want++
+		}
+		if p.calls["folders"] != want {
+			t.Errorf("%s synced %d times, want %d", id, p.calls["folders"]-before[id], want-before[id])
+		}
 	}
 }

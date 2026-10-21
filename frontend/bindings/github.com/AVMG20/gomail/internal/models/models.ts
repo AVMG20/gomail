@@ -1209,6 +1209,13 @@ export interface Settings {
      */
     "density": string;
     "syncIntervalMinutes": number;
+
+    /**
+     * SyncIntervals maps an account id to how often (minutes) its mail is
+     * checked in the background; mailboxes without an entry use
+     * DefaultSyncInterval. SyncIntervalMinutes is only kept for older versions.
+     */
+    "syncIntervals": { [_ in string]?: number } | null;
     "showRemoteImages": boolean;
 
     /**

@@ -212,7 +212,7 @@ func (s *Service) SaveSettings(in models.Settings) error {
 		old.MicrosoftClientID != in.MicrosoftClientID || old.MicrosoftTenant != in.MicrosoftTenant {
 		s.resetProviders()
 	}
-	if old.SyncIntervalMinutes != in.SyncIntervalMinutes {
+	if old.SyncIntervalMinutes != in.SyncIntervalMinutes || !maps.Equal(old.SyncIntervals, in.SyncIntervals) {
 		s.engine.Wake()
 	}
 	s.ui.ApplySettings(in)
@@ -443,6 +443,7 @@ func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
 	st.JunkStaysPut = slices.Clone(st.JunkStaysPut)
 	st.QuietLabels = maps.Clone(st.QuietLabels)
 	st.NotJunkSenders = maps.Clone(st.NotJunkSenders)
+	st.SyncIntervals = maps.Clone(st.SyncIntervals)
 	if !fn(&st) {
 		s.settingsMu.Unlock()
 		return
@@ -521,6 +522,10 @@ func (s *Service) labelsLoseAccount(accountID string) {
 		}
 		if _, ok := st.NotJunkSenders[accountID]; ok {
 			delete(st.NotJunkSenders, accountID)
+			changed = true
+		}
+		if _, ok := st.SyncIntervals[accountID]; ok {
+			delete(st.SyncIntervals, accountID)
 			changed = true
 		}
 		out := st.Labels[:0:0]

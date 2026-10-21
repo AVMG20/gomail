@@ -266,6 +266,29 @@ func Normalize(s *models.Settings) {
 	s.AICorrectsOff = uniqueTrimmed(s.AICorrectsOff)
 	s.JunkStaysPut = uniqueTrimmed(s.JunkStaysPut)
 	s.NotJunkSenders = normalizeSenderLists(s.NotJunkSenders)
+	s.SyncIntervals = normalizeIntervals(s.SyncIntervals)
+}
+
+// SyncIntervalChoices are the background check intervals offered (minutes).
+var SyncIntervalChoices = []int{1, 5, 15, 30, 60}
+
+// normalizeIntervals keeps the valid per-account intervals (a new map).
+func normalizeIntervals(in map[string]int) map[string]int {
+	out := map[string]int{}
+	for acct, m := range in {
+		if acct = strings.TrimSpace(acct); acct != "" && m >= 1 && m <= 24*60 {
+			out[acct] = m
+		}
+	}
+	return out
+}
+
+// SyncInterval is how often (minutes) a mailbox's mail is checked.
+func SyncInterval(s models.Settings, accountID string) int {
+	if m, ok := s.SyncIntervals[accountID]; ok {
+		return m
+	}
+	return DefaultSyncInterval
 }
 
 // normalizeSenderLists lowercases and dedupes per-account address lists and

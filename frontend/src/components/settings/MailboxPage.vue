@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -25,7 +26,7 @@ import { useCalendarStore } from '@/stores/calendar'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore, type MailboxTab } from '@/stores/ui'
-import { useMailboxSettings } from './mailboxSettings'
+import { intervalLabel, SYNC_INTERVALS, useMailboxSettings } from './mailboxSettings'
 import MailboxLabels from './MailboxLabels.vue'
 import QuietLabelChips from './QuietLabelChips.vue'
 import SettingRow from './SettingRow.vue'
@@ -231,6 +232,17 @@ function labelAll() {
           </SettingRow>
           <SettingRow v-if="!s.notifications" title="Turn on desktop notifications">
             <Button size="sm" variant="outline" @click="ui.settingsTab = 'notifications'">Notification settings</Button>
+          </SettingRow>
+        </SettingSection>
+
+        <SettingSection title="Sync">
+          <SettingRow title="Check for new mail" description="How often gomail looks for new mail here in the background. Check mailboxes you care about more often.">
+            <Select :model-value="String(mb.syncInterval(a.id))" @update:model-value="(v) => mb.setSyncInterval(a!.id, Number(v))">
+              <SelectTrigger class="w-44" aria-label="Check for new mail"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="i in SYNC_INTERVALS" :key="i" :value="String(i)">{{ intervalLabel(i) }}</SelectItem>
+              </SelectContent>
+            </Select>
           </SettingRow>
         </SettingSection>
 

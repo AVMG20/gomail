@@ -12,7 +12,6 @@ import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 
 const settings = useSettingsStore()
-const intervals = [1, 5, 15, 30, 60]
 onMounted(() => {
   if (!settings.appInfo) void settings.loadAppInfo()
 })
@@ -42,14 +41,6 @@ async function checkNow() {
     </SettingSection>
 
     <SettingSection title="Sync & storage" all-mailboxes>
-      <SettingRow title="Check for new mail" description="How often gomail looks for new mail in the background.">
-        <Select :model-value="String(settings.settings.syncIntervalMinutes)" @update:model-value="(v) => settings.update({ syncIntervalMinutes: Number(v) })">
-          <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem v-for="i in intervals" :key="i" :value="String(i)">Every {{ i === 1 ? 'minute' : i === 60 ? 'hour' : `${i} minutes` }}</SelectItem>
-          </SelectContent>
-        </Select>
-      </SettingRow>
       <SettingRow title="Mail kept on this computer" stacked>
         <template #description>
           gomail copies your recent mail to this computer, so it opens instantly and works offline. Older mail isn’t deleted: it stays

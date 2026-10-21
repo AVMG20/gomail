@@ -322,6 +322,8 @@ class MockBackend {
     s.autoLabelAccounts = (s.autoLabelAccounts ?? []).filter((a) => a !== id)
     s.aiCorrectsOff = (s.aiCorrectsOff ?? []).filter((a) => a !== id)
     if (s.quietLabels) delete s.quietLabels[id]
+    if (s.notJunkSenders) delete s.notJunkSenders[id]
+    if (s.syncIntervals) delete s.syncIntervals[id]
     for (const [mid, m] of this.messages) if (m.accountId === id) this.messages.delete(mid)
     this.emit('accounts:changed')
     this.changed()
