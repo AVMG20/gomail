@@ -559,8 +559,13 @@ func (s *Service) CreateEvent(in models.EventInput) (models.CalendarEvent, error
 		s.emitCalendar(acct.ID)
 		return models.CalendarEvent{}, fmt.Errorf("creating the event failed: %w", s.calendarError(acct, err))
 	}
+	// Every reminder removed in the editor (it starts with the default): none at all.
+	off := in.ReminderMinutes != nil && len(in.ReminderMinutes) == 0
 	if created.RRule == "" && !created.IsRecurring {
 		ids, err := s.store.ApplyEvents(row, store.EventChanges{Upserts: []calendar.Event{created}})
+		if err == nil && off {
+			_ = s.store.SetRemindersOff(ids, true)
+		}
 		s.emitCalendar(acct.ID)
 		if err != nil || len(ids) == 0 {
 			return models.CalendarEvent{}, err
@@ -573,6 +578,14 @@ func (s *Service) CreateEvent(in models.EventInput) (models.CalendarEvent, error
 	}
 	s.emitCalendar(acct.ID)
 	occ, err := s.store.SeriesEvents(row.ID, created.RemoteID)
+	if err == nil && len(occ) > 0 && off {
+		ids := make([]string, 0, len(occ))
+		for _, o := range occ {
+			ids = append(ids, o.ID)
+		}
+		_ = s.store.SetRemindersOff(ids, true)
+		occ, _ = s.store.SeriesEvents(row.ID, created.RemoteID)
+	}
 	if err == nil && len(occ) > 0 {
 		first := occ[0]
 		for _, o := range occ {
@@ -701,6 +714,15 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 		s.emitCalendar(acct.ID)
 		return models.CalendarEvent{}, s.eventChangeError(acct, p, row, "saving the event failed", err)
 	}
+	// Removing every reminder means none at all; adding one undoes that. (A
+	// drag sends the event's own empty list: that changes nothing.)
+	if in.ReminderMinutes != nil && (len(in.ReminderMinutes) > 0 || len(cur.Reminders) > 0) {
+		ids := make([]string, 0, len(old))
+		for _, o := range old {
+			ids = append(ids, o.ID)
+		}
+		_ = s.store.SetRemindersOff(ids, len(in.ReminderMinutes) == 0)
+	}
 	if scope == models.ScopeThis && updated.RemoteID == cur.RemoteID && ev.RRule == "" {
 		_, _ = s.store.ApplyEvents(row, store.EventChanges{Upserts: []calendar.Event{updated}})
 	} else {
@@ -807,6 +829,13 @@ func (s *Service) SetEventReminders(id string, minutes []int, scope string) (mod
 		_ = s.store.PutEventRows(old)
 		s.emitCalendar(acct.ID)
 		return models.CalendarEvent{}, s.eventChangeError(acct, p, row, "saving the reminder failed", err)
+	}
+	ids := make([]string, 0, len(old))
+	for _, o := range old {
+		ids = append(ids, o.ID)
+	}
+	if err := s.store.SetRemindersOff(ids, len(clean) == 0); err != nil {
+		slog.Warn("reminders off mark", "err", err)
 	}
 	if target == cur.RemoteID && updated.RemoteID == cur.RemoteID {
 		// The new version (ETag) keeps the next change from looking like a conflict.

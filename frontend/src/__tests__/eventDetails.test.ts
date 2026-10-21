@@ -121,6 +121,15 @@ describe('EventDetails on an invitation', () => {
     c.unmount()
   })
 
+  it('shows the default reminder an event without its own gets, or that it has none', () => {
+    let c = mount({ ...inv, reminders: [] } as CalendarEvent, setup(true))
+    expect(q('Change reminder')?.textContent).toContain('10 minutes before (default)')
+    c.unmount()
+    c = mount({ ...inv, reminders: [], remindersOff: true } as CalendarEvent, setup(true))
+    expect(q('Change reminder')?.textContent).toContain('No reminder')
+    c.unmount()
+  })
+
   it('offers neither on a read-only calendar', () => {
     const c = mount(inv, setup(false))
     expect(q('Remove from your calendar')).toBeNull()

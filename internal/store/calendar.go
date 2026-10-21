@@ -160,7 +160,7 @@ func (s *Store) SetCalendarSync(id, state string, start, end time.Time) error {
 const eventCols = `e.id, e.calendar_id, e.account_id, e.remote_id, e.series_remote, e.ical_uid, e.title, e.start_ms, e.end_ms, e.all_day,
 	e.time_zone, e.location, e.description, e.attendees, e.organizer, e.is_organizer, e.my_response, e.meeting_url, e.is_recurring,
 	e.recurrence, e.rrule, e.status, e.reminders,
-	(e.can_edit AND coalesce((SELECT c2.can_edit FROM calendars c2 WHERE c2.id = e.calendar_id), 0)), e.updated_ms, e.etag`
+	(e.can_edit AND coalesce((SELECT c2.can_edit FROM calendars c2 WHERE c2.id = e.calendar_id), 0)), e.updated_ms, e.etag, e.reminders_off`
 
 // EventRow is a stored event with its remote ids.
 type EventRow struct {
@@ -174,16 +174,16 @@ type EventRow struct {
 func scanEvent(sc interface{ Scan(...any) error }) (EventRow, error) {
 	var e EventRow
 	var start, end, updated int64
-	var allDay, isOrg, isRec, canEdit int
+	var allDay, isOrg, isRec, canEdit, remOff int
 	var atts, org, rem string
 	err := sc.Scan(&e.ID, &e.CalendarID, &e.AccountID, &e.RemoteID, &e.SeriesRemoteID, &e.ICalUID, &e.Title, &start, &end, &allDay,
 		&e.TimeZone, &e.Location, &e.Description, &atts, &org, &isOrg, &e.MyResponse, &e.MeetingURL, &isRec,
-		&e.Recurrence, &e.RRule, &e.Status, &rem, &canEdit, &updated, &e.ETag)
+		&e.Recurrence, &e.RRule, &e.Status, &rem, &canEdit, &updated, &e.ETag, &remOff)
 	if err != nil {
 		return e, err
 	}
 	e.Start, e.End, e.UpdatedAt = fromMillis(start), fromMillis(end), fromMillis(updated)
-	e.AllDay, e.IsOrganizer, e.IsRecurring, e.CanEdit = allDay == 1, isOrg == 1, isRec == 1, canEdit == 1
+	e.AllDay, e.IsOrganizer, e.IsRecurring, e.CanEdit, e.RemindersOff = allDay == 1, isOrg == 1, isRec == 1, canEdit == 1, remOff == 1
 	e.Attendees, e.Reminders = []models.Attendee{}, []int{}
 	if atts != "" {
 		_ = json.Unmarshal([]byte(atts), &e.Attendees)
@@ -428,6 +428,19 @@ func rowToProvider(r EventRow) calendar.Event {
 		Attendees: e.Attendees, Organizer: e.Organizer, IsOrganizer: e.IsOrganizer, MyResponse: e.MyResponse, MeetingURL: e.MeetingURL,
 		IsRecurring: e.IsRecurring, Recurrence: e.Recurrence, RRule: e.RRule, Status: e.Status, Reminders: e.Reminders,
 		CanEdit: e.CanEdit, Updated: e.UpdatedAt, ETag: r.ETag}
+}
+
+// SetRemindersOff marks events whose reminders you turned off in gomail
+// (or clears the mark). Syncs keep it.
+func (s *Store) SetRemindersOff(ids []string, off bool) error {
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		for _, id := range ids {
+			if _, err := tx.Exec(`UPDATE events SET reminders_off = ? WHERE id = ?`, boolInt(off), id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // ToProvider converts a stored event to the provider form.

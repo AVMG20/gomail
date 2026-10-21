@@ -70,8 +70,11 @@ type CalendarEvent struct {
 	RRule       string     `json:"rrule"`      // RRULE when known (always for series created in gomail)
 	Status      string     `json:"status"`     // confirmed | tentative | cancelled
 	Reminders   []int      `json:"reminders"`  // minutes before start
-	CanEdit     bool       `json:"canEdit"`    // the calendar is writable and we may change this event
-	UpdatedAt   time.Time  `json:"updatedAt"`
+	// RemindersOff: you chose "No reminder" in gomail, so the default
+	// reminder (Settings) doesn't apply to this event either.
+	RemindersOff bool      `json:"remindersOff"`
+	CanEdit      bool      `json:"canEdit"` // the calendar is writable and we may change this event
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // Recurrence frequencies for EventInput.

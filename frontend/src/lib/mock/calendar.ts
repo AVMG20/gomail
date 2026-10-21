@@ -278,11 +278,12 @@ export class MockCalendar {
     this.canEdit(ev.calendarId)
     const reminders = [...new Set(minutes)].sort((a, b) => a - b)
     const master = this.masters.get(id) ?? (scope === 'series' ? this.masters.get(splitOccurrence(id)[0]) : undefined)
+    const remindersOff = !reminders.length
     if (master) {
-      master.reminders = reminders
-      for (const [k, o] of this.overrides) if (k.startsWith(`${master.id}_`)) o.reminders = [...reminders]
+      Object.assign(master, { reminders, remindersOff })
+      for (const [k, o] of this.overrides) if (k.startsWith(`${master.id}_`)) Object.assign(o, { reminders: [...reminders], remindersOff })
     } else {
-      this.overrides.set(id, { ...ev, reminders })
+      this.overrides.set(id, { ...ev, reminders, remindersOff })
     }
     this.onChange(ev.accountId)
     return this.get(id)

@@ -17,6 +17,7 @@ import type { AttendeeResponse, CalendarEvent } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useCalendarStore } from '@/stores/calendar'
 import { useComposeStore } from '@/stores/compose'
+import { useSettingsStore } from '@/stores/settings'
 import { openEditor } from './editorState'
 import { askConfirm, askScope } from './scopePrompt'
 
@@ -25,6 +26,7 @@ const emit = defineEmits<{ close: [] }>()
 const cal = useCalendarStore()
 const accounts = useAccountsStore()
 const compose = useComposeStore()
+const settings = useSettingsStore()
 
 // Live copy (RSVP / edits update the store while the card is open).
 const ev = computed(() => cal.events.find((e) => e.id === props.event.id) ?? props.event)
@@ -52,8 +54,11 @@ const accountHint = computed(() => {
   return email.toLowerCase() === (calendar.value?.name ?? '').toLowerCase() ? '' : email
 })
 const reminderText = computed(() => [...ev.value.reminders].sort((a, b) => a - b).map(formatReminder).join(', '))
+// Without reminders of its own an event gets the default one (Settings → Calendar), unless you chose "No reminder".
+const defaultReminder = computed(() => settings.settings?.calendarDefaultReminder ?? 10)
+const reminderLabel = computed(() => reminderText.value || (ev.value.remindersOff ? 'No reminder' : `${formatReminder(defaultReminder.value)} (default)`))
 // One reminder picked from the list (Outlook keeps only one); "-1" = none.
-const reminderValue = computed(() => (ev.value.reminders.length === 1 ? String(ev.value.reminders[0]) : ev.value.reminders.length ? '' : '-1'))
+const reminderValue = computed(() => (ev.value.reminders.length === 1 ? String(ev.value.reminders[0]) : ev.value.remindersOff ? '-1' : ''))
 const reminderChoices = computed(() => [...new Set([...REMINDER_CHOICES, 240, 480, 10080, ...ev.value.reminders])].sort((a, b) => a - b))
 
 async function setReminder(v: string) {
@@ -189,7 +194,7 @@ function emailGuests() {
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
               <button type="button" class="hover:bg-accent -mx-1.5 -my-0.5 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-left" aria-label="Change reminder">
-                <span :class="!reminderText && 'text-muted-foreground'">{{ reminderText || 'Add a reminder' }}</span>
+                <span :class="!reminderText && 'text-muted-foreground'">{{ reminderLabel }}</span>
                 <ChevronDownIcon class="text-muted-foreground size-3.5 shrink-0" />
               </button>
             </DropdownMenuTrigger>

@@ -92,6 +92,8 @@ export interface CalendarEvent {
   status: 'confirmed' | 'tentative' | 'cancelled' | string
   /** Minutes before the start. */
   reminders: number[]
+  /** You chose "No reminder" in gomail: the default reminder doesn't apply either. */
+  remindersOff?: boolean
   /** Human summary of the recurrence ("Weekly on Monday"), from the backend. */
   recurrenceText?: string
   /** Backend: you can edit this event (organizer on an editable calendar). */

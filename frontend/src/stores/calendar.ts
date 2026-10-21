@@ -46,7 +46,7 @@ export const useCalendarStore = defineStore('calendar', () => {
   }
   /** Your own copy of any event on a writable calendar, invitations too: its reminders, and removing it. */
   function canManageEvent(ev: CalendarEvent): boolean {
-    return !!calendarMap.value.get(ev.calendarId)?.canEdit
+    return canEditEvent(ev) || !!calendarMap.value.get(ev.calendarId)?.canEdit
   }
 
   const available = computed(() => hasMethod('ListCalendars'))
@@ -345,7 +345,7 @@ export const useCalendarStore = defineStore('calendar', () => {
     const key = ev.seriesId || ev.id
     const hit = (e: CalendarEvent) => (series ? (e.seriesId || e.id) === key : e.id === ev.id)
     const before = events.value.filter(hit)
-    events.value = events.value.map((e) => (hit(e) ? { ...e, reminders: [...minutes] } : e))
+    events.value = events.value.map((e) => (hit(e) ? { ...e, reminders: [...minutes], remindersOff: !minutes.length } : e))
     try {
       const saved = await api.setEventReminders(ev.id, minutes, scope)
       if (series) await fetchEvents()

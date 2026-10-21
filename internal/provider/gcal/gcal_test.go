@@ -99,8 +99,13 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 				"start": map[string]any{"dateTime": "2026-01-05T09:00:00+01:00"}, "end": map[string]any{"dateTime": "2026-01-05T09:15:00+01:00"},
 				"organizer": map[string]any{"email": "me@gmail.com", "self": true}})
 		case r.URL.Path == "/calendars/me@gmail.com/events/single" && r.Method == "GET":
-			write(map[string]any{"id": "single", "attendees": []any{map[string]any{"email": "boss@x.com", "organizer": true},
-				map[string]any{"email": "me@gmail.com", "self": true, "responseStatus": "needsAction"}}})
+			write(map[string]any{"id": "single", "organizer": map[string]any{"email": "boss@x.com"},
+				"attendees": []any{map[string]any{"email": "boss@x.com", "organizer": true},
+					map[string]any{"email": "me@gmail.com", "self": true, "responseStatus": "needsAction"}}})
+		case r.URL.Path == "/calendars/me@gmail.com/events/x" && r.Method == "GET":
+			write(map[string]any{"id": "x", "organizer": map[string]any{"email": "me@gmail.com", "self": true}})
+		case r.URL.Path == "/calendars/me@gmail.com/events/gone" && r.Method == "GET":
+			w.WriteHeader(410)
 		case r.URL.Path == "/calendars/me@gmail.com/events" && r.Method == "POST":
 			if q.Get("sendUpdates") != "all" || q.Get("conferenceDataVersion") != "1" {
 				t.Errorf("insert query %v", q)
@@ -123,6 +128,10 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 			}
 			write(map[string]any{"id": "single", "summary": "Lunch"})
 		case r.Method == "DELETE":
+			// Cancelling your own event tells the guests; removing an invitation tells nobody.
+			if want := map[bool]string{true: "none", false: "all"}[strings.HasSuffix(r.URL.Path, "/single")]; q.Get("sendUpdates") != want {
+				t.Errorf("delete %s sendUpdates=%q, want %q", r.URL.Path, q.Get("sendUpdates"), want)
+			}
 			if r.Header.Get("If-Match") == `"stale"` {
 				w.WriteHeader(412)
 				write(map[string]any{"error": map[string]any{"code": 412, "message": "Precondition Failed"}})
@@ -358,5 +367,45 @@ func TestVideoCalls(t *testing.T) {
 	got := c.toEvent(gEvent{ID: "z", Location: "https://us02web.zoom.us/j/123", Start: gTime{DateTime: "2026-10-20T10:00:00Z"}, End: gTime{DateTime: "2026-10-20T11:00:00Z"}}, me)
 	if got.MeetingURL != "https://us02web.zoom.us/j/123" {
 		t.Fatalf("detected %q", got.MeetingURL)
+	}
+}
+
+func TestSetRemindersKeepsWhatItDoesntShow(t *testing.T) {
+	var patches []map[string]any
+	events := map[string]map[string]any{
+		// An email reminder the card can't show must survive.
+		"mixed": {"id": "mixed", "reminders": map[string]any{"useDefault": false, "overrides": []any{
+			map[string]any{"method": "email", "minutes": 1440}, map[string]any{"method": "popup", "minutes": 10}}}},
+		"defaults": {"id": "defaults", "reminders": map[string]any{"useDefault": true}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		switch r.Method {
+		case "GET":
+			json.NewEncoder(w).Encode(events[id])
+		case "PATCH":
+			if r.URL.Query().Get("sendUpdates") != "none" {
+				t.Errorf("patch notifies: %v", r.URL.Query())
+			}
+			var b map[string]any
+			json.NewDecoder(r.Body).Decode(&b)
+			patches = append(patches, b)
+			json.NewEncoder(w).Encode(map[string]any{"id": id, "reminders": b["reminders"]})
+		}
+	}))
+	defer srv.Close()
+	c := New(httpx.StaticToken("tok"), srv.URL)
+	cal := calendar.Calendar{RemoteID: "me@gmail.com", CanEdit: true, DefaultReminders: []int{30}}
+	ev, err := c.SetReminders(context.Background(), cal, "mixed", []int{60})
+	if err != nil || len(ev.Reminders) != 1 || ev.Reminders[0] != 60 {
+		t.Fatalf("mixed: %+v %v", ev.Reminders, err)
+	}
+	over := patches[0]["reminders"].(map[string]any)["overrides"].([]any)
+	if len(over) != 2 || over[0].(map[string]any)["method"] != "email" || len(patches[0]) != 1 {
+		t.Fatalf("patch %v", patches[0])
+	}
+	// Picking the calendar's own default changes nothing.
+	if ev, err := c.SetReminders(context.Background(), cal, "defaults", []int{30}); err != nil || len(patches) != 1 || ev.Reminders[0] != 30 {
+		t.Fatalf("defaults: %+v %v, %d patches", ev.Reminders, err, len(patches))
 	}
 }

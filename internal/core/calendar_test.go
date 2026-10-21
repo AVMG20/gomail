@@ -730,3 +730,53 @@ func TestRemoveMeetingLink(t *testing.T) {
 		t.Fatal("refused removal still changed the event")
 	}
 }
+
+func TestNoReminderSilencesTheDefault(t *testing.T) {
+	ui := &fakeUI{}
+	s, err := New(Options{DataDir: t.TempDir(), Demo: true, UI: ui, Secrets: secrets.NewMemory(), Online: func(context.Context) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.SyncCalendars(""); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := s.ListEvents(time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 3))
+	target, ok := findEvent(evs, "Sprint planning")
+	if !ok {
+		t.Fatal("no event")
+	}
+	ev, err := s.SetEventReminders(target.ID, nil, models.ScopeThis)
+	if err != nil || len(ev.Reminders) != 0 || !ev.RemindersOff {
+		t.Fatalf("off: %+v %v", ev, err)
+	}
+	// The mark survives a sync (the provider just reports no reminders).
+	if err := s.SyncCalendars(""); err != nil {
+		t.Fatal(err)
+	}
+	old := nowFunc
+	defer func() { nowFunc = old }()
+	nowFunc = func() time.Time { return target.Start.Add(-8 * time.Minute) } // the 10-minute default would be due
+	s.checkReminders()
+	notified := func() (n int) {
+		ui.mu.Lock()
+		defer ui.mu.Unlock()
+		for _, x := range ui.notified {
+			if x == target.Title {
+				n++
+			}
+		}
+		return n
+	}
+	if notified() != 0 {
+		t.Fatal("default reminder shown for an event set to no reminder")
+	}
+	if ev, err := s.SetEventReminders(target.ID, []int{5}, models.ScopeThis); err != nil || ev.RemindersOff {
+		t.Fatalf("on: %+v %v", ev, err)
+	}
+	nowFunc = func() time.Time { return target.Start.Add(-3 * time.Minute) }
+	s.checkReminders()
+	if notified() != 1 {
+		t.Fatalf("%d reminders after setting one", notified())
+	}
+}

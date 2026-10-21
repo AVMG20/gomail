@@ -324,6 +324,12 @@ export interface CalendarEvent {
     "reminders": number[] | null;
 
     /**
+     * RemindersOff: you chose "No reminder" in gomail, so the default
+     * reminder (Settings) doesn't apply to this event either.
+     */
+    "remindersOff": boolean;
+
+    /**
      * the calendar is writable and we may change this event
      */
     "canEdit": boolean;
