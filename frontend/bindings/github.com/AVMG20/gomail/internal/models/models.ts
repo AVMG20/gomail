@@ -1270,15 +1270,16 @@ export interface Settings {
     "replyQuote": string;
 
     /**
-     * EmailBackground is "auto" (follow the theme, dark bodies in dark mode
-     * where the email allows it) or "light" (always render emails on white).
+     * EmailBackground in dark mode: "auto" (plain mail follows the theme, designed
+     * mail stays on white), "light" (always render emails on white) or "dark"
+     * (experimental: also show designed mail dark by inverting its colors, photos excepted).
      * default "auto"
      */
     "emailBackground": string;
 
     /**
-     * DarkenDesignedMail (experimental): in dark mode, also show designed (white)
-     * mail dark by inverting its colors, photos excepted. Default false.
+     * DarkenDesignedMail is the older switch for EmailBackground "dark": Normalize
+     * migrates it and clears it. Kept for settings from older versions; the UI no longer uses it.
      */
     "darkenDesignedMail": boolean;
 
