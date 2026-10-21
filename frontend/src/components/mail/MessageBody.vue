@@ -11,22 +11,40 @@
 //  * A CSP meta tag inside the frame blocks remote loads unless images are allowed.
 //  * Remote images are stripped unless allowed; a banner offers to load them.
 //  * Links go through followMailLink(): confirm, then the system browser.
+//  * Junk that looks like phishing gets a warning first; images stay off until it is dismissed.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
-import { ImageOffIcon, LoaderIcon } from '@lucide/vue'
+import { ImageOffIcon, LoaderIcon, ShieldAlertIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { shade } from '@/lib/color'
 import { isSimpleHtml } from '@/lib/emailTheme'
 import { linkify } from '@/lib/format'
+import { checkPhishing } from '@/lib/phishing'
 import { followMailLink } from '@/composables/useLinkPrompt'
 import { themeState } from '@/lib/theme'
 import type { Message } from '@/lib/types'
+import { useAccountsStore } from '@/stores/accounts'
+import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 
 const props = defineProps<{ message: Message; allowRemote: boolean }>()
 const emit = defineEmits<{ loadImages: []; trustSender: [] }>()
 
 const settings = useSettingsStore()
+const accounts = useAccountsStore()
+const mail = useMailStore()
+
+const phishing = computed(() => checkPhishing(
+  props.message,
+  accounts.accountMap.get(props.message.accountId)?.email ?? '',
+  accounts.accounts.map((a) => a.email),
+))
+/** The warning is up: it replaces the images banner, and images stay off until it is dismissed. */
+const warned = computed(() => phishing.value.suspicious && !mail.phishingDismissed.has(props.message.id))
+const allowRemote = computed(() => props.allowRemote && !warned.value)
+function dismissWarning() {
+  mail.phishingDismissed = new Set([...mail.phishingDismissed, props.message.id])
+}
 /** Dark theme + "Auto" email background: simple mail follows the app theme. */
 const darkAuto = computed(() => themeState.value.dark && (settings.settings?.emailBackground ?? 'auto') !== 'light')
 const forceLight = computed(() => themeState.value.dark && !darkAuto.value)
@@ -131,7 +149,7 @@ const senderEmail = computed(() => props.message.from?.email?.trim() ?? '')
 const isHtml = computed(() => !!props.message.bodyHtml.trim())
 
 /** Remote content allowed and present: keep the stripped render until the full body arrives (one reload, not two). */
-const remoteOn = computed(() => props.allowRemote && !props.message.remoteContentBlocked)
+const remoteOn = computed(() => allowRemote.value && !props.message.remoteContentBlocked)
 const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml, remoteOn.value) : { html: '', blocked: 0 }))
 // Judged on the original HTML (DOMParser documents are inert), so loading remote images never flips the theme.
 const simple = computed(() => isHtml.value && isSimpleHtml(props.message.bodyHtml))
@@ -246,7 +264,7 @@ function onFrameClick(e: MouseEvent) {
   e.preventDefault()
   e.stopPropagation()
   if (e.type === 'auxclick' && e.button !== 1) return
-  followMailLink(href, linkText(a))
+  followMailLink(href, linkText(a), warned.value)
 }
 
 function onLoad() {
@@ -278,7 +296,7 @@ function onTextClick(e: MouseEvent) {
   if (!a) return
   e.preventDefault()
   if (e.type === 'auxclick' && e.button !== 1) return
-  followMailLink(a.getAttribute('href') ?? '', a.textContent ?? '')
+  followMailLink(a.getAttribute('href') ?? '', a.textContent ?? '', warned.value)
 }
 
 // A new document gets a new <iframe>: WebKit doesn't reliably reload a frame (or fire
@@ -296,8 +314,19 @@ onBeforeUnmount(() => ro?.disconnect())
 
 <template>
   <div>
+    <div v-if="warned" class="bg-destructive/10 text-destructive border-destructive/25 mb-3 flex gap-2.5 rounded-md border px-3 py-2.5 text-xs" role="alert" data-testid="phishing-warning">
+      <ShieldAlertIcon class="mt-px size-4 shrink-0" />
+      <div class="min-w-0 flex-1 space-y-1.5">
+        <p class="text-[13px] font-semibold">This looks like phishing</p>
+        <ul class="text-foreground/80 list-disc space-y-0.5 pl-4 leading-relaxed">
+          <li v-for="r in phishing.reasons" :key="r" class="break-words">{{ r }}</li>
+        </ul>
+        <p class="text-foreground/80 leading-relaxed">Don’t reply, and don’t enter passwords or personal details through its links. Images stay hidden.</p>
+      </div>
+      <Button variant="ghost" size="xs" class="text-foreground shrink-0 self-start" @click="dismissWarning">I trust this message</Button>
+    </div>
     <div
-      v-if="isHtml && (blockedCount > 0 || message.remoteContentBlocked || (message.remoteContentBlocked === undefined && message.hasRemoteContent)) && !allowRemote"
+      v-else-if="isHtml && (blockedCount > 0 || message.remoteContentBlocked || (message.remoteContentBlocked === undefined && message.hasRemoteContent)) && !allowRemote"
       class="bg-muted/60 text-muted-foreground mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-3 py-1.5 text-xs"
     >
       <ImageOffIcon class="size-3.5 shrink-0" />

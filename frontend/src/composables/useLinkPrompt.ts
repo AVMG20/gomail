@@ -15,6 +15,8 @@ export interface LinkPrompt {
   textHost: string
   mismatch: boolean
   lookalike: boolean
+  /** The link is in mail that looks like phishing: always ask, never offer "Always allow". */
+  phishing?: boolean
 }
 
 /** The link waiting for "Open link?" (one at a time; a new click replaces it). */
@@ -28,8 +30,9 @@ async function openInBrowser(url: string) {
   }
 }
 
-/** Handle a click on a link inside a message body. text: the link's visible text. */
-export function followMailLink(href: string, text = '') {
+/** Handle a click on a link inside a message body. text: the link's visible text.
+ *  phishing: the mail looks like phishing (even trusted domains ask first). */
+export function followMailLink(href: string, text = '', phishing = false) {
   const settings = useSettingsStore()
   const d = decideLink(href, text, settings.settings?.trustedLinkDomains)
   switch (d.kind) {
@@ -42,10 +45,14 @@ export function followMailLink(href: string, text = '') {
       toast.error('This link can’t be opened', { description: 'Only web (http and https) and email links open from messages.' })
       return
     case 'open':
+      if (phishing) {
+        linkPrompt.value = { url: d.url, host: d.host, textHost: '', mismatch: false, lookalike: false, phishing }
+        return
+      }
       void openInBrowser(d.url)
       return
     case 'confirm':
-      linkPrompt.value = { url: d.url, host: d.host, textHost: d.textHost, mismatch: d.mismatch, lookalike: d.lookalike }
+      linkPrompt.value = { url: d.url, host: d.host, textHost: d.textHost, mismatch: d.mismatch, lookalike: d.lookalike, phishing }
   }
 }
 
@@ -54,7 +61,7 @@ export function confirmLink(always: boolean) {
   const p = linkPrompt.value
   linkPrompt.value = null
   if (!p) return
-  if (always) {
+  if (always && !p.phishing) {
     const settings = useSettingsStore()
     const list = settings.settings?.trustedLinkDomains ?? []
     void settings.update({ trustedLinkDomains: normalizeDomains([...list, p.host]) }, 0)

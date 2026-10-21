@@ -113,6 +113,8 @@ export const useMailStore = defineStore('mail', () => {
   const threadRev = ref(0)
   /** Conversations (thread ids) where the user chose "Load images" this session. */
   const remoteAllowed = shallowRef<Set<string>>(new Set())
+  /** Messages whose phishing warning was dismissed ("I trust this message"), this session. */
+  const phishingDismissed = shallowRef<Set<string>>(new Set())
   const addressBook = shallowRef<Map<string, Address>>(new Map())
 
   const labelFilter = computed<Required<LabelFilter>>(() => {
@@ -1047,7 +1049,7 @@ export const useMailStore = defineStore('mail', () => {
 
   return {
     mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, olderBeyondDepth, similar, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
-    openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed,
+    openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed, phishingDismissed,
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
