@@ -11,8 +11,9 @@ attaches these files to the GitHub release:
 
 ## Cutting a release
 
-1. Make sure `main` is green in CI: `go vet`, `go test` and `go build` on all three
-   OSes, plus the frontend build.
+1. Make sure `main` is healthy: run `go vet ./...`, `go test ./...` and the frontend
+   build (`npm test && npm run build` in `frontend/`) locally. There is no CI on pushes;
+   only the release workflow runs.
 2. Pick a version following semver, e.g. `v1.4.0`. The tag without the `v` becomes
    `main.version`, which the About screen shows (`GetAppInfo`). The workflow also writes
    it into the platform metadata (Info.plist, Windows version info, nfpm).
