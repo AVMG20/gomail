@@ -357,6 +357,7 @@ func (s *Service) EnableCalendar(accountID string) (models.Account, error) {
 		}
 		s.forgetClients(acct.ID)
 		_ = s.store.SetNeedsReauth(acct.ID, false)
+		defer s.deviceSyncSignedIn(acct.ID)
 	}
 	if err := s.store.SetCalendarConsent(acct.ID, true); err != nil {
 		return acct, err

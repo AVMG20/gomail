@@ -27,6 +27,8 @@ export type {
     Contact,
     DatabaseStatus,
     DefaultPrompts,
+    DeviceSyncConnect,
+    DeviceSyncStatus,
     EventDraft,
     EventInput,
     EventRecurrence,

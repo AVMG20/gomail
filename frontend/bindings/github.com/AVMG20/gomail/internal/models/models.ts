@@ -519,6 +519,66 @@ export interface DefaultPrompts {
 }
 
 /**
+ * DeviceSyncConnect is what the user enters to connect a computer.
+ */
+export interface DeviceSyncConnect {
+    /**
+     * "" = the default server
+     */
+    "serverUrl": string;
+    "username": string;
+    "passphrase": string;
+
+    /**
+     * Create makes a new account on the server (the first computer);
+     * otherwise the computer joins an existing one and takes its settings.
+     */
+    "create": boolean;
+
+    /**
+     * for servers that need one for new accounts
+     */
+    "signupCode": string;
+
+    /**
+     * IncludeSecrets syncs sign-ins and API keys (a new account; a joining
+     * computer follows the account's choice).
+     */
+    "includeSecrets": boolean;
+}
+
+/**
+ * DeviceSyncStatus describes syncing settings, labels and sign-ins between
+ * computers through a gomail-sync server (Settings → Sync).
+ */
+export interface DeviceSyncStatus {
+    /**
+     * false in demo mode
+     */
+    "available": boolean;
+    "connected": boolean;
+    "serverUrl": string;
+    "username": string;
+
+    /**
+     * sign-ins and API keys sync too
+     */
+    "includeSecrets": boolean;
+    "syncing": boolean;
+    "lastSyncAt": string | null;
+
+    /**
+     * the last round's problem ("" = fine)
+     */
+    "error": string;
+
+    /**
+     * DefaultServerURL is the server suggested when connecting.
+     */
+    "defaultServerUrl": string;
+}
+
+/**
  * EventDraft is an event described in natural language, as parsed by the AI
  * model (ParseEventText). Dates and times are local wall-clock values; empty
  * fields were not mentioned.

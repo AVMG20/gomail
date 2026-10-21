@@ -106,6 +106,7 @@ type Service struct {
 	drafts   draftSaver
 	searches remoteSearches
 	attCache *attCache
+	dsync    devSync
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -154,6 +155,7 @@ func New(opts Options) (*Service, error) {
 		st.Close()
 		return nil, err
 	}
+	s.initDeviceSync()
 	s.ai = ai.New(opts.OpenRouterBase, s.openRouterKey, ai.CacheFile(opts.DataDir))
 	s.ai.OnUsage = s.recordUsage
 	s.engine = syncer.New(syncer.Config{
@@ -210,6 +212,9 @@ func (s *Service) Start() {
 		}
 		s.engine.Start()
 	})
+	if !s.opts.Demo {
+		s.dsync.engine.Start(s.ctx)
+	}
 	s.goBG(s.maintenanceLoop)
 	s.goBG(s.updateLoop)
 	s.goBG(s.reminderLoop)
@@ -288,6 +293,7 @@ func (s *Service) Close() {
 	s.CancelAddAccount()
 	s.jobs.cancelAll()
 	s.engine.Stop()
+	s.dsync.engine.Stop()
 	done := make(chan struct{})
 	go func() { s.bg.Wait(); close(done) }()
 	select {
@@ -316,7 +322,10 @@ func (s *Service) goBG(f func()) {
 	}()
 }
 
-func (s *Service) emit(event string, data any) { s.ui.Emit(event, data) }
+func (s *Service) emit(event string, data any) {
+	s.ui.Emit(event, data)
+	s.deviceSyncChanged(event, data)
+}
 
 // notifyingEmitter forwards engine events to the UI and shows a desktop
 // notification for new mail when enabled.
@@ -324,6 +333,7 @@ type notifyingEmitter struct{ s *Service }
 
 func (n notifyingEmitter) Emit(event string, data any) {
 	n.s.ui.Emit(event, data)
+	n.s.deviceSyncChanged(event, data)
 	if ns, ok := data.(models.NetworkStatus); ok && event == models.EventNetworkStatus && ns.Online {
 		n.s.retryDrafts() // autosaves that failed while offline
 	}
@@ -621,6 +631,7 @@ func (s *Service) afterSignIn(accountID string) (models.Account, error) {
 	_ = s.store.SetNeedsReauth(accountID, false)
 	_ = s.store.SetSyncResult(accountID, time.Time{}, "")
 	s.engine.ResetBackoff(accountID)
+	s.deviceSyncSignedIn(accountID)
 	s.emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 	s.goBG(func() { _ = s.engine.SyncNow(s.ctx, accountID) })
 	return s.store.Account(accountID)

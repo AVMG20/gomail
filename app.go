@@ -949,6 +949,55 @@ func (m *MailService) ImportBackup() (models.RestoreSummary, error) {
 	return uiResult(s.ImportBackup())
 }
 
+// ---- Sync between computers ----
+
+// GetDeviceSyncStatus describes the connection to the sync server.
+func (m *MailService) GetDeviceSyncStatus() (models.DeviceSyncStatus, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.DeviceSyncStatus{}, err
+	}
+	return s.DeviceSyncStatus(), nil
+}
+
+// ConnectDeviceSync signs in to (or with req.Create, creates) a sync
+// account; this computer then takes the synced settings and adds its own.
+// The passphrase is only used to derive keys, never stored.
+func (m *MailService) ConnectDeviceSync(req models.DeviceSyncConnect) (models.DeviceSyncStatus, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.DeviceSyncStatus{}, err
+	}
+	return uiResult(s.ConnectDeviceSync(req))
+}
+
+// DisconnectDeviceSync stops syncing this computer (its data stays).
+func (m *MailService) DisconnectDeviceSync() error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.DisconnectDeviceSync())
+}
+
+// SyncDevicesNow syncs with the other computers now and waits for it.
+func (m *MailService) SyncDevicesNow() (models.DeviceSyncStatus, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.DeviceSyncStatus{}, err
+	}
+	return uiResult(s.SyncDevicesNow())
+}
+
+// SetDeviceSyncSecrets turns syncing of sign-ins and API keys on or off.
+func (m *MailService) SetDeviceSyncSecrets(on bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetDeviceSyncSecrets(on))
+}
+
 // GetDefaultPrompts returns the built-in grammar prompt and classifier
 // instructions (for "Reset to default").
 func (m *MailService) GetDefaultPrompts() models.DefaultPrompts { return core.DefaultPrompts() }

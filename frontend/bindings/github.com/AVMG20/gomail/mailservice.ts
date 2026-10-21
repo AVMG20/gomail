@@ -101,6 +101,15 @@ export function ClassifyQuery(q: models$0.ListQuery, onlyUnlabeled: boolean, inc
 }
 
 /**
+ * ConnectDeviceSync signs in to (or with req.Create, creates) a sync
+ * account; this computer then takes the synced settings and adds its own.
+ * The passphrase is only used to derive keys, never stored.
+ */
+export function ConnectDeviceSync(req: models$0.DeviceSyncConnect): $CancellablePromise<models$0.DeviceSyncStatus> {
+    return $Call.ByID(1082586857, req);
+}
+
+/**
  * CreateEvent creates an event (invitations are sent to attendees).
  */
 export function CreateEvent($in: models$0.EventInput): $CancellablePromise<models$0.CalendarEvent> {
@@ -127,6 +136,13 @@ export function DeleteEvent(id: string, scope: string): $CancellablePromise<void
  */
 export function DeleteFolder(folderID: string): $CancellablePromise<void> {
     return $Call.ByID(1880840925, folderID);
+}
+
+/**
+ * DisconnectDeviceSync stops syncing this computer (its data stays).
+ */
+export function DisconnectDeviceSync(): $CancellablePromise<void> {
+    return $Call.ByID(2827787317);
 }
 
 /**
@@ -202,6 +218,13 @@ export function GetDefaultGrammarPrompt(): $CancellablePromise<string> {
  */
 export function GetDefaultPrompts(): $CancellablePromise<models$0.DefaultPrompts> {
     return $Call.ByID(338704894);
+}
+
+/**
+ * GetDeviceSyncStatus describes the connection to the sync server.
+ */
+export function GetDeviceSyncStatus(): $CancellablePromise<models$0.DeviceSyncStatus> {
+    return $Call.ByID(4239171637);
 }
 
 /**
@@ -543,6 +566,13 @@ export function SetCalendarVisible(calendarID: string, visible: boolean): $Cance
 }
 
 /**
+ * SetDeviceSyncSecrets turns syncing of sign-ins and API keys on or off.
+ */
+export function SetDeviceSyncSecrets(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3044303836, on);
+}
+
+/**
  * SetEventReminders sets your own reminders of an event (minutes before the
  * start; empty = none), also on invitations; scope is "this" or "series".
  */
@@ -574,6 +604,13 @@ export function SummarizeMessage(id: string): $CancellablePromise<string> {
  */
 export function SyncCalendars(accountID: string): $CancellablePromise<void> {
     return $Call.ByID(2946959160, accountID);
+}
+
+/**
+ * SyncDevicesNow syncs with the other computers now and waits for it.
+ */
+export function SyncDevicesNow(): $CancellablePromise<models$0.DeviceSyncStatus> {
+    return $Call.ByID(1455935036);
 }
 
 /**
