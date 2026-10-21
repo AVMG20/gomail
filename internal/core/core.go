@@ -79,6 +79,10 @@ type Service struct {
 	engine  *syncer.Engine
 	ai      *ai.Client
 
+	// saveMu serializes whole-settings writes: SaveSettings, and the
+	// read-modify-write of editSettings and updateLabels, so none of them
+	// overwrites another's change with a stale copy.
+	saveMu     sync.Mutex
 	settingsMu sync.Mutex
 	settings   models.Settings
 	// labelsRev counts label changes made outside SaveSettings (sync
@@ -646,7 +650,8 @@ func (s *Service) CancelAddAccount() {
 
 // RemoveAccount deletes the account, its tokens and all local data.
 func (s *Service) RemoveAccount(accountID string) error {
-	if _, err := s.store.Account(accountID); err != nil {
+	acct, err := s.store.Account(accountID)
+	if err != nil {
 		return errors.New("account not found")
 	}
 	if err := s.secrets.Delete(auth.TokenKey(accountID)); err != nil {
@@ -655,6 +660,7 @@ func (s *Service) RemoveAccount(accountID string) error {
 	if err := s.store.DeleteAccount(accountID); err != nil {
 		return err
 	}
+	s.deviceSyncRemoved(acct)
 	s.provMu.Lock()
 	delete(s.providers, accountID)
 	s.provMu.Unlock()

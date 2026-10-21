@@ -1,6 +1,8 @@
 package core
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -33,7 +35,8 @@ import (
 //   - "accounts": the mailboxes (name, color, signature, order, calendar
 //     switches and calendar choices) and, while "Sync sign-ins and API
 //     keys" is on, their sign-ins, the OpenRouter key and the OAuth app
-//     credentials. Removing a mailbox removes it everywhere.
+//     credentials. Removing a mailbox removes it everywhere, with its
+//     sign-in and everything synced about it.
 //   - "settings": the app settings in syncedSettings, and the per-mailbox
 //     choices in mailboxSettings. Settings in deviceSettings stay on each
 //     computer.
@@ -52,16 +55,17 @@ const (
 	docMarksPrefix = "marks-"
 
 	labelMapKey   = devsync.StatePrefix + "labelmap"
+	removedKey    = devsync.StatePrefix + "removed"
 	junkSyncID    = "*junk"
 	syncedAccount = "Added from your other computer. Sign in to finish."
 )
 
 // syncedSettings are the app settings (JSON names) that sync.
 var syncedSettings = []string{
-	"theme", "density", "showRemoteImages", "primaryColor", "radius", "notifications", "conversationView",
-	"undoSendSeconds", "markReadMode", "readingPane", "replyQuote", "emailBackground",
+	"theme", "density", "showRemoteImages", "primaryColor", "radius", "conversationView",
+	"undoSendSeconds", "markReadMode", "replyQuote", "emailBackground",
 	"calendarWeekStart", "calendarTimeFormat", "calendarDefaultView", "calendarDefaultDuration", "calendarShowDeclined",
-	"calendarDefaultReminder", "calendarNotifications", "aiDailyBudgetUsd", "checkUpdates",
+	"calendarDefaultReminder", "aiDailyBudgetUsd", "checkUpdates",
 	"trustedLinkDomains", "trustedImageSenders",
 	"openRouterModel", "textAIReasoning", "classifierModel", "eventAIModel", "eventAIReasoning",
 	"importProviderLabels", "classifyThreshold", "classifyRemoveThreshold", "aiCorrectsProviderLabels",
@@ -69,10 +73,12 @@ var syncedSettings = []string{
 }
 
 // deviceSettings stay on each computer: they depend on its screen, disk,
-// battery or desktop.
+// battery or desktop, or on where it is (notifications: a work laptop and
+// a home computer often want different ones).
 var deviceSettings = []string{
 	"zoom", "launchAtLogin", "showInTray", "closeToTray", "syncDepthDays", "backfillPaused",
 	"syncIntervalMinutes", "syncIntervals", "deviceSyncInterval",
+	"notifications", "calendarNotifications", "readingPane",
 }
 
 // otherSettings sync elsewhere (labels, per mailbox, secrets) or not at
@@ -95,6 +101,9 @@ type devSync struct {
 	labelMap map[string]string // "<mailbox>/<sync id>" -> local label id
 	loaded   bool
 	resigned map[string]bool // mailboxes signed in again: report their new sign-in
+	// removed: mailboxes removed here while syncing. What synced about
+	// them is deleted on the server too (until one is added again).
+	removed map[string]bool
 }
 
 func (s *Service) initDeviceSync() {
@@ -131,6 +140,54 @@ func (s *Service) deviceSyncOnline(event string, data any) {
 	if ns, ok := data.(models.NetworkStatus); ok && event == models.EventNetworkStatus && ns.Online && s.dsync.engine != nil {
 		s.dsync.engine.Kick()
 	}
+}
+
+// deviceSyncRemoved records a mailbox removed while syncing, so its sign-in
+// and synced state are deleted on the server too.
+func (s *Service) deviceSyncRemoved(acct models.Account) {
+	if s.dsync.engine == nil || !s.dsync.engine.Connected() {
+		return
+	}
+	s.dsync.mu.Lock()
+	defer s.dsync.mu.Unlock()
+	s.loadRemovedLocked()
+	s.dsync.removed[mailboxKey(acct)] = true
+	_ = s.store.SetSetting(removedKey, s.dsync.removed)
+}
+
+// mailboxGone reports whether a mailbox was removed here (and isn't back).
+func (s *Service) mailboxGone(mailbox string, local map[string]models.Account) bool {
+	if _, ok := local[mailbox]; ok {
+		return false
+	}
+	s.dsync.mu.Lock()
+	defer s.dsync.mu.Unlock()
+	s.loadRemovedLocked()
+	return s.dsync.removed[mailbox]
+}
+
+// mailboxBack forgets that a mailbox was removed (another computer added
+// it again).
+func (s *Service) mailboxBack(mailbox string) {
+	s.dsync.mu.Lock()
+	defer s.dsync.mu.Unlock()
+	s.loadRemovedLocked()
+	if s.dsync.removed[mailbox] {
+		delete(s.dsync.removed, mailbox)
+		_ = s.store.SetSetting(removedKey, s.dsync.removed)
+	}
+}
+
+func (s *Service) loadRemovedLocked() {
+	if s.dsync.removed != nil {
+		return
+	}
+	m := map[string]bool{}
+	_ = s.store.GetSetting(removedKey, &m)
+	if m == nil {
+		m = map[string]bool{}
+	}
+	s.dsync.removed = m
 }
 
 // deviceSyncSignedIn reports a mailbox's new sign-in to the other computers.
@@ -180,6 +237,9 @@ func (s *Service) ConnectDeviceSync(req models.DeviceSyncConnect) (models.Device
 	defer cancel()
 	s.dsync.mu.Lock()
 	s.dsync.labelMap, s.dsync.loaded = nil, false
+	// Mailboxes removed before stay removed here only.
+	s.dsync.removed = map[string]bool{}
+	_ = s.store.DeleteSettingsPrefix(removedKey)
 	s.dsync.mu.Unlock()
 	err := s.dsync.engine.Connect(ctx, devsync.ConnectParams{Server: req.ServerURL, Code: req.Code, Create: req.Create, Secrets: req.IncludeSecrets})
 	return s.DeviceSyncStatus(), err
@@ -193,7 +253,7 @@ func (s *Service) DeviceSyncCode() (string, error) { return s.dsync.engine.Code(
 func (s *Service) DisconnectDeviceSync() error {
 	err := s.dsync.engine.Disconnect()
 	s.dsync.mu.Lock()
-	s.dsync.labelMap, s.dsync.loaded = nil, false
+	s.dsync.labelMap, s.dsync.loaded, s.dsync.removed = nil, false, nil
 	s.dsync.mu.Unlock()
 	return err
 }
@@ -262,11 +322,22 @@ type syncSource struct{ s *Service }
 
 func (src syncSource) Docs() []string {
 	docs := []string{docAccounts, docSettings, docLabels}
-	_, accts := src.s.mailboxes()
+	local, accts := src.s.mailboxes()
 	for _, a := range accts {
 		docs = append(docs, marksDoc(mailboxKey(a)))
 	}
-	return docs
+	// The label decisions of removed mailboxes, to delete them.
+	src.s.dsync.mu.Lock()
+	src.s.loadRemovedLocked()
+	var gone []string
+	for m := range src.s.dsync.removed {
+		if _, ok := local[m]; !ok {
+			gone = append(gone, marksDoc(m))
+		}
+	}
+	src.s.dsync.mu.Unlock()
+	slices.Sort(gone)
+	return append(docs, gone...)
 }
 
 func (src syncSource) Snapshot(doc string, synced func(string) (json.RawMessage, bool)) (map[string]json.RawMessage, error) {
@@ -277,7 +348,7 @@ func (src syncSource) Snapshot(doc string, synced func(string) (json.RawMessage,
 	case doc == docSettings:
 		return s.snapshotSettings(synced)
 	case doc == docLabels:
-		return s.snapshotLabels()
+		return s.snapshotLabels(synced)
 	case strings.HasPrefix(doc, docMarksPrefix):
 		return s.snapshotMarks(doc)
 	}
@@ -286,34 +357,64 @@ func (src syncSource) Snapshot(doc string, synced func(string) (json.RawMessage,
 
 func (src syncSource) Owns(doc, key string) bool {
 	s := src.s
+	prefix, mailbox, _ := splitKey(key)
 	switch doc {
 	case docAccounts:
-		prefix, mailbox, _ := splitKey(key)
 		switch prefix {
 		case "a", "s": // a removed mailbox; a secret no longer synced
 			return true
 		case "t", "c":
-			local, _ := s.mailboxes()
-			_, ok := local[mailbox]
-			return ok
+			return s.mailboxHereOrGone(mailbox)
 		}
+	case docSettings:
+		// Settings are never deleted, but a removed mailbox's are (a
+		// mailbox that is here always has its own).
+		return prefix == "m" && s.wasRemoved(mailbox)
 	case docLabels:
-		_, mailbox, _ := splitKey(key)
-		local, _ := s.mailboxes()
-		_, ok := local[mailbox]
-		return ok
+		return s.mailboxHereOrGone(mailbox)
+	default:
+		// Label decisions of mail this computer doesn't have (older than
+		// it keeps, or gone) stay; a removed mailbox's go.
+		s.dsync.mu.Lock()
+		s.loadRemovedLocked()
+		var gone string
+		for m := range s.dsync.removed {
+			if marksDoc(m) == doc {
+				gone = m
+			}
+		}
+		s.dsync.mu.Unlock()
+		if gone != "" {
+			local, _ := s.mailboxes()
+			return s.mailboxGone(gone, local)
+		}
 	}
-	// Settings are never deleted; label decisions of mail this computer
-	// doesn't have (older than it keeps, or gone) stay.
 	return false
 }
 
-func (src syncSource) Apply(doc string, changes map[string]json.RawMessage, _ func(string) (json.RawMessage, bool)) ([]string, error) {
+// mailboxHereOrGone reports whether a mailbox is on this computer, or was
+// removed here: its keys are this computer's to delete.
+func (s *Service) mailboxHereOrGone(mailbox string) bool {
+	local, _ := s.mailboxes()
+	_, ok := local[mailbox]
+	return ok || s.mailboxGone(mailbox, local)
+}
+
+// wasRemoved reports whether a mailbox is in the removed set (no lookup of
+// the local mailboxes).
+func (s *Service) wasRemoved(mailbox string) bool {
+	s.dsync.mu.Lock()
+	defer s.dsync.mu.Unlock()
+	s.loadRemovedLocked()
+	return s.dsync.removed[mailbox]
+}
+
+func (src syncSource) Apply(doc string, changes map[string]json.RawMessage, synced func(string) (json.RawMessage, bool)) ([]string, error) {
 	s := src.s
 	var apply func(map[string]json.RawMessage) ([]string, error)
 	switch {
 	case doc == docAccounts:
-		apply = s.applyAccounts
+		apply = func(ch map[string]json.RawMessage) ([]string, error) { return s.applyAccounts(ch, synced) }
 	case doc == docSettings:
 		apply = s.applySettings
 	case doc == docLabels:
@@ -364,6 +465,16 @@ type syncOAuthApp struct {
 	MicrosoftTenant    string `json:"microsoftTenant"`
 }
 
+// choice adds a per-mailbox value to a snapshot, unless it is the
+// default and hasn't synced yet: then it is no choice made here (the
+// mailbox may have just come from another computer), and the synced value
+// wins over it.
+func choice(out map[string]json.RawMessage, synced func(string) (json.RawMessage, bool), key string, v json.RawMessage, isDefault bool) {
+	if _, ok := synced(key); ok || !isDefault {
+		out[key] = v
+	}
+}
+
 func (s *Service) snapshotAccounts(synced func(string) (json.RawMessage, bool)) (map[string]json.RawMessage, error) {
 	out := map[string]json.RawMessage{}
 	secrets := s.dsync.engine.SecretsEnabled()
@@ -377,26 +488,37 @@ func (s *Service) snapshotAccounts(synced func(string) (json.RawMessage, bool)) 
 		if err != nil {
 			return nil, err
 		}
-		out["c/"+k] = rawJSON(prefs)
-		if !secrets || a.NeedsReauth {
+		choice(out, synced, "c/"+k, rawJSON(prefs), len(prefs) == 0)
+		if !secrets {
 			continue
 		}
 		tok, err := auth.LoadToken(s.secrets, a.ID)
-		if err != nil || tok.RefreshToken == "" {
+		if a.NeedsReauth || err != nil || tok.RefreshToken == "" {
+			// No sign-in that works here: the shared one (if any) stays.
+			if prev, ok := synced("t/" + k); ok {
+				out["t/"+k] = prev
+			}
 			continue
 		}
 		// A sign-in that works here is reported once (and again after
 		// signing in anew): refreshing rotates it, which needn't sync.
+		// (Reading the flag changes nothing: it is cleared once the
+		// sign-in has synced.)
 		s.dsync.mu.Lock()
 		resigned := s.dsync.resigned[k]
-		delete(s.dsync.resigned, k)
 		s.dsync.mu.Unlock()
-		if prev, ok := synced("t/" + k); ok && !resigned {
+		prev, ok := synced("t/" + k)
+		if ok && !resigned {
 			out["t/"+k] = prev
 			continue
 		}
-		out["t/"+k] = rawJSON(syncToken{Token: &oauth2.Token{RefreshToken: tok.RefreshToken, TokenType: tok.TokenType},
-			CalendarConsent: a.CalendarConsent})
+		cur := rawJSON(syncToken{Token: &oauth2.Token{RefreshToken: tok.RefreshToken, TokenType: tok.TokenType}, CalendarConsent: a.CalendarConsent})
+		out["t/"+k] = cur
+		if ok && bytes.Equal(prev, cur) {
+			s.dsync.mu.Lock()
+			delete(s.dsync.resigned, k)
+			s.dsync.mu.Unlock()
+		}
 	}
 	if !secrets {
 		return out, nil
@@ -411,9 +533,11 @@ func (s *Service) snapshotAccounts(synced func(string) (json.RawMessage, bool)) 
 	return out, nil
 }
 
-func (s *Service) applyAccounts(changes map[string]json.RawMessage) ([]string, error) {
+func (s *Service) applyAccounts(changes map[string]json.RawMessage, synced func(string) (json.RawMessage, bool)) ([]string, error) {
 	var notApplied []string
-	// The secrets switch and OAuth app first: sign-ins need them.
+	// The secrets switch first: sign-ins and keys apply only while it is
+	// on (they wait otherwise; a deletion is ignored: turning the switch
+	// off removes them from the server, not from the computers).
 	if v, ok := changes["secrets"]; ok && v != nil {
 		var sw struct {
 			On bool `json:"on"`
@@ -424,29 +548,23 @@ func (s *Service) applyAccounts(changes map[string]json.RawMessage) ([]string, e
 			}
 		}
 	}
-	if v := changes["s/oauth"]; v != nil {
-		var app syncOAuthApp
-		if json.Unmarshal(v, &app) == nil {
-			st := s.Settings()
-			st.GoogleClientID, st.GoogleClientSecret = app.GoogleClientID, app.GoogleClientSecret
-			st.MicrosoftClientID, st.MicrosoftTenant = app.MicrosoftClientID, app.MicrosoftTenant
-			if err := s.SaveSettings(st); err != nil {
-				return nil, err
-			}
+	secrets := s.dsync.engine.SecretsEnabled()
+	for _, key := range []string{"s/oauth", "s/openrouter"} {
+		v, ok := changes[key]
+		if !ok || (!secrets && v == nil) {
+			continue
+		}
+		if !secrets {
+			notApplied = append(notApplied, key)
+			continue
+		}
+		if err := s.applySecret(key, v); err != nil {
+			slog.Warn("device sync: applying a key failed", "key", key, "err", err)
+			notApplied = append(notApplied, key)
 		}
 	}
-	if v := changes["s/openrouter"]; v != nil {
-		var key string
-		if json.Unmarshal(v, &key) == nil && strings.TrimSpace(key) != "" {
-			if err := s.SetOpenRouterKey(key); err != nil {
-				notApplied = append(notApplied, "s/openrouter")
-			}
-		}
-	}
-	// A removed secret isn't deleted here: this computer may still need it.
 
 	keys := sortedKeys(changes)
-	positions := map[string]int{}
 	changedAccounts := false
 	for _, key := range keys {
 		prefix, mailbox, _ := splitKey(key)
@@ -469,6 +587,7 @@ func (s *Service) applyAccounts(changes map[string]json.RawMessage) ([]string, e
 		if json.Unmarshal(v, &sa) != nil || mailboxKey(models.Account{Provider: sa.Provider, Email: sa.Email}) != mailbox {
 			continue // damaged: leave it
 		}
+		s.mailboxBack(mailbox)
 		var err error
 		if have {
 			err = s.updateSyncedAccount(acct, sa)
@@ -480,11 +599,10 @@ func (s *Service) applyAccounts(changes map[string]json.RawMessage) ([]string, e
 			notApplied = append(notApplied, key)
 			continue
 		}
-		positions[mailbox] = sa.Position
 		changedAccounts = true
 	}
-	if len(positions) > 0 {
-		s.reorderSynced(positions)
+	if changedAccounts {
+		s.reorderSynced(synced)
 	}
 	local, _ := s.mailboxes()
 	for _, key := range keys {
@@ -494,7 +612,7 @@ func (s *Service) applyAccounts(changes map[string]json.RawMessage) ([]string, e
 			continue
 		}
 		acct, ok := local[mailbox]
-		if !ok {
+		if !ok || (prefix == "t" && !secrets) {
 			notApplied = append(notApplied, key)
 			continue
 		}
@@ -523,6 +641,27 @@ func (s *Service) applyAccounts(changes map[string]json.RawMessage) ([]string, e
 		s.emit(models.EventAccountsChanged, models.AccountEvent{})
 	}
 	return notApplied, nil
+}
+
+// applySecret applies the OAuth app or the OpenRouter key (nil: removed
+// on another computer).
+func (s *Service) applySecret(key string, v json.RawMessage) error {
+	if key == "s/openrouter" {
+		var k string
+		if v != nil && (json.Unmarshal(v, &k) != nil || strings.TrimSpace(k) == "") {
+			return nil // damaged: leave it
+		}
+		return s.SetOpenRouterKey(k)
+	}
+	var app syncOAuthApp
+	if v != nil && json.Unmarshal(v, &app) != nil {
+		return nil
+	}
+	return s.editSettings(func(st *models.Settings) error {
+		st.GoogleClientID, st.GoogleClientSecret = app.GoogleClientID, app.GoogleClientSecret
+		st.MicrosoftClientID, st.MicrosoftTenant = app.MicrosoftClientID, app.MicrosoftTenant
+		return nil
+	})
 }
 
 // addSyncedAccount adds a mailbox another computer has. It needs a sign-in
@@ -597,20 +736,28 @@ func (s *Service) updateSyncedAccount(acct models.Account, sa syncAccount) error
 	return nil
 }
 
-// reorderSynced orders the mailboxes as the other computer does.
-func (s *Service) reorderSynced(positions map[string]int) {
+// reorderSynced orders the mailboxes by their synced positions (those
+// without one keep their place after the others).
+func (s *Service) reorderSynced(synced func(string) (json.RawMessage, bool)) {
 	_, accts := s.mailboxes()
+	positions := map[string]int{}
+	for _, a := range accts {
+		var sa syncAccount
+		if v, ok := synced("a/" + mailboxKey(a)); ok && json.Unmarshal(v, &sa) == nil {
+			positions[a.ID] = sa.Position
+		}
+	}
 	order := slices.Clone(accts)
 	slices.SortStableFunc(order, func(a, b models.Account) int {
-		pa, oka := positions[mailboxKey(a)]
-		pb, okb := positions[mailboxKey(b)]
+		pa, oka := positions[a.ID]
+		pb, okb := positions[b.ID]
 		if !oka {
 			pa = math.MaxInt
 		}
 		if !okb {
 			pb = math.MaxInt
 		}
-		return pa - pb
+		return cmp.Compare(pa, pb)
 	})
 	if slices.EqualFunc(order, accts, func(a, b models.Account) bool { return a.ID == b.ID }) {
 		return
@@ -666,12 +813,13 @@ func (s *Service) snapshotSettings(synced func(string) (json.RawMessage, bool)) 
 		if notJunk == nil {
 			notJunk = []string{}
 		}
-		out["m/"+k+"/muted"] = rawJSON(slices.Contains(st.MutedMailboxes, a.ID))
-		out["m/"+k+"/autoLabel"] = rawJSON(slices.Contains(st.AutoLabelAccounts, a.ID))
-		out["m/"+k+"/aiCorrectsOff"] = rawJSON(slices.Contains(st.AICorrectsOff, a.ID))
-		out["m/"+k+"/junkStaysPut"] = rawJSON(slices.Contains(st.JunkStaysPut, a.ID))
-		out["m/"+k+"/notJunk"] = rawJSON(notJunk)
-		out["m/"+k+"/hiddenFolders"] = rawJSON(s.hiddenRemoteFolders(st, a, synced))
+		for name, on := range map[string]bool{"muted": slices.Contains(st.MutedMailboxes, a.ID), "autoLabel": slices.Contains(st.AutoLabelAccounts, a.ID),
+			"aiCorrectsOff": slices.Contains(st.AICorrectsOff, a.ID), "junkStaysPut": slices.Contains(st.JunkStaysPut, a.ID)} {
+			choice(out, synced, "m/"+k+"/"+name, rawJSON(on), !on)
+		}
+		choice(out, synced, "m/"+k+"/notJunk", rawJSON(notJunk), len(notJunk) == 0)
+		hidden := s.hiddenRemoteFolders(st, a, synced)
+		choice(out, synced, "m/"+k+"/hiddenFolders", rawJSON(hidden), len(hidden) == 0)
 	}
 	return out, nil
 }
@@ -706,6 +854,9 @@ func (s *Service) hiddenRemoteFolders(st models.Settings, a models.Account, sync
 }
 
 func (s *Service) applySettings(changes map[string]json.RawMessage) ([]string, error) {
+	// Read and written under saveMu: a save made meanwhile isn't lost.
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	cur := s.Settings()
 	fields := map[string]json.RawMessage{}
 	local, _ := s.mailboxes()
@@ -800,7 +951,7 @@ func (s *Service) applySettings(changes map[string]json.RawMessage) ([]string, e
 		}
 	}
 	next.LabelsRev = 0
-	if err := s.SaveSettings(next); err != nil {
+	if err := s.saveSettings(next); err != nil {
 		return nil, err
 	}
 	return notApplied, nil
@@ -943,7 +1094,7 @@ func syncRef(refs map[string]string, labelID string) string {
 	return refs[labelID]
 }
 
-func (s *Service) snapshotLabels() (map[string]json.RawMessage, error) {
+func (s *Service) snapshotLabels(synced func(string) (json.RawMessage, bool)) (map[string]json.RawMessage, error) {
 	st := s.Settings()
 	local, _ := s.mailboxes()
 	refs := s.labelRefs(st)
@@ -979,7 +1130,7 @@ func (s *Service) snapshotLabels() (map[string]json.RawMessage, error) {
 		if names == nil {
 			names = []string{}
 		}
-		out["x/"+mailbox] = rawJSON(names)
+		choice(out, synced, "x/"+mailbox, rawJSON(names), len(names) == 0)
 		if ids, ok := st.QuietLabels[a.ID]; ok {
 			quiet := []string{}
 			for _, id := range ids {
@@ -990,7 +1141,7 @@ func (s *Service) snapshotLabels() (map[string]json.RawMessage, error) {
 			slices.Sort(quiet)
 			out["q/"+mailbox] = rawJSON(quiet)
 		} else {
-			out["q/"+mailbox] = json.RawMessage("null")
+			choice(out, synced, "q/"+mailbox, json.RawMessage("null"), true)
 		}
 	}
 	for _, r := range st.LabelRules {
@@ -1013,6 +1164,8 @@ func (s *Service) snapshotLabels() (map[string]json.RawMessage, error) {
 }
 
 func (s *Service) applyLabels(changes map[string]json.RawMessage) ([]string, error) {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	st := s.Settings()
 	st.Labels = slices.Clone(st.Labels)
 	st.LabelRules = slices.Clone(st.LabelRules)
@@ -1161,12 +1314,12 @@ func (s *Service) applyLabels(changes map[string]json.RawMessage) ([]string, err
 		}
 	}
 	st.LabelsRev = 0
-	if err := s.SaveSettings(st); err != nil {
+	if err := s.saveSettings(st); err != nil {
 		return nil, err
 	}
 	// SaveSettings keeps an imported label imported; another computer may
 	// have made it before this one imported it (or the other way round).
-	s.updateLabels(func(st *models.Settings) bool {
+	s.updateLabelsLocked(func(st *models.Settings) bool {
 		changed := false
 		for i, l := range st.Labels {
 			if src, ok := sources[l.ID]; ok && l.Source != src && l.Source != config.LabelSourceSystem {
@@ -1249,6 +1402,7 @@ func (s *Service) applyMarks(doc string, changes map[string]json.RawMessage) ([]
 		return sortedKeys(changes), nil
 	}
 	set := map[string][]store.LabelMark{}
+	var notApplied []string
 	for rid, v := range changes {
 		if v == nil {
 			continue
@@ -1263,7 +1417,12 @@ func (s *Service) applyMarks(doc string, changes map[string]json.RawMessage) ([]
 			if m.K != store.MarkClassified {
 				id, ok := s.localLabel(mailbox, m.L)
 				if !ok {
-					continue // a label deleted meanwhile
+					// A label that hasn't synced here yet (or was deleted
+					// meanwhile): the rest applies, and this is tried again.
+					if !slices.Contains(notApplied, rid) {
+						notApplied = append(notApplied, rid)
+					}
+					continue
 				}
 				lm.LabelID = id
 			}
@@ -1272,12 +1431,12 @@ func (s *Service) applyMarks(doc string, changes map[string]json.RawMessage) ([]
 		set[rid] = marks
 	}
 	if len(set) == 0 {
-		return nil, nil
+		return notApplied, nil
 	}
 	if err := s.store.SetLabelMarks(acct.ID, set); err != nil {
 		return nil, err
 	}
 	s.emit(models.EventLabelsChanged, models.AccountEvent{AccountID: acct.ID})
 	s.emit(models.EventMessagesChanged, models.AccountEvent{AccountID: acct.ID})
-	return nil, nil
+	return notApplied, nil
 }

@@ -646,9 +646,10 @@ and the AES-256-GCM key (never sent). The code is kept in the OS keychain
 
 **Documents.** The engine (`internal/devsync`) syncs a few documents of keyed
 JSON values, each encrypted (gzip, then AES-GCM with the document name as
-associated data) and stored with a revision. A key's entry carries its
-value and the time it was written; merging takes the newer entry per key,
-and deletions leave tombstones (forgotten after 180 days).
+associated data) and stored with a revision. A key's entry carries its value and the time it was written, from a hybrid
+clock: never below a time the computer has already seen, so a clock that is
+behind can't lose a later change. Merging takes the newer entry per key;
+deletions leave tombstones, kept for good.
 `internal/core/devsync.go` maps app state to documents. Mailboxes are named
 `provider:email` and labels by a per-computer sync id, because local ids
 differ:
@@ -660,25 +661,38 @@ differ:
 | `labels` | `l/<mailbox>/<sync id>` labels, `l/*/junk`, `r/<mailbox>/<field>/<action>/<text>` rules, `q/<mailbox>` quiet labels, `x/<mailbox>` deleted imported labels |
 | `marks-<hash>` | one per mailbox: label decisions per remote message id (manual, AI with confidence, rejected, override, already labeled by Jev) |
 
+Removing a mailbox deletes its keys in every document, sign-in included
+(the computer remembers removed mailboxes until it syncs them again).
+
 Not synced: `deviceSettings` (zoom, launch at login, tray, close to tray,
-mail kept, check intervals, `deviceSyncInterval`) and everything the
+mail kept, check intervals, `deviceSyncInterval`, notifications, calendar
+notifications, reading pane) and everything the
 provider already syncs (mail, folders, archive/junk/trash moves, read and
 starred state). `TestDeviceSyncClassifiesEverySetting` fails until a new
 settings field is put in one of the lists.
 
 **Rounds.** On start, every `deviceSyncInterval` minutes (1 by default;
 5, 15, 30, 60, or -1 for only on start and "Sync now"), after waking, when
-back online and on `SyncDevicesNow`. A round compares each document with its
-local shadow (the entries as last merged, stored encrypted in the settings
-table) to find this computer's changes, fetches the server's copy if its
-revision moved, merges, applies what other computers changed, and uploads
-with the revision it read; a 409 means another computer was faster, so it
-merges again. Applying makes the local state equal the shadow, so nothing
-is sent back. Values a computer had before it first synced count as oldest:
-a computer that joins takes the synced settings and adds what only it has.
-Keys this computer can't hold yet (a mailbox it doesn't have) are kept and
-applied once it can. A sign-in from another computer is only used for a
-mailbox without a working one; a rotated refresh token isn't uploaded again.
+back online and on `SyncDevicesNow`. A round fetches the server's copy if
+its revision moved, then compares each document with its local shadow (the
+entries as last merged, stored encrypted in the settings table) to find
+this computer's changes, merges, applies what other computers changed, and
+uploads with the revision it read; a 409 means another computer was
+faster, so it merges again. The shadow is saved before applying, with the
+keys being applied pending, so a round that stops halfway doesn't take
+them for local changes. Applying makes the local state equal the shadow,
+so nothing is sent back; a deletion a computer doesn't carry out isn't
+either. While a computer joins (its first round), its values count as
+oldest: it takes the synced settings and adds what only it has (and keeps
+what the account deleted before, like a mailbox it has signed in). It
+uploads no sign-ins or keys before it learns the account's `secrets`
+switch; `s/` and `t/` keys apply only while the switch is on. A
+per-mailbox choice at its default that hasn't synced yet isn't a change
+(the mailbox may have just arrived). Keys this computer can't hold yet (a
+mailbox it doesn't have, a label decision whose label hasn't arrived) are
+kept and applied once it can. A sign-in from another computer is only used
+for a mailbox without a working one; a rotated refresh token isn't
+uploaded again, and one that stopped working here isn't removed.
 After applying, the backend emits `settings:changed` (the UI re-reads its
 settings) and `devicesync:status` carries `DeviceSyncStatus`.
 
