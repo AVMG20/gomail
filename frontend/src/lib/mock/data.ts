@@ -105,7 +105,7 @@ export const SEED_ACCOUNTS: Account[] = [
 
 const SYSTEM_FOLDERS: [string, string][] = [
   ['inbox', 'Inbox'], ['starred', 'Starred'], ['sent', 'Sent'], ['drafts', 'Drafts'],
-  ['archive', 'Archive'], ['spam', 'Spam'], ['trash', 'Trash'],
+  ['archive', 'All Mail'], ['spam', 'Spam'], ['trash', 'Trash'],
 ]
 
 const CUSTOM_FOLDERS: Record<string, string[]> = {

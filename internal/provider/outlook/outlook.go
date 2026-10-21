@@ -44,10 +44,10 @@ var wellKnown = []struct{ name, kind string }{
 
 // systemNames are the well-known folders' names, the same as Gmail's: Graph
 // returns them in the mailbox's language ("Postvak IN"), which needn't be
-// the app's. Archive keeps its name (Gmail's All Mail is everything).
+// the app's.
 var systemNames = map[string]string{
 	models.FolderInbox: "Inbox", models.FolderSent: "Sent", models.FolderDrafts: "Drafts",
-	models.FolderArchive: "Archive", models.FolderSpam: "Spam", models.FolderTrash: "Trash",
+	models.FolderArchive: "All Mail", models.FolderSpam: "Spam", models.FolderTrash: "Trash",
 }
 
 // Client talks to one Microsoft mailbox.

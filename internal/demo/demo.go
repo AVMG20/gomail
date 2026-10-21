@@ -125,7 +125,7 @@ func (p *Provider) setupFolders() {
 	}
 	p.folders = []mail.Folder{
 		{RemoteID: "inbox", Name: "Inbox", Kind: models.FolderInbox}, {RemoteID: "sentitems", Name: "Sent", Kind: models.FolderSent},
-		{RemoteID: "drafts", Name: "Drafts", Kind: models.FolderDrafts}, {RemoteID: "archive", Name: "Archive", Kind: models.FolderArchive},
+		{RemoteID: "drafts", Name: "Drafts", Kind: models.FolderDrafts}, {RemoteID: "archive", Name: "All Mail", Kind: models.FolderArchive},
 		{RemoteID: "junkemail", Name: "Spam", Kind: models.FolderSpam}, {RemoteID: "deleteditems", Name: "Trash", Kind: models.FolderTrash},
 		{RemoteID: "projects", Name: "Projects", Kind: models.FolderCustom}, {RemoteID: outlook.Flagged, Name: "Starred", Kind: models.FolderStarred},
 	}
