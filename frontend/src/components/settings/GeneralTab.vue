@@ -50,7 +50,7 @@ async function checkNow() {
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Download mail from" description="gomail keeps this much of your mail on this computer. Anything older stays on the server: load it at the end of a folder.">
+      <SettingRow title="Download mail from" description="How much mail gomail downloads to this computer. Older mail stays on the server: scroll to the bottom of the list and click “Load older mail” to see it.">
         <Select :model-value="String(settings.settings.syncDepthDays ?? 90)" @update:model-value="(v) => settings.update({ syncDepthDays: Number(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>

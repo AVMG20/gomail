@@ -485,13 +485,13 @@ const emptyState = computed(() => {
               </div>
               <div v-else-if="rows[it.index]?.kind === 'older'" class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
                 <template v-if="mail.loadingOlder"><RefreshCwIcon class="size-3.5 animate-spin" /> Fetching older mail from the server…</template>
-                <button v-else type="button" class="hover:text-foreground rounded px-2 py-1 font-medium" @click="mail.loadOlder()">Load older messages</button>
+                <button v-else type="button" class="hover:text-foreground rounded px-2 py-1 font-medium" @click="mail.loadOlder()">Load older mail</button>
               </div>
               <div v-else-if="rows[it.index]?.kind === 'beyond'" class="text-muted-foreground flex h-full items-center justify-center gap-1 text-xs">
                 <template v-if="mail.loadingOlder"><RefreshCwIcon class="size-3.5 animate-spin" /> Fetching older mail from the server…</template>
                 <template v-else>
-                  <span>Synced: last {{ settings.settings?.syncDepthDays ?? 90 }} days.</span>
-                  <button type="button" class="hover:text-foreground rounded px-1.5 py-1 font-medium" @click="mail.loadOlder(true)">Load older anyway</button>
+                  <span>Showing the last {{ (settings.settings?.syncDepthDays ?? 90) === 365 ? 'year' : `${settings.settings?.syncDepthDays ?? 90} days` }}.</span>
+                  <button type="button" class="hover:text-foreground rounded px-1.5 py-1 font-medium" @click="mail.loadOlder(true)">Load older mail</button>
                 </template>
               </div>
               <div v-else class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
