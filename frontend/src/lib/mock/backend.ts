@@ -704,6 +704,11 @@ class MockBackend {
     this.cal.remove(id, scope)
   }
 
+  async SetEventReminders(id: string, minutes: number[], scope: RecurrenceScope): Promise<CalendarEvent> {
+    await latency(100, 220)
+    return this.cal.setReminders(id, minutes, scope)
+  }
+
   async RespondToEvent(id: string, response: AttendeeResponse): Promise<void> {
     await latency(150, 300)
     this.cal.respond(id, response)

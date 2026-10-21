@@ -108,6 +108,10 @@ type Provider interface {
 	Move(ctx context.Context, from, to Calendar, remoteID string, ev Event) (Event, error)
 	// Respond answers an invitation: accepted | tentative | declined.
 	Respond(ctx context.Context, cal Calendar, remoteID, response string) error
+	// SetReminders changes only your own reminders (minutes before the
+	// start; empty = none) of an event or a series. It works on invitations
+	// too and never notifies the other guests. Returns the changed event.
+	SetReminders(ctx context.Context, cal Calendar, remoteID string, minutes []int) (Event, error)
 }
 
 // ErrNoConsent means the sign-in lacks calendar access (insufficient scope).

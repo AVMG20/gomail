@@ -1221,6 +1221,16 @@ func (m *MailService) RespondToEvent(id, response string) error {
 	return uiError(s.RespondToEvent(id, response))
 }
 
+// SetEventReminders sets your own reminders of an event (minutes before the
+// start; empty = none), also on invitations; scope is "this" or "series".
+func (m *MailService) SetEventReminders(id string, minutes []int, scope string) (models.CalendarEvent, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	return uiResult(s.SetEventReminders(id, minutes, scope))
+}
+
 // SyncCalendars syncs the calendars of an account ("" = all) now.
 func (m *MailService) SyncCalendars(accountID string) error {
 	s, err := m.ready()

@@ -498,4 +498,30 @@ func (p *CalendarProvider) Respond(ctx context.Context, cal calendar.Calendar, r
 	return nil
 }
 
+func (p *CalendarProvider) SetReminders(ctx context.Context, cal calendar.Calendar, remoteID string, minutes []int) (calendar.Event, error) {
+	if err := p.sleep(ctx); err != nil {
+		return calendar.Event{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m, err := p.store(cal)
+	if err != nil {
+		return calendar.Event{}, err
+	}
+	var out *calendar.Event
+	for id, ev := range m {
+		if id == remoteID || ev.SeriesRemoteID == remoteID {
+			ev.Reminders = append([]int{}, minutes...)
+			ev.Updated = time.Now().UTC()
+			if out == nil || id == remoteID {
+				out = ev
+			}
+		}
+	}
+	if out == nil {
+		return calendar.Event{}, errors.New("event not found")
+	}
+	return *out, nil
+}
+
 var _ calendar.Provider = (*CalendarProvider)(nil)

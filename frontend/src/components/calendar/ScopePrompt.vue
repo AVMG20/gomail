@@ -10,7 +10,8 @@ const verb = computed(() => ({ edit: 'Save changes to', move: 'Move', resize: 'C
 
 <template>
   <Dialog :open="!!scopeRequest" @update:open="(v: boolean) => !v && answerScope(null)">
-    <DialogContent class="gap-4 sm:max-w-[380px]" :show-close-button="false">
+    <!-- z-[60]: above the event card (z-50) these prompts are asked from. -->
+    <DialogContent class="z-[60] gap-4 sm:max-w-[380px]" overlay-class="z-[60]" :show-close-button="false">
       <div class="flex items-start gap-3">
         <span class="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-full"><RepeatIcon class="size-4" /></span>
         <div class="min-w-0">
@@ -26,7 +27,7 @@ const verb = computed(() => ({ edit: 'Save changes to', move: 'Move', resize: 'C
     </DialogContent>
   </Dialog>
   <Dialog :open="!!confirmRequest" @update:open="(v: boolean) => !v && answerConfirm(false)">
-    <DialogContent class="gap-4 sm:max-w-[400px]" :show-close-button="false">
+    <DialogContent class="z-[60] gap-4 sm:max-w-[400px]" overlay-class="z-[60]" :show-close-button="false">
       <div>
         <DialogTitle class="text-base">{{ confirmRequest?.title }}</DialogTitle>
         <DialogDescription class="mt-1.5 leading-relaxed">{{ confirmRequest?.description }}</DialogDescription>

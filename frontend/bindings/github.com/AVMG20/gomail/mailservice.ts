@@ -543,6 +543,14 @@ export function SetCalendarVisible(calendarID: string, visible: boolean): $Cance
 }
 
 /**
+ * SetEventReminders sets your own reminders of an event (minutes before the
+ * start; empty = none), also on invitations; scope is "this" or "series".
+ */
+export function SetEventReminders(id: string, minutes: number[] | null, scope: string): $CancellablePromise<models$0.CalendarEvent> {
+    return $Call.ByID(2837188401, id, minutes, scope);
+}
+
+/**
  * SetOpenRouterKey stores the key securely ("" removes it). The key is
  * never returned to the frontend.
  */

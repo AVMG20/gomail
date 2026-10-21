@@ -125,7 +125,7 @@ export const USED_METHODS = [
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
-export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
+export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'SetEventReminders', 'MoveEventCheck', 'SyncCalendars']
 
 export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'RestoreLabel', 'ApplyLabelAction', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
 
@@ -455,6 +455,8 @@ export const api = {
   syncCalendars: (accountId = '') => call<void>('SyncCalendars', accountId),
   deleteEvent: (id: string, scope: RecurrenceScope) => call<void>('DeleteEvent', id, scope),
   respondToEvent: (id: string, response: AttendeeResponse) => call<void>('RespondToEvent', id, response),
+  /** Your own reminders (minutes before; [] = none), also on invitations. */
+  setEventReminders: async (id: string, minutes: number[], scope: RecurrenceScope) => normEvent(await call<CalendarEvent>('SetEventReminders', id, minutes, scope)),
   checkForUpdate: () => call<UpdateInfo>('CheckForUpdate'),
   /** Native save dialog, then writes a backup; `cancelled` when the dialog was closed. */
   exportBackup: (includeSecrets: boolean) => call<BackupResult>('ExportBackup', includeSecrets),

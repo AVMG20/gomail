@@ -272,6 +272,22 @@ export class MockCalendar {
     this.onChange(target.accountId)
   }
 
+  /** Your own reminders: any event on a writable calendar, invitations too. */
+  setReminders(id: string, minutes: number[], scope: RecurrenceScope): CalendarEvent {
+    const ev = this.get(id)
+    this.canEdit(ev.calendarId)
+    const reminders = [...new Set(minutes)].sort((a, b) => a - b)
+    const master = this.masters.get(id) ?? (scope === 'series' ? this.masters.get(splitOccurrence(id)[0]) : undefined)
+    if (master) {
+      master.reminders = reminders
+      for (const [k, o] of this.overrides) if (k.startsWith(`${master.id}_`)) o.reminders = [...reminders]
+    } else {
+      this.overrides.set(id, { ...ev, reminders })
+    }
+    this.onChange(ev.accountId)
+    return this.get(id)
+  }
+
   respond(id: string, response: AttendeeResponse) {
     const ev = this.get(id)
     if (ev.isOrganizer) throw new Error('You organize this event')

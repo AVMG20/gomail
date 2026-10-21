@@ -549,4 +549,19 @@ func (c *Client) Respond(ctx context.Context, cal calendar.Calendar, remoteID, r
 		map[string]any{"attendees": g.Attendees}, nil))
 }
 
+// SetReminders patches only the reminders: they belong to this calendar's
+// copy of the event, so guests may change them too and nobody is notified.
+func (c *Client) SetReminders(ctx context.Context, cal calendar.Calendar, remoteID string, minutes []int) (calendar.Event, error) {
+	over := []gReminder{}
+	for _, m := range minutes {
+		over = append(over, gReminder{Method: "popup", Minutes: m})
+	}
+	var g gEvent
+	if err := c.api.JSON(ctx, http.MethodPatch, c.eventsPath(cal)+"/"+url.PathEscape(remoteID)+"?sendUpdates=none",
+		map[string]any{"reminders": map[string]any{"useDefault": false, "overrides": over}}, &g); err != nil {
+		return calendar.Event{}, wrap(err)
+	}
+	return c.toEvent(g, cal), nil
+}
+
 var _ calendar.Provider = (*Client)(nil)

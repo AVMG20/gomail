@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -622,6 +623,20 @@ func (c *Client) Respond(ctx context.Context, cal calendar.Calendar, remoteID, r
 		return fmt.Errorf("unknown response %q", resp)
 	}
 	return wrap(c.api.JSON(ctx, http.MethodPost, "me/events/"+url.PathEscape(remoteID)+"/"+action, map[string]any{"sendResponse": true}, nil))
+}
+
+// SetReminders sets the mailbox's own reminder (Outlook keeps one per event;
+// the earliest wins). Attendees may change it; nobody is notified.
+func (c *Client) SetReminders(ctx context.Context, cal calendar.Calendar, remoteID string, minutes []int) (calendar.Event, error) {
+	b := map[string]any{"isReminderOn": len(minutes) > 0}
+	if len(minutes) > 0 {
+		b["reminderMinutesBeforeStart"] = slices.Max(minutes)
+	}
+	var g gEvent
+	if err := c.api.JSON(ctx, http.MethodPatch, "me/events/"+url.PathEscape(remoteID), b, &g); err != nil {
+		return calendar.Event{}, wrap(err)
+	}
+	return toEvent(g, cal), nil
 }
 
 var _ calendar.Provider = (*Client)(nil)

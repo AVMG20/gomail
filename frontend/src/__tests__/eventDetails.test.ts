@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 
-vi.mock('vue-sonner', () => ({ toast: Object.assign(() => {}, { error: () => {}, success: () => {}, warning: () => {}, dismiss: () => {} }) }))
+const toastFn = vi.hoisted(() => vi.fn())
+vi.mock('vue-sonner', () => ({ toast: Object.assign(toastFn, { error: () => {}, success: () => {}, warning: () => {}, dismiss: () => {} }) }))
 
 import { api } from '@/lib/api'
 import type { CalendarEvent } from '@/lib/types'
@@ -87,6 +88,44 @@ describe('EventDetails layout', () => {
     expect(text).toContain('2 guests')
     expect(text).toContain('(you)')
     expect(document.body.querySelector('[aria-label="Email guests"]')).not.toBeNull()
+    c.unmount()
+  })
+})
+
+describe('EventDetails on an invitation', () => {
+  const setup = (canEdit: boolean) => () => {
+    useAccountsStore().accounts = [{ id: 'a', email: 'me@x.y' }] as never
+    useCalendarStore().calendars = [{ id: 'c', accountId: 'a', name: 'Work', color: '#4285f4', canEdit }] as never
+  }
+  const inv = { ...invite, attendees: [...invite.attendees, { name: '', email: 'me@x.y', response: 'needsAction' }], reminders: [10] } as CalendarEvent
+  const q = (label: string) => document.body.querySelector<HTMLElement>(`[aria-label="${label}"]`)
+
+  it('lets you remove it and change your own reminder on a writable calendar, but not edit it', async () => {
+    const set = vi.spyOn(api, 'setEventReminders').mockImplementation(async (_id, minutes) => ({ ...inv, reminders: minutes }))
+    const c = mount(inv, setup(true))
+    expect(q('Edit event')).toBeNull()
+    expect(q('Remove from your calendar')).not.toBeNull()
+    expect(q('Change reminder')?.textContent).toContain('10 minutes before')
+    await c.cal.setReminders(c.cal.events[0], [60], 'this')
+    expect(set).toHaveBeenCalledWith('e1', [60], 'this')
+    expect(c.cal.events[0].reminders).toEqual([60])
+    c.unmount()
+  })
+
+  it('removing it offers no Undo (recreating it would make you the organizer)', async () => {
+    vi.spyOn(api, 'deleteEvent').mockResolvedValue()
+    const c = mount(inv, setup(true))
+    await c.cal.remove(c.cal.events[0], 'this')
+    expect(c.cal.events).toHaveLength(0)
+    expect(toastFn).toHaveBeenCalledWith('Removed from your calendar', expect.objectContaining({ action: undefined }))
+    c.unmount()
+  })
+
+  it('offers neither on a read-only calendar', () => {
+    const c = mount(inv, setup(false))
+    expect(q('Remove from your calendar')).toBeNull()
+    expect(q('Change reminder')).toBeNull()
+    expect(document.body.textContent).toContain('10 minutes before')
     c.unmount()
   })
 })

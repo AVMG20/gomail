@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,37 @@ func TestEndToEndCalendar(t *testing.T) {
 	}
 	if ev, _ := e.graph.CalEvent(oInvite); ev.Response != "declined" {
 		t.Fatalf("outlook response %q", ev.Response)
+	}
+
+	// Your own reminders and removing an event work on invitations too:
+	// only the reminder is sent (the fakes refuse other guest changes).
+	for _, c := range []struct {
+		title string
+		get   func() []int
+	}{
+		{"Google invite", func() []int { ev, _ := e.gcal.Event(gInvite); return ev.Reminders }},
+		{"Outlook invite", func() []int { ev, _ := e.graph.CalEvent(oInvite); return ev.Reminders }},
+	} {
+		ev, err := m.SetEventReminders(got[c.title].ID, []int{60}, "this")
+		if err != nil {
+			t.Fatalf("%s reminder: %v", c.title, err)
+		}
+		if !slices.Equal(ev.Reminders, []int{60}) || !slices.Equal(c.get(), []int{60}) {
+			t.Fatalf("%s reminders local=%v server=%v", c.title, ev.Reminders, c.get())
+		}
+		if _, err := m.SetEventReminders(got[c.title].ID, nil, "this"); err != nil || len(c.get()) != 0 {
+			t.Fatalf("%s reminder off: %v %v", c.title, err, c.get())
+		}
+	}
+	// (The accepted one: declined invitations aren't listed anyway.)
+	if err := m.DeleteEvent(got["Google invite"].ID, "this"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.gcal.Event(gInvite); ok {
+		t.Fatal("removed invitation still on the server")
+	}
+	if _, ok := titles()["Google invite"]; ok {
+		t.Fatal("removed invitation still listed")
 	}
 	if _, missing := e.graph.Stats(); missing != 0 {
 		t.Fatalf("%d Graph requests without immutable ids", missing)

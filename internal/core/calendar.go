@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -758,6 +759,70 @@ func (s *Service) DeleteEvent(id, scope string) error {
 		return s.eventChangeError(acct, p, row, "deleting the event failed", err)
 	}
 	return nil
+}
+
+// SetEventReminders changes your own reminders of an event (minutes before
+// the start; empty = none), also on invitations you didn't organize.
+// Scope "series" changes every occurrence of a recurring event.
+func (s *Service) SetEventReminders(id string, minutes []int, scope string) (models.CalendarEvent, error) {
+	cur, row, acct, p, err := s.eventContext(id)
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	if !row.CanEdit {
+		return models.CalendarEvent{}, errors.New("this calendar is read-only")
+	}
+	clean := []int{}
+	for _, m := range minutes {
+		if m < 0 || m > 40320 {
+			return models.CalendarEvent{}, errors.New("a reminder must be between 0 minutes and 4 weeks before the event")
+		}
+		if !slices.Contains(clean, m) {
+			clean = append(clean, m)
+		}
+	}
+	slices.Sort(clean)
+	old := []store.EventRow{cur}
+	target := cur.RemoteID
+	if normScope(scope) == models.ScopeSeries && cur.SeriesRemoteID != "" {
+		if old, err = s.store.SeriesEvents(cur.CalendarID, cur.SeriesRemoteID); err != nil {
+			return models.CalendarEvent{}, err
+		}
+		target = cur.SeriesRemoteID
+	}
+	var next []calendar.Event
+	for _, o := range old {
+		n := o.ToProvider()
+		n.Reminders = clean
+		next = append(next, n)
+	}
+	if _, err := s.store.ApplyEvents(row, store.EventChanges{Upserts: next}); err != nil {
+		return models.CalendarEvent{}, err
+	}
+	s.emitCalendar(acct.ID)
+	ctx, cancel := s.calCtx()
+	defer cancel()
+	updated, err := p.SetReminders(ctx, row.Provider(), target, clean)
+	if err != nil {
+		_ = s.store.PutEventRows(old)
+		s.emitCalendar(acct.ID)
+		return models.CalendarEvent{}, s.eventChangeError(acct, p, row, "saving the reminder failed", err)
+	}
+	if target == cur.RemoteID && updated.RemoteID == cur.RemoteID {
+		// The new version (ETag) keeps the next change from looking like a conflict.
+		_, _ = s.store.ApplyEvents(row, store.EventChanges{Upserts: []calendar.Event{updated}})
+	} else {
+		// A series: take the provider's view of the occurrences.
+		s.goBG(func() {
+			ctx, cancel := s.calCtx()
+			defer cancel()
+			if _, err := s.syncCalendar(ctx, acct, p, row); err == nil {
+				s.emitCalendar(acct.ID)
+			}
+		})
+	}
+	s.emitCalendar(acct.ID)
+	return s.GetEvent(id)
 }
 
 // RespondToEvent answers an invitation (accepted | tentative | declined).
