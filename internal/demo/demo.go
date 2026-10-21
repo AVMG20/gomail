@@ -124,10 +124,10 @@ func (p *Provider) setupFolders() {
 		return
 	}
 	p.folders = []mail.Folder{
-		{RemoteID: "inbox", Name: "Inbox", Kind: models.FolderInbox}, {RemoteID: "sentitems", Name: "Sent Items", Kind: models.FolderSent},
+		{RemoteID: "inbox", Name: "Inbox", Kind: models.FolderInbox}, {RemoteID: "sentitems", Name: "Sent", Kind: models.FolderSent},
 		{RemoteID: "drafts", Name: "Drafts", Kind: models.FolderDrafts}, {RemoteID: "archive", Name: "Archive", Kind: models.FolderArchive},
-		{RemoteID: "junkemail", Name: "Junk Email", Kind: models.FolderSpam}, {RemoteID: "deleteditems", Name: "Deleted Items", Kind: models.FolderTrash},
-		{RemoteID: "projects", Name: "Projects", Kind: models.FolderCustom}, {RemoteID: outlook.Flagged, Name: "Flagged", Kind: models.FolderStarred},
+		{RemoteID: "junkemail", Name: "Spam", Kind: models.FolderSpam}, {RemoteID: "deleteditems", Name: "Trash", Kind: models.FolderTrash},
+		{RemoteID: "projects", Name: "Projects", Kind: models.FolderCustom}, {RemoteID: outlook.Flagged, Name: "Starred", Kind: models.FolderStarred},
 	}
 	p.labels = []mail.Label{{RemoteID: "Work", Name: "Work", Color: outlook.PresetColor("preset7")}, {RemoteID: "Finance", Name: "Finance", Color: outlook.PresetColor("preset4")},
 		{RemoteID: "Travel", Name: "Travel", Color: outlook.PresetColor("preset1")}, {RemoteID: "Family", Name: "Family", Color: outlook.PresetColor("preset9")}}

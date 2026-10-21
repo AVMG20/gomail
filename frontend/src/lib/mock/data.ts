@@ -117,7 +117,7 @@ const CUSTOM_FOLDERS: Record<string, string[]> = {
 export function foldersFor(accountId: string, provider: string): Folder[] {
   const list: Folder[] = SYSTEM_FOLDERS.map(([kind, name]) => ({
     id: `${accountId}:${kind}`, accountId, remoteId: provider === 'gmail' ? kind.toUpperCase() : name,
-    name: provider === 'outlook' && kind === 'trash' ? 'Deleted Items' : provider === 'outlook' && kind === 'spam' ? 'Junk Email' : name,
+    name,
     kind, unread: 0, total: 0,
   }))
   for (const name of CUSTOM_FOLDERS[accountId] ?? []) {

@@ -42,11 +42,12 @@ var wellKnown = []struct{ name, kind string }{
 	{"outbox", ""}, {"conversationhistory", ""}, {"syncissues", ""},
 }
 
-// systemNames are the well-known folders' names: Graph returns them in the
-// mailbox's language ("Postvak IN"), which needn't be the app's.
+// systemNames are the well-known folders' names, the same as Gmail's: Graph
+// returns them in the mailbox's language ("Postvak IN"), which needn't be
+// the app's. Archive keeps its name (Gmail's All Mail is everything).
 var systemNames = map[string]string{
-	models.FolderInbox: "Inbox", models.FolderSent: "Sent Items", models.FolderDrafts: "Drafts",
-	models.FolderArchive: "Archive", models.FolderSpam: "Junk Email", models.FolderTrash: "Deleted Items",
+	models.FolderInbox: "Inbox", models.FolderSent: "Sent", models.FolderDrafts: "Drafts",
+	models.FolderArchive: "Archive", models.FolderSpam: "Spam", models.FolderTrash: "Trash",
 }
 
 // Client talks to one Microsoft mailbox.
@@ -340,7 +341,7 @@ func (c *Client) Folders(ctx context.Context) ([]mail.Folder, []mail.Label, erro
 	if err := c.listFolders(ctx, "me/mailFolders?includeHiddenFolders=false&"+folderSelect, "", 0, &folders); err != nil {
 		return nil, nil, err
 	}
-	folders = append(folders, mail.Folder{RemoteID: Flagged, Name: "Flagged", Kind: models.FolderStarred})
+	folders = append(folders, mail.Folder{RemoteID: Flagged, Name: "Starred", Kind: models.FolderStarred})
 	var cats struct {
 		Value []struct {
 			DisplayName string `json:"displayName"`
@@ -1325,7 +1326,7 @@ func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
 		if ids, err = c.folderIDs(ctx, folder.RemoteID, ""); err != nil {
 			return err
 		}
-		if err := c.Move(ctx, ids, mail.Folder{RemoteID: "deleteditems", Name: "Deleted Items", Kind: models.FolderTrash}); err != nil {
+		if err := c.Move(ctx, ids, mail.Folder{RemoteID: "deleteditems", Name: "Trash", Kind: models.FolderTrash}); err != nil {
 			return err
 		}
 		if err := stat(); err != nil {

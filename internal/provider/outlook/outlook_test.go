@@ -206,7 +206,7 @@ func TestFoldersAndSync(t *testing.T) {
 	for _, f := range folders {
 		names = append(names, f.Name+":"+f.Kind)
 	}
-	if strings.Join(names, ",") != "Inbox:inbox,Inbox/Projects:custom,Junk Email:spam,Flagged:starred" {
+	if strings.Join(names, ",") != "Inbox:inbox,Inbox/Projects:custom,Spam:spam,Starred:starred" {
 		t.Fatalf("folders %v", names)
 	}
 	if len(labels) != 1 || labels[0].Color != "#0078d4" {
