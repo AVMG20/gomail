@@ -3,7 +3,7 @@
 // webview (plain browser via `npm run dev`) every call is routed to the
 // in-memory mock in ./mock.
 import type {
-  Account, AIModel, AppInfo, BackupResult, RestoreSummary, AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
+  Account, AIModel, AppInfo, BackupResult, DeviceSyncConnect, DeviceSyncStatus, RestoreSummary, AttendeeResponse, Calendar, CalendarEvent, EventInput, RecurrenceScope, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts, EventName,
   EventPayloads, Folder, LabelCount, AttachmentData, Contact, AIUsage, EventDraft, ListQuery, Message, MessagePage, MessageSummary, SearchQuery, SearchResult, Settings, UpdateInfo, AutoMove } from './types'
 import { isSafeExternalUrl } from './format'
 import { normalizeDomains, normalizeSenders } from './trust'
@@ -127,7 +127,10 @@ export const USED_METHODS = [
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
 export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'SetEventReminders', 'MoveEventCheck', 'SyncCalendars']
 
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'RestoreLabel', 'ApplyLabelAction', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
+/** Sync between computers. Settings → Sync is hidden while these are missing. */
+export const DEVICE_SYNC_METHODS = ['GetDeviceSyncStatus', 'GetDeviceSyncCode', 'ConnectDeviceSync', 'DisconnectDeviceSync', 'SyncDevicesNow', 'SetDeviceSyncSecrets']
+
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'RestoreLabel', 'ApplyLabelAction', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS, ...DEVICE_SYNC_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -320,6 +323,7 @@ export function normSettings(s: Settings): Settings {
     darkenDesignedMail: false,
     launchAtLogin: s.launchAtLogin ?? false,
     checkUpdates: s.checkUpdates ?? true,
+    deviceSyncInterval: DEVICE_SYNC_INTERVALS.some((o) => o.value === s.deviceSyncInterval) ? s.deviceSyncInterval : 1,
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,
     syncDepthDays: s.syncDepthDays ?? 90,
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
@@ -351,6 +355,36 @@ export function writeLocal(key: string, value: unknown) {
     localStorage.setItem(LOCAL_PREFS, JSON.stringify(all))
   } catch {
     /* ignore */
+  }
+}
+
+export const DEFAULT_SYNC_SERVER = 'https://gomail.avmg.nl'
+
+/** Settings.deviceSyncInterval choices (minutes; -1 = only on start and with "Sync now"). */
+export const DEVICE_SYNC_INTERVALS = [
+  { value: 1, label: 'Every minute' },
+  { value: 5, label: 'Every 5 minutes' },
+  { value: 15, label: 'Every 15 minutes' },
+  { value: 30, label: 'Every 30 minutes' },
+  { value: 60, label: 'Every hour' },
+  { value: -1, label: 'Only manually' },
+]
+
+/** The words of a sync code, as the app shows them (numbered in a grid). */
+export function syncCodeWords(code: string): string[] {
+  return code.trim().split(/\s+/).filter(Boolean)
+}
+
+export function normSyncStatus(s: Partial<DeviceSyncStatus> | null | undefined): DeviceSyncStatus {
+  return {
+    available: s?.available ?? true,
+    connected: !!s?.connected,
+    serverUrl: s?.serverUrl ?? '',
+    includeSecrets: !!s?.includeSecrets,
+    syncing: !!s?.syncing,
+    lastSyncAt: s?.lastSyncAt ?? null,
+    error: s?.error ?? '',
+    defaultServerUrl: s?.defaultServerUrl || DEFAULT_SYNC_SERVER,
   }
 }
 
@@ -462,6 +496,15 @@ export const api = {
   exportBackup: (includeSecrets: boolean) => call<BackupResult>('ExportBackup', includeSecrets),
   /** Native open dialog, then merges the backup into this install. */
   importBackup: () => call<RestoreSummary>('ImportBackup'),
+  // ---- sync between computers
+  getDeviceSyncStatus: async () => normSyncStatus(await call<DeviceSyncStatus>('GetDeviceSyncStatus')),
+  /** Turns on sync with a new code or another computer's; the first sync runs in the background (devicesync:status). */
+  connectDeviceSync: async (req: DeviceSyncConnect) => normSyncStatus(await call<DeviceSyncStatus>('ConnectDeviceSync', req)),
+  /** The 24-word sync code, to set up another computer. */
+  getDeviceSyncCode: () => call<string>('GetDeviceSyncCode'),
+  disconnectDeviceSync: () => call<void>('DisconnectDeviceSync'),
+  syncDevicesNow: async () => normSyncStatus(await call<DeviceSyncStatus>('SyncDevicesNow')),
+  setDeviceSyncSecrets: (on: boolean) => call<void>('SetDeviceSyncSecrets', on),
   /** A mailto: link that launched the app before the UI was ready (returned once), or null. */
   getPendingCompose: () => call<EventPayloads['compose:open'] | null>('GetPendingCompose'),
   updateAccountSignature: (id: string, html: string) => call<void>('UpdateAccountSignature', id, html),

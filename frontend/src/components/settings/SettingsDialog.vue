@@ -2,7 +2,7 @@
 // Settings has two parts: "App" pages for settings that apply everywhere, and "Mailboxes":
 // the mailbox list, labels & rules, and one page per mailbox with everything set per mailbox.
 import { computed, nextTick, ref, watch, type Component } from 'vue'
-import { BellIcon, CalendarDaysIcon, InfoIcon, MailIcon, PaletteIcon, PlusIcon, SlidersHorizontalIcon, SparklesIcon, UsersIcon, XIcon, CheckIcon, LoaderIcon } from '@lucide/vue'
+import { BellIcon, CalendarDaysIcon, RefreshCwIcon, InfoIcon, MailIcon, PaletteIcon, PlusIcon, SlidersHorizontalIcon, SparklesIcon, UsersIcon, XIcon, CheckIcon, LoaderIcon } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import type { Account } from '@/lib/types'
@@ -19,6 +19,7 @@ import GeneralTab from './GeneralTab.vue'
 import MailboxPage from './MailboxPage.vue'
 import MailTab from './MailTab.vue'
 import NotificationsTab from './NotificationsTab.vue'
+import SyncTab from './SyncTab.vue'
 import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
 
 const ui = useUiStore()
@@ -34,6 +35,7 @@ const appPages: Page[] = [
   { id: 'notifications', label: 'Notifications', icon: BellIcon, comp: NotificationsTab },
   ...(hasMethod('ListCalendars') ? [{ id: 'calendar' as SettingsTab, label: 'Calendar', icon: CalendarDaysIcon, comp: CalendarTab }] : []),
   { id: 'ai', label: 'AI', icon: SparklesIcon, comp: AiTab },
+  ...(hasMethod('GetDeviceSyncStatus') ? [{ id: 'sync' as SettingsTab, label: 'Sync', icon: RefreshCwIcon, comp: SyncTab }] : []),
   { id: 'about', label: 'About', icon: InfoIcon, comp: AboutTab },
 ]
 const mailboxPages = computed<Page[]>(() => [

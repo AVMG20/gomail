@@ -60,6 +60,22 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** Re-read every setting after another computer changed them (settings:changed). Edits not
+   *  saved yet are kept: they are newer. */
+  async function reload() {
+    if (!settings.value) return
+    await inflight
+    try {
+      const fresh = await api.getSettings()
+      if (!settings.value) return
+      const keep: Partial<Settings> = {}
+      for (const k of pendingKeys) Object.assign(keep, { [k]: settings.value[k] })
+      settings.value = { ...fresh, ...keep }
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function loadDefaults() {
     try {
       defaults.value = await api.getDefaultPrompts()
@@ -94,6 +110,8 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null
+  /** Settings changed here since the last save started. */
+  let pendingKeys = new Set<keyof Settings>()
   /** Callers waiting for the next save (every debounced update resolves, not just the last). */
   let waiters: (() => void)[] = []
   /** Saves run one at a time and always send the latest state, so the last write wins. */
@@ -102,6 +120,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function save() {
     const done = waiters
     waiters = []
+    pendingKeys = new Set()
     saving.value = true
     try {
       await api.saveSettings(settings.value!)
@@ -117,6 +136,7 @@ export const useSettingsStore = defineStore('settings', () => {
   function update(patch: Partial<Settings>, delay = 350): Promise<void> {
     if (!settings.value) return Promise.resolve()
     settings.value = { ...settings.value, ...patch }
+    for (const k of Object.keys(patch)) pendingKeys.add(k as keyof Settings)
     if (saveTimer) clearTimeout(saveTimer)
     const p = new Promise<void>((resolve) => waiters.push(resolve))
     saveTimer = setTimeout(() => {
@@ -189,6 +209,6 @@ export const useSettingsStore = defineStore('settings', () => {
     patchLabel, renameLabel, removeLabel,
     settings, saving, models, modelsLoading, modelsError, defaults, appInfo, updateInfo, checkingUpdate, checkForUpdate,
     labels, labelMap, mutedMailboxes, labelsForAccount, labelsForAccounts, labelInAccountOf, labelGroupIds, viewLabel, aiReady, grammarReady,
-    load, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
+    load, reload, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
   }
 })

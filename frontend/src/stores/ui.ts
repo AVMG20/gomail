@@ -7,7 +7,7 @@ import { useMediaQuery } from '@vueuse/core'
 export type MailboxTab = 'general' | 'sorting' | 'calendar' | 'notifications' | 'labels' | 'ai'
 
 /** Settings pages: app-wide pages, the mailbox overview ("accounts") and one page per mailbox. */
-export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'mail' | 'notifications' | 'calendar' | 'ai' | 'about' | `mailbox:${string}`
+export type SettingsTab = 'general' | 'appearance' | 'accounts' | 'mail' | 'notifications' | 'calendar' | 'ai' | 'sync' | 'about' | `mailbox:${string}`
 
 function readMainView(): 'mail' | 'calendar' {
   try {

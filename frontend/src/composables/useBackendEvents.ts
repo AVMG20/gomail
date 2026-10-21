@@ -103,6 +103,7 @@ export function useBackendEvents() {
     }),
     api.on('accounts:changed', () => void reloadAccounts()),
     api.on('labels:changed', () => refreshLabels()),
+    api.on('settings:changed', () => void settings.reload()),
     api.on('network:status', (p) => {
       if (!p) return
       const was = accounts.online
