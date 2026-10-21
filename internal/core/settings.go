@@ -442,6 +442,7 @@ func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
 	st.AICorrectsOff = slices.Clone(st.AICorrectsOff)
 	st.JunkStaysPut = slices.Clone(st.JunkStaysPut)
 	st.QuietLabels = maps.Clone(st.QuietLabels)
+	st.NotJunkSenders = maps.Clone(st.NotJunkSenders)
 	if !fn(&st) {
 		s.settingsMu.Unlock()
 		return
@@ -516,6 +517,10 @@ func (s *Service) labelsLoseAccount(accountID string) {
 		}
 		if i := slices.Index(st.MutedMailboxes, accountID); i >= 0 {
 			st.MutedMailboxes = slices.Delete(st.MutedMailboxes, i, i+1)
+			changed = true
+		}
+		if _, ok := st.NotJunkSenders[accountID]; ok {
+			delete(st.NotJunkSenders, accountID)
 			changed = true
 		}
 		out := st.Labels[:0:0]

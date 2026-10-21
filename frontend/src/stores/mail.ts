@@ -6,7 +6,7 @@ import type { Address, ListQuery, Message, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from './accounts'
 import { useSettingsStore } from './settings'
 import { announce } from '@/lib/announce'
-import type { RuleRef } from '@/lib/junk'
+import type { RuleRef, SenderJunk } from '@/lib/junk'
 import { useSenderRulesStore } from './senderRules'
 
 /** accountId "" = unified across accounts (by folder kind). */
@@ -809,16 +809,23 @@ export const useMailStore = defineStore('mail', () => {
     try {
       // NotJunk also keeps Jev from junking them again and reports junk rules still matching the senders.
       const viaNotJunk = hasMethod('NotJunk')
+      const rules = useSenderRulesStore()
       const stillJunked: RuleRef[] = []
+      const more: SenderJunk[] = []
+      // Pending settings edits land first: NotJunk remembers the senders in the settings.
+      if (viaNotJunk) await rules.beforeChange()
       for (const [folder, list] of backend) {
         await inChunks(list, async (c) => {
-          if (viaNotJunk) stillJunked.push(...(await api.notJunk(c)).rules)
-          else await api.moveToFolder(c, folder)
+          if (!viaNotJunk) return void (await api.moveToFolder(c, folder))
+          const r = await api.notJunk(c)
+          stillJunked.push(...r.rules)
+          more.push(...r.more)
         })
       }
       announce(`${rows(moved.length)} moved to Inbox`)
       toast(done(moved.length, 'moved to Inbox'), { action: { label: 'Undo', onClick: undo } })
-      useSenderRulesStore().offerStopJunking([...new Map(stillJunked.map((r) => [r.id, r])).values()])
+      rules.offerStopJunking([...new Map(stillJunked.map((r) => [r.id, r])).values()])
+      if (viaNotJunk) void rules.afterNotJunk([...new Map(more.map((m) => [`${m.accountId} ${m.email}`, m])).values()])
     } catch (e) {
       restoreLocal(items)
       toast.error('Move failed', { description: errorMessage(e) })

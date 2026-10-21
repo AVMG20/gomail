@@ -631,6 +631,16 @@ func (m *MailService) NotJunk(ids []string) (core.NotJunkResult, error) {
 	return uiResult(s.NotJunk(ids))
 }
 
+// NotJunkSender moves all of a sender's mail in a mailbox's Junk to the
+// inbox (offered after Not junk) and returns how many moved.
+func (m *MailService) NotJunkSender(accountID, email string) (int, error) {
+	s, err := m.ready()
+	if err != nil {
+		return 0, err
+	}
+	return uiResult(s.NotJunkSender(accountID, email))
+}
+
 // LabelSender labels a sender's mail in one mailbox from now on (a label
 // rule) and labels the sender's mail already there. scope is "address" or
 // "domain".

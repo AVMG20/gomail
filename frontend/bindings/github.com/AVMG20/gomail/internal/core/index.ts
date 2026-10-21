@@ -5,5 +5,6 @@ export type {
     JunkSenderResult,
     LabelSenderResult,
     NotJunkResult,
-    RuleRef
+    RuleRef,
+    SenderJunk
 } from "./models.js";

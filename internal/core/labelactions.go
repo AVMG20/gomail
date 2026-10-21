@@ -44,16 +44,19 @@ func (m labelMoves) add(id string, l models.Label, kind, why string, stays junkS
 
 // junkStaysFor looks up the mailboxes of ids for labelMoves.add (nil when
 // every mailbox moves Junk-labeled mail).
+// Mail from a sender the user marked "Not junk" stays too.
 func (s *Service) junkStaysFor(ids []string) junkStays {
-	keep := s.Settings().JunkStaysPut
-	if len(keep) == 0 {
+	st := s.Settings()
+	keep := st.JunkStaysPut
+	if len(keep) == 0 && len(st.NotJunkSenders) == 0 {
 		return nil
 	}
 	places, err := s.store.FolderKinds(ids)
 	if err != nil {
 		return nil
 	}
-	return func(id string) bool { return slices.Contains(keep, places[id].AccountID) }
+	trusted := s.notJunkIDs(st, ids)
+	return func(id string) bool { return slices.Contains(keep, places[id].AccountID) || trusted[id] }
 }
 
 // labelWhy says why a label moved mail, for the review.

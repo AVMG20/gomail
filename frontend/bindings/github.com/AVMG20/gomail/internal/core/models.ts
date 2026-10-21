@@ -62,6 +62,12 @@ export interface NotJunkResult {
      * junk rules that still send these senders to Junk
      */
     "rules": RuleRef[] | null;
+
+    /**
+     * More is the other mail of these senders still in Junk, per mailbox
+     * (the UI offers to move it too).
+     */
+    "more": SenderJunk[] | null;
 }
 
 /**
@@ -85,4 +91,13 @@ export interface RuleRef {
      * for "label"
      */
     "labelId": string;
+}
+
+/**
+ * SenderJunk is how much of a sender's mail is in a mailbox's Junk.
+ */
+export interface SenderJunk {
+    "accountId": string;
+    "email": string;
+    "count": number;
 }

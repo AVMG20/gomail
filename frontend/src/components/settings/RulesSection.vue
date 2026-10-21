@@ -15,10 +15,14 @@ import { api, errorMessage, hasMethod } from '@/lib/api'
 import { labelsForAccount } from '@/lib/labelScope'
 import type { LabelRule } from '@/lib/types'
 import { useSettingsStore } from '@/stores/settings'
+import NotJunkSendersDialog from './NotJunkSendersDialog.vue'
 import SettingSection from './SettingSection.vue'
 
 const props = defineProps<{ accountId: string }>()
 const settings = useSettingsStore()
+/** Senders marked "Not junk" (kept out of the rules list; managed in a small dialog). */
+const notJunkCount = computed(() => settings.settings?.notJunkSenders?.[props.accountId]?.length ?? 0)
+const notJunkOpen = ref(false)
 const allRules = computed(() => settings.settings?.labelRules ?? [])
 const rules = computed(() => allRules.value.filter((r) => r.accountId === props.accountId))
 // Labels a rule can add: the mailbox's own labels (the built-in Junk label is the "Move to Junk"
@@ -169,6 +173,12 @@ async function applyNow() {
           <template v-else-if="hasJunkRule">Junk rules only act on new mail.</template>
         </span>
       </template>
+    </div>
+    <div v-if="notJunkCount" class="pb-2">
+      <button type="button" class="text-muted-foreground hover:text-foreground text-xs underline-offset-2 hover:underline" @click="notJunkOpen = true">
+        {{ notJunkCount }} {{ notJunkCount === 1 ? 'sender skips' : 'senders skip' }} Junk…
+      </button>
+      <NotJunkSendersDialog v-model:open="notJunkOpen" :account-id="accountId" />
     </div>
   </SettingSection>
 </template>

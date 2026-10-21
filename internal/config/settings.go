@@ -265,6 +265,29 @@ func Normalize(s *models.Settings) {
 	s.AutoClassify = len(s.AutoLabelAccounts) > 0 // for older versions
 	s.AICorrectsOff = uniqueTrimmed(s.AICorrectsOff)
 	s.JunkStaysPut = uniqueTrimmed(s.JunkStaysPut)
+	s.NotJunkSenders = normalizeSenderLists(s.NotJunkSenders)
+}
+
+// normalizeSenderLists lowercases and dedupes per-account address lists and
+// drops empty ones (a new map: the input may be shared).
+func normalizeSenderLists(in map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for acct, list := range in {
+		acct = strings.TrimSpace(acct)
+		if acct == "" {
+			continue
+		}
+		if l := NormalizeSenders(list); len(l) > 0 {
+			out[acct] = l
+		}
+	}
+	return out
+}
+
+// IsNotJunkSender reports whether the user marked email "Not junk" in the mailbox.
+func IsNotJunkSender(s models.Settings, accountID, email string) bool {
+	e := strings.ToLower(strings.TrimSpace(email))
+	return e != "" && slices.Contains(s.NotJunkSenders[accountID], e)
 }
 
 // AutoClassifies reports whether new mail of accountID is AI-labeled

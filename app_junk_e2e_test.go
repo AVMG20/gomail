@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/core"
 	"github.com/AVMG20/gomail/internal/fakes"
 	"github.com/AVMG20/gomail/internal/models"
 )
@@ -208,5 +209,73 @@ func TestLabelSender(t *testing.T) {
 	}
 	if st, _ = m.GetSettings(); len(st.LabelRules) != 0 {
 		t.Fatalf("rule not removed: %+v", st.LabelRules)
+	}
+}
+
+// "Not junk" remembers the sender for that mailbox: it reports the sender's
+// other mail still in Junk (moved on request), and the sender's new mail
+// that lands in Junk goes back to the inbox and notifies like any new mail.
+func TestNotJunkSenderSkipsJunk(t *testing.T) {
+	e := newE2E(t)
+	m := e.m
+	now := time.Now().Truncate(time.Second)
+	st, _ := m.GetSettings()
+	st.MicrosoftClientID = "ms-client"
+	if err := m.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	oa, err := m.AddAccount(models.ProviderOutlook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := e.graph.Deliver(fakes.GraphMessage{Folder: "junkemail", Subject: "Timesheet reminder", FromName: "Tracker", From: "noreply@tracker.example", Received: now.Add(-3 * time.Hour)})
+	e.graph.Deliver(fakes.GraphMessage{Folder: "junkemail", Subject: "Monthly summary", FromName: "Tracker", From: "NoReply@tracker.example", Received: now.Add(-4 * time.Hour)})
+	other := e.graph.Deliver(fakes.GraphMessage{Folder: "junkemail", Subject: "Win a prize", From: "promo@spam.example", Received: now.Add(-5 * time.Hour)})
+	if err := m.SyncNow(""); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := m.NotJunk([]string{e.msg(oa.ID, "Timesheet reminder").ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Count != 1 || len(res.More) != 1 || res.More[0] != (core.SenderJunk{AccountID: oa.ID, Email: "noreply@tracker.example", Count: 1}) {
+		t.Fatalf("not junk result %+v", res)
+	}
+	eventually(t, "moved to the inbox", func() bool { return e.graph.FolderOf(first) == "inbox" })
+	st, _ = m.GetSettings()
+	if got := st.NotJunkSenders[oa.ID]; !slices.Equal(got, []string{"noreply@tracker.example"}) {
+		t.Fatalf("not junk senders %+v", st.NotJunkSenders)
+	}
+
+	// "Move all to Inbox": the sender's other Junk mail, not anyone else's.
+	n, err := m.NotJunkSender(oa.ID, "noreply@tracker.example")
+	if err != nil || n != 1 {
+		t.Fatalf("not junk sender moved %d, %v", n, err)
+	}
+	if e.graph.FolderOf(other) != "junkemail" {
+		t.Errorf("other sender's mail moved")
+	}
+
+	// New mail from the sender that lands in Junk goes to the inbox and notifies.
+	before := len(e.event(models.EventNewMail))
+	fresh := e.graph.Deliver(fakes.GraphMessage{Folder: "junkemail", Subject: "Daily reminder", FromName: "Tracker", From: "noreply@tracker.example", Received: now})
+	spam := e.graph.Deliver(fakes.GraphMessage{Folder: "junkemail", Subject: "Cheap pills", From: "promo@spam.example", Received: now})
+	if err := m.SyncNow(""); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "new mail back in the inbox", func() bool { return e.graph.FolderOf(fresh) == "inbox" })
+	if e.graph.FolderOf(spam) != "junkemail" {
+		t.Errorf("other junk moved")
+	}
+	evs := e.event(models.EventNewMail)
+	if len(evs) != before+1 {
+		t.Fatalf("new mail events %d, want %d: %+v", len(evs), before+1, evs)
+	}
+	if ev := evs[len(evs)-1].(models.NewMailEvent); ev.Latest.Subject != "Daily reminder" || ev.Count != 1 {
+		t.Fatalf("announced %+v", ev)
+	}
+	if got := e.msg(oa.ID, "Daily reminder"); !got.Unread || slices.Contains(got.Labels, "junk") {
+		t.Fatalf("rescued mail %+v", got)
 	}
 }

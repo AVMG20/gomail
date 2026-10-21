@@ -856,13 +856,33 @@ class MockBackend {
       m.labels = m.labels.filter((l) => l !== 'junk')
       m.labelDetails = (m.labelDetails ?? []).filter((d) => d.labelId !== 'junk')
     })
+    const moved = new Set(list.map((m) => m.id))
+    const senders = this.settings.notJunkSenders ?? (this.settings.notJunkSenders = {})
+    const more = new Map<string, { accountId: string; email: string; count: number }>()
+    for (const m of list) {
+      const email = m.from.email.toLowerCase()
+      if (!email) continue
+      if (!(senders[m.accountId] ?? []).includes(email)) senders[m.accountId] = [...(senders[m.accountId] ?? []), email]
+      const count = this.junkFrom(m.accountId, email).filter((x) => !moved.has(x.id)).length
+      if (count) more.set(`${m.accountId} ${email}`, { accountId: m.accountId, email, count })
+    }
     const found = new Map<string, RuleRef>()
     for (const r of this.settings.labelRules ?? []) {
       if (r.action !== 'junk' || r.field !== 'from' || !r.contains) continue
       const hit = list.some((m) => (!r.accountId || r.accountId === m.accountId) && `${m.from.name} ${m.from.email}`.toLowerCase().includes(r.contains.toLowerCase()))
       if (hit) found.set(r.id, { id: r.id, accountId: r.accountId, contains: r.contains, action: 'junk', labelId: '' })
     }
-    return { count: list.length, rules: [...found.values()] }
+    return { count: list.length, rules: [...found.values()], more: [...more.values()] }
+  }
+
+  private junkFrom(accountId: string, email: string): Message[] {
+    return [...this.messages.values()].filter((m) => m.accountId === accountId && m.from.email.toLowerCase() === email && m.folderIds.some((f) => this.kindOf(f) === 'spam'))
+  }
+
+  /** Like the backend: all of a sender's Junk mail to the inbox. */
+  async NotJunkSender(accountId: string, email: string): Promise<number> {
+    const ids = this.junkFrom(accountId, email.toLowerCase()).map((m) => m.id)
+    return ids.length ? (await this.NotJunk(ids)).count : 0
   }
 
   async RemoveRules(ruleIds: string[]): Promise<void> {

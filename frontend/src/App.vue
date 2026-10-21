@@ -8,6 +8,7 @@ import FolderSidebar from '@/components/mail/FolderSidebar.vue'
 import MessageList from '@/components/mail/MessageList.vue'
 import Onboarding from '@/components/dialogs/Onboarding.vue'
 import LinkConfirmDialog from '@/components/dialogs/LinkConfirmDialog.vue'
+import NotJunkRestDialog from '@/components/dialogs/NotJunkRestDialog.vue'
 import TooltipLayer from '@/components/common/TooltipLayer.vue'
 import { useBackendEvents } from '@/composables/useBackendEvents'
 import { useShortcuts } from '@/composables/useShortcuts'
@@ -191,6 +192,7 @@ watch([() => mail.mailboxName, showCalendar], ([name, cal]) => {
     <ClassifyConfirmDialog v-if="used.classify" />
     <SenderCleanup v-if="used.cleanup" />
     <LinkConfirmDialog />
+    <NotJunkRestDialog />
     <Toaster position="bottom-center" :theme="toasterTheme" close-button />
     <TooltipLayer />
   </div>

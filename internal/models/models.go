@@ -377,6 +377,10 @@ type Settings struct {
 	// QuietLabels maps an account id to the labels whose new mail doesn't
 	// notify. Accounts without an entry use DefaultQuietLabels (Junk).
 	QuietLabels map[string][]string `json:"quietLabels"`
+	// NotJunkSenders maps an account id to the addresses the user marked
+	// "Not junk": their new mail that lands in Junk goes back to the inbox
+	// (and notifies), and Jev doesn't move it to Junk.
+	NotJunkSenders map[string][]string `json:"notJunkSenders"`
 	// MutedMailboxes lists account ids whose new mail never notifies
 	// (calendar reminders are separate: Account.CalendarMuted).
 	MutedMailboxes []string `json:"mutedMailboxes"`

@@ -394,6 +394,8 @@ export interface Settings {
   labelRules?: LabelRule[]
   /** Account id → labels whose new mail doesn't notify; missing = Junk only. Junk never notifies. */
   quietLabels?: Record<string, string[]>
+  /** Per mailbox: senders marked "Not junk"; their mail that lands in Junk goes to the inbox. */
+  notJunkSenders?: Record<string, string[]>
   /** Account ids whose new mail never notifies (calendar reminders are separate). */
   mutedMailboxes?: string[]
   /** Folder ids left out of the sidebar (other folders the user doesn't use). */

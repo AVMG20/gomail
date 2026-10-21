@@ -378,6 +378,14 @@ export function NotJunk(ids: string[] | null): $CancellablePromise<core$0.NotJun
 }
 
 /**
+ * NotJunkSender moves all of a sender's mail in a mailbox's Junk to the
+ * inbox (offered after Not junk) and returns how many moved.
+ */
+export function NotJunkSender(accountID: string, email: string): $CancellablePromise<number> {
+    return $Call.ByID(649687016, accountID, email);
+}
+
+/**
  * OpenExternalURL opens an http(s)/mailto link in the system browser.
  */
 export function OpenExternalURL(url: string): $CancellablePromise<void> {

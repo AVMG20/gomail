@@ -227,6 +227,11 @@ func (s *Service) applyRules(accountID string, ids []string, initial bool) {
 			act = planRules(rules, st.Labels, cands, true)
 		}
 	}
+	// Senders the user marked "Not junk" win over Junk rules, and their mail
+	// that landed in Junk goes back to the inbox.
+	if trusted := s.rescueNotJunk(st, accountID, ids); len(trusted) > 0 {
+		act.junk = slices.DeleteFunc(act.junk, func(id string) bool { return trusted[id] })
+	}
 	// A first sync brings mail that was already there: its imported labels
 	// don't move it (the user may have kept it in the inbox on purpose).
 	if !initial {

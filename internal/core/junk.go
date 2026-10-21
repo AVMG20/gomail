@@ -3,6 +3,8 @@ package core
 import (
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -87,6 +89,16 @@ type LabelSenderResult struct {
 type NotJunkResult struct {
 	Count int       `json:"count"` // messages moved to the inbox
 	Rules []RuleRef `json:"rules"` // junk rules that still send these senders to Junk
+	// More is the other mail of these senders still in Junk, per mailbox
+	// (the UI offers to move it too).
+	More []SenderJunk `json:"more"`
+}
+
+// SenderJunk is how much of a sender's mail is in a mailbox's Junk.
+type SenderJunk struct {
+	AccountID string `json:"accountId"`
+	Email     string `json:"email"`
+	Count     int    `json:"count"`
 }
 
 // JunkSender sends a sender's mail in one mailbox to Junk from now on and
@@ -282,8 +294,12 @@ func (s *Service) RemoveRules(ruleIDs []string) error {
 // mailbox's inbox. The user decided they aren't junk: Jev won't label them
 // Junk again. It returns the junk rules that would still send these
 // senders' new mail to Junk, so the UI can offer to stop them.
+//
+// Their senders are remembered per mailbox (Settings.NotJunkSenders): new
+// mail from them that lands in Junk goes back to the inbox, and Jev doesn't
+// move their mail to Junk.
 func (s *Service) NotJunk(ids []string) (NotJunkResult, error) {
-	res := NotJunkResult{Rules: []RuleRef{}}
+	res := NotJunkResult{Rules: []RuleRef{}, More: []SenderJunk{}}
 	ids, err := s.expand(ids, store.ExpandFolder)
 	if err != nil || len(ids) == 0 {
 		return res, err
@@ -302,6 +318,10 @@ func (s *Service) NotJunk(ids []string) (NotJunkResult, error) {
 	}
 	res.Count = len(ids)
 	s.messagesChanged(ids)
+	if err := s.rememberNotJunk(sums); err != nil {
+		slog.Warn("not junk: remembering the senders failed", "err", err)
+	}
+	res.More = s.senderJunk(sums, ids)
 	seen := map[string]bool{}
 	rules := s.Settings().LabelRules
 	for _, m := range sums {
@@ -313,4 +333,152 @@ func (s *Service) NotJunk(ids []string) (NotJunkResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// rememberNotJunk adds the senders of mail the user took out of Junk to
+// their mailbox's Not junk list (not the user's own addresses).
+func (s *Service) rememberNotJunk(sums []models.MessageSummary) error {
+	rulesMu.Lock()
+	defer rulesMu.Unlock()
+	st := s.Settings()
+	own := s.ownAddresses()
+	lists := maps.Clone(st.NotJunkSenders)
+	if lists == nil {
+		lists = map[string][]string{}
+	}
+	changed := false
+	for _, m := range sums {
+		e := config.NormalizeSender(m.From.Email)
+		if e == "" || own[e] || slices.Contains(lists[m.AccountID], e) {
+			continue
+		}
+		lists[m.AccountID] = append(slices.Clone(lists[m.AccountID]), e)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	st.NotJunkSenders = lists
+	return s.SaveSettings(st)
+}
+
+// ownAddresses are the addresses of the mailboxes in gomail (lowercase).
+func (s *Service) ownAddresses() map[string]bool {
+	out := map[string]bool{}
+	if accts, err := s.store.Accounts(); err == nil {
+		for _, a := range accts {
+			out[strings.ToLower(a.Email)] = true
+		}
+	}
+	return out
+}
+
+// senderJunk counts the other mail (not moved) of these senders that is
+// still in their mailbox's Junk.
+func (s *Service) senderJunk(sums []models.MessageSummary, moved []string) []SenderJunk {
+	skip := map[string]bool{}
+	for _, id := range moved {
+		skip[id] = true
+	}
+	out := []SenderJunk{}
+	seen := map[string]bool{}
+	for _, m := range sums {
+		e := config.NormalizeSender(m.From.Email)
+		if e == "" || seen[m.AccountID+"\x00"+e] {
+			continue
+		}
+		seen[m.AccountID+"\x00"+e] = true
+		if n := len(s.junkFrom(m.AccountID, e, skip)); n > 0 {
+			out = append(out, SenderJunk{AccountID: m.AccountID, Email: e, Count: n})
+		}
+	}
+	return out
+}
+
+// junkFrom lists a sender's mail in a mailbox's Junk (exact address).
+func (s *Service) junkFrom(accountID, email string, skip map[string]bool) []string {
+	cands, err := s.store.SenderMail(accountID, email, false)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, c := range cands {
+		if c.InSpam && !skip[c.ID] && strings.EqualFold(strings.TrimSpace(c.FromEmail), email) {
+			ids = append(ids, c.ID)
+		}
+	}
+	return ids
+}
+
+// NotJunkSender moves all of a sender's mail in a mailbox's Junk to the
+// inbox ("Move all to Inbox" after Not junk) and returns how many moved.
+func (s *Service) NotJunkSender(accountID, email string) (int, error) {
+	e := config.NormalizeSender(email)
+	if e == "" {
+		return 0, errors.New("that isn't an email address")
+	}
+	ids := s.junkFrom(accountID, e, nil)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	total := 0
+	for _, b := range batches(ids, ruleBatch) {
+		res, err := s.NotJunk(b)
+		total += res.Count
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+// notJunkIDs reports which of ids are from a sender marked "Not junk" in
+// their mailbox.
+func (s *Service) notJunkIDs(st models.Settings, ids []string) map[string]bool {
+	out := map[string]bool{}
+	if len(st.NotJunkSenders) == 0 || len(ids) == 0 {
+		return out
+	}
+	cands, err := s.store.RuleCandidates(ids)
+	if err != nil {
+		return out
+	}
+	for _, c := range cands {
+		if config.IsNotJunkSender(st, c.AccountID, c.FromEmail) {
+			out[c.ID] = true
+		}
+	}
+	return out
+}
+
+// rescueNotJunk moves new mail from "Not junk" senders that landed in Junk
+// back to the inbox. It runs before new mail is announced, so the mail
+// notifies like any new inbox mail. Jev won't label it Junk again.
+func (s *Service) rescueNotJunk(st models.Settings, accountID string, ids []string) map[string]bool {
+	trusted := s.notJunkIDs(st, ids)
+	if len(trusted) == 0 {
+		return trusted
+	}
+	cands, err := s.store.RuleCandidates(ids)
+	if err != nil {
+		return trusted
+	}
+	var move []string
+	for _, c := range cands {
+		if trusted[c.ID] && c.InSpam {
+			move = append(move, c.ID)
+		}
+	}
+	if len(move) == 0 {
+		return trusted
+	}
+	if err := s.store.RejectLabel(move, config.JunkLabelID); err != nil {
+		slog.Warn("not junk senders: keeping Jev off failed", "account", accountID, "err", err)
+	}
+	for _, b := range batches(move, ruleBatch) {
+		if err := s.engine.MoveToKind(b, models.FolderInbox); err != nil {
+			slog.Warn("not junk senders: moving to the inbox failed", "account", accountID, "err", err)
+		}
+	}
+	return trusted
 }

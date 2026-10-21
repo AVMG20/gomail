@@ -94,7 +94,7 @@ describe('triage', () => {
     mail.setMailbox({ accountId: '', folderId: '', kind: 'spam' })
     mail.messages = [row('m1', { folderIds: ['junk1'] }), row('m2', { accountId: 'b', folderIds: ['junk2'] })]
     // NotJunk moves to the message's own account's Inbox (and keeps Jev from junking it again).
-    const notJunk = vi.spyOn(api, 'notJunk').mockResolvedValue({ count: 1, rules: [] })
+    const notJunk = vi.spyOn(api, 'notJunk').mockResolvedValue({ count: 1, rules: [], more: [] })
     await mail.notJunk(['m1', 'm2'])
     expect(notJunk.mock.calls.map((c) => c[0])).toEqual([['m1'], ['m2']])
     expect(mail.messages).toEqual([])

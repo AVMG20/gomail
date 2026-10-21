@@ -33,6 +33,14 @@ export interface NotJunkResult {
   count: number
   /** Junk rules that still send these senders' new mail to Junk. */
   rules: RuleRef[]
+  /** These senders' other mail still in Junk, per mailbox (offered to move too). */
+  more: SenderJunk[]
+}
+/** How much of a sender's mail is in a mailbox's Junk. */
+export interface SenderJunk {
+  accountId: string
+  email: string
+  count: number
 }
 export type SenderScope = 'address' | 'domain'
 

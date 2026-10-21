@@ -1270,6 +1270,12 @@ export interface Settings {
     "emailBackground": string;
 
     /**
+     * DarkenDesignedMail (experimental): in dark mode, also show designed (white)
+     * mail dark by inverting its colors, photos excepted. Default false.
+     */
+    "darkenDesignedMail": boolean;
+
+    /**
      * Calendar preferences.
      * "auto" | "sunday" | "monday" | "saturday" (default "auto")
      */
@@ -1442,6 +1448,13 @@ export interface Settings {
      * notify. Accounts without an entry use DefaultQuietLabels (Junk).
      */
     "quietLabels": { [_ in string]?: string[] | null } | null;
+
+    /**
+     * NotJunkSenders maps an account id to the addresses the user marked
+     * "Not junk": their new mail that lands in Junk goes back to the inbox
+     * (and notifies), and Jev doesn't move it to Junk.
+     */
+    "notJunkSenders": { [_ in string]?: string[] | null } | null;
 
     /**
      * MutedMailboxes lists account ids whose new mail never notifies

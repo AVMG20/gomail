@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
+import { shallowRef } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { inChunks, useMailStore } from './mail'
 import { useAccountsStore } from './accounts'
 import { useSettingsStore } from './settings'
 import { useUiStore } from './ui'
-import { ruleTarget, sendersOf, type JunkSenderResult, type RuleRef, type SenderScope } from '@/lib/junk'
+import { ruleTarget, sendersOf, type JunkSenderResult, type RuleRef, type SenderJunk, type SenderScope } from '@/lib/junk'
 import type { LabelRule } from '@/lib/types'
 import { announce } from '@/lib/announce'
 
@@ -151,5 +152,43 @@ export const useSenderRulesStore = defineStore('senderRules', () => {
     })
   }
 
-  return { available, refreshRules, junkSender, labelSender, removeRules, offerStopJunking }
+  /** After "Not junk": the senders' other mail still in Junk, for "Move all to Inbox?". */
+  const junkLeft = shallowRef<SenderJunk[]>([])
+
+  /** Re-read the Not junk senders the backend added (the settings store saves its whole copy). */
+  async function refreshNotJunkSenders() {
+    try {
+      const fresh = await api.getSettings()
+      if (settings.settings) settings.settings = { ...settings.settings, notJunkSenders: fresh.notJunkSenders ?? {} }
+    } catch {
+      /* the next settings load has them */
+    }
+  }
+
+  /** "Not junk" went through: remember the senders here too, and offer to move the rest of their Junk. */
+  async function afterNotJunk(more: SenderJunk[]) {
+    await refreshNotJunkSenders()
+    if (hasMethod('NotJunkSender')) junkLeft.value = more.filter((m) => m.count > 0)
+  }
+
+  /** "Move all to Inbox": every listed sender's mail in Junk. */
+  async function moveJunkLeft() {
+    const list = junkLeft.value
+    junkLeft.value = []
+    let moved = 0
+    try {
+      for (const s of list) moved += await api.notJunkSender(s.accountId, s.email)
+    } catch (e) {
+      toast.error('Couldn’t move the mail', { description: errorMessage(e) })
+    }
+    if (moved) {
+      const text = `${moved} more ${moved === 1 ? 'message' : 'messages'} moved to Inbox`
+      announce(text)
+      toast(text)
+    }
+    void mail.softRefresh()
+    accounts.refreshCounts()
+  }
+
+  return { available, refreshRules, junkSender, labelSender, removeRules, offerStopJunking, beforeChange, junkLeft, afterNotJunk, moveJunkLeft }
 })

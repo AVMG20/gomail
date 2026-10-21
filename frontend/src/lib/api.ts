@@ -298,6 +298,7 @@ export function normSettings(s: Settings): Settings {
     notifications: s.notifications ?? true,
     labelRules: s.labelRules ?? [],
     quietLabels: s.quietLabels ?? {},
+    notJunkSenders: s.notJunkSenders ?? {},
     mutedMailboxes: s.mutedMailboxes ?? [],
     hiddenFolders: s.hiddenFolders ?? [],
     autoLabelAccounts: s.autoLabelAccounts ?? [],
@@ -394,11 +395,14 @@ export const api = {
     const r = await call<JunkSenderResult>('JunkSender', accountId, address, scope, ids)
     return { ...r, moved: r.moved ?? [], unread: r.unread ?? [] }
   },
-  /** Back to the inbox (Jev won't junk them again); returns the junk rules still matching their senders. */
+  /** Back to the inbox (Jev won't junk them again; their senders skip Junk from now on); returns the
+   *  junk rules still matching the senders and their other mail still in Junk. */
   notJunk: async (ids: string[]): Promise<NotJunkResult> => {
     const r = await call<NotJunkResult>('NotJunk', ids)
-    return { count: r.count ?? 0, rules: r.rules ?? [] }
+    return { count: r.count ?? 0, rules: r.rules ?? [], more: r.more ?? [] }
   },
+  /** All of a sender's mail in a mailbox's Junk to the inbox; returns how many moved. */
+  notJunkSender: (accountId: string, email: string) => call<number>('NotJunkSender', accountId, email),
   /** "Always label <sender> as …": a label rule for the mailbox, and the label on the sender's mail now. */
   labelSender: async (accountId: string, address: string, scope: SenderScope, labelId: string): Promise<LabelSenderResult> => {
     const r = await call<LabelSenderResult>('LabelSender', accountId, address, scope, labelId)
