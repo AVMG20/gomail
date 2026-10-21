@@ -1,7 +1,8 @@
 // Package syncserver is gomail's device-sync server: a small JSON API that
 // keeps a few encrypted documents per account, each with a revision
 // number, so several gomail installs can share settings, labels and
-// sign-ins. Devices encrypt everything before upload (see internal/devsync);
+// sign-ins. An account is named by an id the device derives from its sync
+// code; devices encrypt everything before upload (see internal/devsync), so
 // the server only stores ciphertext and a salted hash of each account's
 // auth key. It needs no cgo (pure-Go SQLite).
 package syncserver
@@ -28,10 +29,8 @@ import (
 // Config configures a Server.
 type Config struct {
 	DataDir string // holds sync.db
-	// Signups allows new accounts; SignupCode, when set, must be sent with
-	// a sign-up.
-	Signups    bool
-	SignupCode string
+	// Signups allows new accounts (existing ones keep working either way).
+	Signups bool
 	// MaxDocBytes caps one document, QuotaBytes an account's documents
 	// together, MaxDocs their number. 0 = defaults.
 	MaxDocBytes int
@@ -56,11 +55,11 @@ const (
 
 // Server serves the sync API.
 type Server struct {
-	cfg    Config
-	db     *db
-	mux    *http.ServeMux
-	byIP   *limiter // sign-ups and logins per client address
-	byUser *limiter // logins per account
+	cfg       Config
+	db        *db
+	mux       *http.ServeMux
+	byIP      *limiter // sign-ups and logins per client address
+	byAccount *limiter // logins per account
 }
 
 // New opens (creating) the database in cfg.DataDir.
@@ -85,7 +84,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("opening the database: %w", err)
 	}
 	s := &Server{cfg: cfg, db: d, mux: http.NewServeMux(),
-		byIP: newLimiter(30, 10*time.Minute), byUser: newLimiter(10, 15*time.Minute)}
+		byIP: newLimiter(30, 10*time.Minute), byAccount: newLimiter(10, 15*time.Minute)}
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("POST /v1/register", s.register)
 	s.mux.HandleFunc("POST /v1/login", s.login)
@@ -123,30 +122,26 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, 4<<10, &req) {
 		return
 	}
-	user, key, ok := credentials(w, req.Username, req.AuthKey)
+	account, key, ok := credentials(w, req.Account, req.AuthKey)
 	if !ok {
 		return
 	}
 	if !s.cfg.Signups {
-		writeError(w, http.StatusForbidden, syncapi.ErrSignupsClosed, "this server doesn't take new accounts")
-		return
-	}
-	if s.cfg.SignupCode != "" && !equalStrings(req.SignupCode, s.cfg.SignupCode) {
-		writeError(w, http.StatusForbidden, syncapi.ErrSignupCode, "a valid sign-up code is needed for a new account")
+		writeError(w, http.StatusForbidden, syncapi.ErrSignupsClosed, "this server doesn't take new sync accounts")
 		return
 	}
 	salt := make([]byte, 16)
 	_, _ = rand.Read(salt)
-	created, err := s.db.createUser(user, salt, key)
+	created, err := s.db.createAccount(account, salt, key)
 	if err != nil {
 		s.internal(w, "register", err)
 		return
 	}
 	if !created {
-		writeError(w, http.StatusConflict, syncapi.ErrUserExists, "that username is taken")
+		writeError(w, http.StatusConflict, syncapi.ErrAccountExists, "this account exists already")
 		return
 	}
-	slog.Info("account created", "user", user)
+	slog.Info("account created")
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -158,36 +153,35 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, 4<<10, &req) {
 		return
 	}
-	user, key, ok := credentials(w, req.Username, req.AuthKey)
-	if !ok || !s.limit(w, s.byUser, "user:"+user) {
+	account, key, ok := credentials(w, req.Account, req.AuthKey)
+	if !ok || !s.limit(w, s.byAccount, account) {
 		return
 	}
-	good, err := s.db.checkUser(user, key)
+	good, err := s.db.checkAccount(account, key)
 	if err != nil {
 		s.internal(w, "login", err)
 		return
 	}
 	if !good {
-		writeError(w, http.StatusUnauthorized, syncapi.ErrBadCredentials, "wrong username or passphrase")
+		writeError(w, http.StatusUnauthorized, syncapi.ErrBadCredentials, "no sync account for this code")
 		return
 	}
-	s.byUser.reset("user:" + user)
+	s.byAccount.reset(account)
 	raw := make([]byte, 32)
 	_, _ = rand.Read(raw)
 	token := base64.RawURLEncoding.EncodeToString(raw)
 	exp := time.Now().Add(s.cfg.SessionTTL).UTC().Truncate(time.Second)
-	if err := s.db.addSession(tokenHash(token), user, exp); err != nil {
+	if err := s.db.addSession(tokenHash(token), account, exp); err != nil {
 		s.internal(w, "login", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, syncapi.LoginResponse{Token: token, ExpiresAt: exp})
 }
 
-// credentials validates a username and base64 auth key.
-func credentials(w http.ResponseWriter, username, authKey string) (string, []byte, bool) {
-	user := syncapi.NormalizeUsername(username)
-	if !syncapi.ValidUsername(user) {
-		writeError(w, http.StatusBadRequest, syncapi.ErrBadRequest, "usernames are 3–64 characters: letters, digits and . _ @ + -")
+// credentials validates an account id and base64 auth key.
+func credentials(w http.ResponseWriter, account, authKey string) (string, []byte, bool) {
+	if !syncapi.ValidAccount(account) {
+		writeError(w, http.StatusBadRequest, syncapi.ErrBadRequest, "malformed account id")
 		return "", nil, false
 	}
 	key, err := base64.StdEncoding.DecodeString(authKey)
@@ -195,7 +189,7 @@ func credentials(w http.ResponseWriter, username, authKey string) (string, []byt
 		writeError(w, http.StatusBadRequest, syncapi.ErrBadRequest, "malformed auth key")
 		return "", nil, false
 	}
-	return user, key, true
+	return account, key, true
 }
 
 func tokenHash(token string) []byte {
@@ -203,20 +197,15 @@ func tokenHash(token string) []byte {
 	return h[:]
 }
 
-func equalStrings(a, b string) bool {
-	ha, hb := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
-	return ha == hb
-}
-
-// auth wraps a handler that needs a session; it gets the username.
-func (s *Server) auth(next func(w http.ResponseWriter, r *http.Request, user string)) http.HandlerFunc {
+// auth wraps a handler that needs a session; it gets the account id.
+func (s *Server) auth(next func(w http.ResponseWriter, r *http.Request, account string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || token == "" || len(token) > 256 {
 			writeError(w, http.StatusUnauthorized, syncapi.ErrUnauthorized, "sign in first")
 			return
 		}
-		user, err := s.db.session(tokenHash(token))
+		account, err := s.db.session(tokenHash(token))
 		if errors.Is(err, errNotFound) {
 			writeError(w, http.StatusUnauthorized, syncapi.ErrUnauthorized, "the session expired")
 			return
@@ -225,14 +214,14 @@ func (s *Server) auth(next func(w http.ResponseWriter, r *http.Request, user str
 			s.internal(w, "session", err)
 			return
 		}
-		next(w, r, user)
+		next(w, r, account)
 	}
 }
 
 // ---- documents ----
 
-func (s *Server) listDocs(w http.ResponseWriter, _ *http.Request, user string) {
-	rows, err := s.db.listDocs(user)
+func (s *Server) listDocs(w http.ResponseWriter, _ *http.Request, account string) {
+	rows, err := s.db.listDocs(account)
 	if err != nil {
 		s.internal(w, "list", err)
 		return
@@ -254,12 +243,12 @@ func docName(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return name, true
 }
 
-func (s *Server) getDoc(w http.ResponseWriter, r *http.Request, user string) {
+func (s *Server) getDoc(w http.ResponseWriter, r *http.Request, account string) {
 	name, ok := docName(w, r)
 	if !ok {
 		return
 	}
-	rev, data, err := s.db.getDoc(user, name)
+	rev, data, err := s.db.getDoc(account, name)
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, syncapi.ErrNotFound, "no such document")
 		return
@@ -271,7 +260,7 @@ func (s *Server) getDoc(w http.ResponseWriter, r *http.Request, user string) {
 	writeJSON(w, http.StatusOK, syncapi.Doc{Name: name, Rev: rev, Data: data})
 }
 
-func (s *Server) putDoc(w http.ResponseWriter, r *http.Request, user string) {
+func (s *Server) putDoc(w http.ResponseWriter, r *http.Request, account string) {
 	name, ok := docName(w, r)
 	if !ok {
 		return
@@ -289,7 +278,7 @@ func (s *Server) putDoc(w http.ResponseWriter, r *http.Request, user string) {
 		writeError(w, http.StatusRequestEntityTooLarge, syncapi.ErrTooLarge, "the document is too large")
 		return
 	}
-	res, err := s.db.putDoc(user, name, req.BaseRev, req.Data, s.cfg.QuotaBytes, s.cfg.MaxDocs)
+	res, err := s.db.putDoc(account, name, req.BaseRev, req.Data, s.cfg.QuotaBytes, s.cfg.MaxDocs)
 	if err != nil {
 		s.internal(w, "put", err)
 		return

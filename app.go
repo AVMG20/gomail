@@ -960,15 +960,24 @@ func (m *MailService) GetDeviceSyncStatus() (models.DeviceSyncStatus, error) {
 	return s.DeviceSyncStatus(), nil
 }
 
-// ConnectDeviceSync signs in to (or with req.Create, creates) a sync
-// account; this computer then takes the synced settings and adds its own.
-// The passphrase is only used to derive keys, never stored.
+// ConnectDeviceSync turns on sync: with req.Create under a new sync code,
+// otherwise with another computer's code (this computer then takes the
+// synced settings and adds its own).
 func (m *MailService) ConnectDeviceSync(req models.DeviceSyncConnect) (models.DeviceSyncStatus, error) {
 	s, err := m.ready()
 	if err != nil {
 		return models.DeviceSyncStatus{}, err
 	}
 	return uiResult(s.ConnectDeviceSync(req))
+}
+
+// GetDeviceSyncCode returns the 24-word sync code, for another computer.
+func (m *MailService) GetDeviceSyncCode() (string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return "", err
+	}
+	return uiResult(s.DeviceSyncCode())
 }
 
 // DisconnectDeviceSync stops syncing this computer (its data stays).

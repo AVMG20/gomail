@@ -72,7 +72,7 @@ var syncedSettings = []string{
 // battery or desktop.
 var deviceSettings = []string{
 	"zoom", "launchAtLogin", "showInTray", "closeToTray", "syncDepthDays", "backfillPaused",
-	"syncIntervalMinutes", "syncIntervals",
+	"syncIntervalMinutes", "syncIntervals", "deviceSyncInterval",
 }
 
 // otherSettings sync elsewhere (labels, per mailbox, secrets) or not at
@@ -104,6 +104,12 @@ func (s *Service) initDeviceSync() {
 		State:    syncState{s.store},
 		Secrets:  s.secrets,
 		OnStatus: func(devsync.Status) { s.emit(models.EventDeviceSync, s.DeviceSyncStatus()) },
+		Interval: func() time.Duration {
+			if m := s.Settings().DeviceSyncInterval; m > 0 {
+				return time.Duration(m) * time.Minute
+			}
+			return 0
+		},
 	})
 }
 
@@ -120,18 +126,10 @@ func (k syncState) Load(key string, v any) (bool, error) {
 func (k syncState) Save(key string, v any) error     { return k.st.SetSetting(key, v) }
 func (k syncState) DeletePrefix(prefix string) error { return k.st.DeleteSettingsPrefix(prefix) }
 
-// deviceSyncChanged tells device sync about a change (from s.emit).
-func (s *Service) deviceSyncChanged(event string, data any) {
-	if s.dsync.engine == nil {
-		return
-	}
-	switch event {
-	case models.EventLabelsChanged, models.EventMessagesChanged, models.EventAccountsChanged, models.EventCalendarChanged:
-		s.dsync.engine.Changed()
-	case models.EventNetworkStatus:
-		if ns, ok := data.(models.NetworkStatus); ok && ns.Online {
-			s.dsync.engine.Kick()
-		}
+// deviceSyncOnline syncs right away when the network comes back.
+func (s *Service) deviceSyncOnline(event string, data any) {
+	if ns, ok := data.(models.NetworkStatus); ok && event == models.EventNetworkStatus && ns.Online && s.dsync.engine != nil {
+		s.dsync.engine.Kick()
 	}
 }
 
@@ -144,7 +142,6 @@ func (s *Service) deviceSyncSignedIn(accountID string) {
 	s.dsync.mu.Lock()
 	s.dsync.resigned[mailboxKey(acct)] = true
 	s.dsync.mu.Unlock()
-	s.dsync.engine.Changed()
 }
 
 // ---- service API ----
@@ -156,8 +153,8 @@ func (s *Service) DeviceSyncStatus() models.DeviceSyncStatus {
 		return out
 	}
 	st := s.dsync.engine.Status()
-	out.Connected, out.ServerURL, out.Username, out.IncludeSecrets, out.Syncing, out.Error =
-		st.Connected, st.Server, st.Username, st.Secrets, st.Syncing, st.Error
+	out.Connected, out.ServerURL, out.IncludeSecrets, out.Syncing, out.Error =
+		st.Connected, st.Server, st.Secrets, st.Syncing, st.Error
 	if !st.LastSync.IsZero() {
 		t := st.LastSync
 		out.LastSyncAt = &t
@@ -172,8 +169,9 @@ func (s *Service) deviceSyncAvailable() error {
 	return nil
 }
 
-// ConnectDeviceSync signs in to (or creates) a sync account. The first
-// round runs in the background (devicesync:status reports it).
+// ConnectDeviceSync turns on sync, with a new sync code or another
+// computer's. The first round runs in the background (devicesync:status
+// reports it).
 func (s *Service) ConnectDeviceSync(req models.DeviceSyncConnect) (models.DeviceSyncStatus, error) {
 	if err := s.deviceSyncAvailable(); err != nil {
 		return s.DeviceSyncStatus(), err
@@ -183,10 +181,12 @@ func (s *Service) ConnectDeviceSync(req models.DeviceSyncConnect) (models.Device
 	s.dsync.mu.Lock()
 	s.dsync.labelMap, s.dsync.loaded = nil, false
 	s.dsync.mu.Unlock()
-	err := s.dsync.engine.Connect(ctx, devsync.ConnectParams{Server: req.ServerURL, Username: req.Username, Passphrase: req.Passphrase,
-		Create: req.Create, SignupCode: strings.TrimSpace(req.SignupCode), Secrets: req.IncludeSecrets})
+	err := s.dsync.engine.Connect(ctx, devsync.ConnectParams{Server: req.ServerURL, Code: req.Code, Create: req.Create, Secrets: req.IncludeSecrets})
 	return s.DeviceSyncStatus(), err
 }
+
+// DeviceSyncCode returns the sync code, to set up another computer.
+func (s *Service) DeviceSyncCode() (string, error) { return s.dsync.engine.Code() }
 
 // DisconnectDeviceSync stops syncing this computer. Its data stays, and so
 // does the server's copy.
@@ -310,17 +310,23 @@ func (src syncSource) Owns(doc, key string) bool {
 
 func (src syncSource) Apply(doc string, changes map[string]json.RawMessage) ([]string, error) {
 	s := src.s
+	var apply func(map[string]json.RawMessage) ([]string, error)
 	switch {
 	case doc == docAccounts:
-		return s.applyAccounts(changes)
+		apply = s.applyAccounts
 	case doc == docSettings:
-		return s.applySettings(changes)
+		apply = s.applySettings
 	case doc == docLabels:
-		return s.applyLabels(changes)
+		apply = s.applyLabels
 	case strings.HasPrefix(doc, docMarksPrefix):
 		return s.applyMarks(doc, changes)
+	default:
+		return nil, nil
 	}
-	return nil, nil
+	notApplied, err := apply(changes)
+	// The UI re-reads every setting (its copy is stale now).
+	s.emit(models.EventSettingsChanged, struct{}{})
+	return notApplied, err
 }
 
 // sortedKeys returns the keys of changes, sorted.

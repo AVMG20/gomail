@@ -15,25 +15,25 @@ import (
 var errNotFound = errors.New("not found")
 
 const schema = `
-CREATE TABLE IF NOT EXISTS users (
-	username   TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS accounts (
+	id         TEXT PRIMARY KEY, -- derived from the sync code on the device
 	salt       BLOB NOT NULL,
 	auth_hash  BLOB NOT NULL, -- sha256(salt || auth key)
 	created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
 	token_hash BLOB PRIMARY KEY, -- sha256(token)
-	username   TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+	account    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 	expires_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS sessions_user ON sessions(username);
+CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account);
 CREATE TABLE IF NOT EXISTS docs (
-	username   TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+	account    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 	name       TEXT NOT NULL,
 	rev        INTEGER NOT NULL,
 	data       BLOB NOT NULL,
 	updated_at INTEGER NOT NULL,
-	PRIMARY KEY(username, name)
+	PRIMARY KEY(account, name)
 );
 `
 
@@ -67,10 +67,10 @@ func hashWithSalt(salt, key []byte) []byte {
 	return h.Sum(nil)
 }
 
-// createUser stores a user; false when the name is taken.
-func (d *db) createUser(username string, salt, authKey []byte) (bool, error) {
-	res, err := d.sql.Exec(`INSERT INTO users(username, salt, auth_hash, created_at) VALUES(?,?,?,?) ON CONFLICT(username) DO NOTHING`,
-		username, salt, hashWithSalt(salt, authKey), time.Now().UnixMilli())
+// createAccount stores an account; false when the id is taken.
+func (d *db) createAccount(id string, salt, authKey []byte) (bool, error) {
+	res, err := d.sql.Exec(`INSERT INTO accounts(id, salt, auth_hash, created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+		id, salt, hashWithSalt(salt, authKey), time.Now().UnixMilli())
 	if err != nil {
 		return false, err
 	}
@@ -78,13 +78,13 @@ func (d *db) createUser(username string, salt, authKey []byte) (bool, error) {
 	return n == 1, nil
 }
 
-// dummySalt keeps a login for an unknown user as slow as a real one.
+// dummySalt keeps a login for an unknown account as slow as a real one.
 var dummySalt = make([]byte, 16)
 
-// checkUser reports whether authKey is the user's key.
-func (d *db) checkUser(username string, authKey []byte) (bool, error) {
+// checkAccount reports whether authKey is the account's key.
+func (d *db) checkAccount(id string, authKey []byte) (bool, error) {
 	var salt, want []byte
-	err := d.sql.QueryRow(`SELECT salt, auth_hash FROM users WHERE username = ?`, username).Scan(&salt, &want)
+	err := d.sql.QueryRow(`SELECT salt, auth_hash FROM accounts WHERE id = ?`, id).Scan(&salt, &want)
 	if errors.Is(err, sql.ErrNoRows) {
 		subtle.ConstantTimeCompare(hashWithSalt(dummySalt, authKey), make([]byte, sha256.Size))
 		return false, nil
@@ -95,28 +95,28 @@ func (d *db) checkUser(username string, authKey []byte) (bool, error) {
 	return subtle.ConstantTimeCompare(hashWithSalt(salt, authKey), want) == 1, nil
 }
 
-func (d *db) addSession(tokenHash []byte, username string, expires time.Time) error {
+func (d *db) addSession(tokenHash []byte, account string, expires time.Time) error {
 	now := time.Now().UnixMilli()
 	if _, err := d.sql.Exec(`DELETE FROM sessions WHERE expires_at < ?`, now); err != nil {
 		return err
 	}
-	// Keep the newest sessions of a user only (one per device, a few spare).
-	if _, err := d.sql.Exec(`DELETE FROM sessions WHERE username = ?1 AND token_hash NOT IN
-		(SELECT token_hash FROM sessions WHERE username = ?1 ORDER BY expires_at DESC LIMIT 19)`, username); err != nil {
+	// Keep an account's newest sessions only (one per device, a few spare).
+	if _, err := d.sql.Exec(`DELETE FROM sessions WHERE account = ?1 AND token_hash NOT IN
+		(SELECT token_hash FROM sessions WHERE account = ?1 ORDER BY expires_at DESC LIMIT 19)`, account); err != nil {
 		return err
 	}
-	_, err := d.sql.Exec(`INSERT INTO sessions(token_hash, username, expires_at) VALUES(?,?,?)`, tokenHash, username, expires.UnixMilli())
+	_, err := d.sql.Exec(`INSERT INTO sessions(token_hash, account, expires_at) VALUES(?,?,?)`, tokenHash, account, expires.UnixMilli())
 	return err
 }
 
-// session returns the user of a valid session.
+// session returns the account of a valid session.
 func (d *db) session(tokenHash []byte) (string, error) {
-	var user string
-	err := d.sql.QueryRow(`SELECT username FROM sessions WHERE token_hash = ? AND expires_at > ?`, tokenHash, time.Now().UnixMilli()).Scan(&user)
+	var account string
+	err := d.sql.QueryRow(`SELECT account FROM sessions WHERE token_hash = ? AND expires_at > ?`, tokenHash, time.Now().UnixMilli()).Scan(&account)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errNotFound
 	}
-	return user, err
+	return account, err
 }
 
 type docRow struct {
@@ -126,8 +126,8 @@ type docRow struct {
 	updated time.Time
 }
 
-func (d *db) listDocs(username string) ([]docRow, error) {
-	rows, err := d.sql.Query(`SELECT name, rev, length(data), updated_at FROM docs WHERE username = ? ORDER BY name`, username)
+func (d *db) listDocs(account string) ([]docRow, error) {
+	rows, err := d.sql.Query(`SELECT name, rev, length(data), updated_at FROM docs WHERE account = ? ORDER BY name`, account)
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +145,10 @@ func (d *db) listDocs(username string) ([]docRow, error) {
 	return out, rows.Err()
 }
 
-func (d *db) getDoc(username, name string) (int64, []byte, error) {
+func (d *db) getDoc(account, name string) (int64, []byte, error) {
 	var rev int64
 	var data []byte
-	err := d.sql.QueryRow(`SELECT rev, data FROM docs WHERE username = ? AND name = ?`, username, name).Scan(&rev, &data)
+	err := d.sql.QueryRow(`SELECT rev, data FROM docs WHERE account = ? AND name = ?`, account, name).Scan(&rev, &data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil, errNotFound
 	}
@@ -164,16 +164,15 @@ type putResult struct {
 
 // putDoc replaces a document when its revision is baseRev, within the
 // account's storage quota and document count.
-func (d *db) putDoc(username, name string, baseRev int64, data []byte, quota int64, maxDocs int) (putResult, error) {
+func (d *db) putDoc(account, name string, baseRev int64, data []byte, quota int64, maxDocs int) (putResult, error) {
 	var res putResult
-	ctx := context.Background()
-	tx, err := d.sql.BeginTx(ctx, nil)
+	tx, err := d.sql.BeginTx(context.Background(), nil)
 	if err != nil {
 		return res, err
 	}
 	defer tx.Rollback()
 	var cur int64
-	err = tx.QueryRow(`SELECT rev FROM docs WHERE username = ? AND name = ?`, username, name).Scan(&cur)
+	err = tx.QueryRow(`SELECT rev FROM docs WHERE account = ? AND name = ?`, account, name).Scan(&cur)
 	exists := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return res, err
@@ -182,16 +181,16 @@ func (d *db) putDoc(username, name string, baseRev int64, data []byte, quota int
 		return putResult{rev: cur, conflict: true}, nil
 	}
 	var used, count int64
-	if err := tx.QueryRow(`SELECT coalesce(sum(length(data)), 0), count(*) FROM docs WHERE username = ? AND name != ?`, username, name).Scan(&used, &count); err != nil {
+	if err := tx.QueryRow(`SELECT coalesce(sum(length(data)), 0), count(*) FROM docs WHERE account = ? AND name != ?`, account, name).Scan(&used, &count); err != nil {
 		return res, err
 	}
 	if used+int64(len(data)) > quota || (!exists && count >= int64(maxDocs)) {
 		return putResult{rev: cur, quota: true}, nil
 	}
 	res.rev = cur + 1
-	if _, err := tx.Exec(`INSERT INTO docs(username, name, rev, data, updated_at) VALUES(?,?,?,?,?)
-		ON CONFLICT(username, name) DO UPDATE SET rev = excluded.rev, data = excluded.data, updated_at = excluded.updated_at`,
-		username, name, res.rev, data, time.Now().UnixMilli()); err != nil {
+	if _, err := tx.Exec(`INSERT INTO docs(account, name, rev, data, updated_at) VALUES(?,?,?,?,?)
+		ON CONFLICT(account, name) DO UPDATE SET rev = excluded.rev, data = excluded.data, updated_at = excluded.updated_at`,
+		account, name, res.rev, data, time.Now().UnixMilli()); err != nil {
 		return res, err
 	}
 	return res, tx.Commit()

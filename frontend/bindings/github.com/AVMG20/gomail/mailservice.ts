@@ -101,9 +101,9 @@ export function ClassifyQuery(q: models$0.ListQuery, onlyUnlabeled: boolean, inc
 }
 
 /**
- * ConnectDeviceSync signs in to (or with req.Create, creates) a sync
- * account; this computer then takes the synced settings and adds its own.
- * The passphrase is only used to derive keys, never stored.
+ * ConnectDeviceSync turns on sync: with req.Create under a new sync code,
+ * otherwise with another computer's code (this computer then takes the
+ * synced settings and adds its own).
  */
 export function ConnectDeviceSync(req: models$0.DeviceSyncConnect): $CancellablePromise<models$0.DeviceSyncStatus> {
     return $Call.ByID(1082586857, req);
@@ -218,6 +218,13 @@ export function GetDefaultGrammarPrompt(): $CancellablePromise<string> {
  */
 export function GetDefaultPrompts(): $CancellablePromise<models$0.DefaultPrompts> {
     return $Call.ByID(338704894);
+}
+
+/**
+ * GetDeviceSyncCode returns the 24-word sync code, for another computer.
+ */
+export function GetDeviceSyncCode(): $CancellablePromise<string> {
+    return $Call.ByID(2642336122);
 }
 
 /**

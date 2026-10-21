@@ -33,6 +33,12 @@ func newTestServer(t *testing.T, cfg Config) *testServer {
 
 func key(b byte) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
 
+// Account ids as devices derive them from their sync codes.
+const (
+	alice = "a11ce000000000000000000000000001"
+	bob   = "b0b00000000000000000000000000002"
+)
+
 // call sends a JSON request and decodes the answer into out (when 2xx) or
 // returns the error body.
 func (s *testServer) call(method, path, token string, in, out any) (int, syncapi.Error) {
@@ -64,18 +70,18 @@ func (s *testServer) call(method, path, token string, in, out any) (int, syncapi
 	return resp.StatusCode, e
 }
 
-func (s *testServer) register(user, k string) {
+func (s *testServer) register(account, k string) {
 	s.t.Helper()
-	if code, e := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Username: user, AuthKey: k}, nil); code != http.StatusCreated {
-		s.t.Fatalf("register %s: %d %+v", user, code, e)
+	if code, e := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Account: account, AuthKey: k}, nil); code != http.StatusCreated {
+		s.t.Fatalf("register %s: %d %+v", account, code, e)
 	}
 }
 
-func (s *testServer) login(user, k string) string {
+func (s *testServer) login(account, k string) string {
 	s.t.Helper()
 	var res syncapi.LoginResponse
-	if code, e := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Username: user, AuthKey: k}, &res); code != http.StatusOK {
-		s.t.Fatalf("login %s: %d %+v", user, code, e)
+	if code, e := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Account: account, AuthKey: k}, &res); code != http.StatusOK {
+		s.t.Fatalf("login %s: %d %+v", account, code, e)
 	}
 	if res.Token == "" || res.ExpiresAt.Before(time.Now()) {
 		s.t.Fatalf("login result %+v", res)
@@ -88,23 +94,25 @@ func TestAccountsAndSessions(t *testing.T) {
 	if code, _ := s.call("GET", "/healthz", "", nil, nil); code != http.StatusOK {
 		t.Fatalf("health %d", code)
 	}
-	s.register("Alice", key(1)) // usernames are case-insensitive
-	if code, e := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Username: "alice", AuthKey: key(2)}, nil); code != http.StatusConflict || e.Code != syncapi.ErrUserExists {
+	s.register(alice, key(1))
+	if code, e := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Account: alice, AuthKey: key(2)}, nil); code != http.StatusConflict || e.Code != syncapi.ErrAccountExists {
 		t.Fatalf("duplicate register: %d %+v", code, e)
 	}
-	if code, e := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Username: "x", AuthKey: key(2)}, nil); code != http.StatusBadRequest || e.Code != syncapi.ErrBadRequest {
-		t.Fatalf("short username: %d %+v", code, e)
+	for _, id := range []string{"x", "A11CE000000000000000000000000001", "a11ce00000000000000000000000000z"} {
+		if code, e := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Account: id, AuthKey: key(2)}, nil); code != http.StatusBadRequest || e.Code != syncapi.ErrBadRequest {
+			t.Fatalf("account id %q: %d %+v", id, code, e)
+		}
 	}
-	if code, _ := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Username: "bob", AuthKey: "c2hvcnQ="}, nil); code != http.StatusBadRequest {
+	if code, _ := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Account: bob, AuthKey: "c2hvcnQ="}, nil); code != http.StatusBadRequest {
 		t.Fatalf("short key: %d", code)
 	}
-	if code, e := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Username: "alice", AuthKey: key(9)}, nil); code != http.StatusUnauthorized || e.Code != syncapi.ErrBadCredentials {
+	if code, e := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Account: alice, AuthKey: key(9)}, nil); code != http.StatusUnauthorized || e.Code != syncapi.ErrBadCredentials {
 		t.Fatalf("wrong key: %d %+v", code, e)
 	}
-	if code, e := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Username: "nobody", AuthKey: key(1)}, nil); code != http.StatusUnauthorized || e.Code != syncapi.ErrBadCredentials {
-		t.Fatalf("unknown user: %d %+v", code, e)
+	if code, e := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Account: bob, AuthKey: key(1)}, nil); code != http.StatusUnauthorized || e.Code != syncapi.ErrBadCredentials {
+		t.Fatalf("unknown account: %d %+v", code, e)
 	}
-	token := s.login("ALICE ", key(1))
+	token := s.login(alice, key(1))
 	var list syncapi.DocList
 	if code, _ := s.call("GET", "/v1/docs", token, nil, &list); code != http.StatusOK || len(list.Docs) != 0 || list.QuotaBytes != DefaultQuotaBytes {
 		t.Fatalf("list %d %+v", code, list)
@@ -116,7 +124,7 @@ func TestAccountsAndSessions(t *testing.T) {
 	}
 	// The server keeps a salted hash, never the key.
 	var salt, hash []byte
-	if err := s.srv.db.sql.QueryRow(`SELECT salt, auth_hash FROM users WHERE username = 'alice'`).Scan(&salt, &hash); err != nil {
+	if err := s.srv.db.sql.QueryRow(`SELECT salt, auth_hash FROM accounts WHERE id = ?`, alice).Scan(&salt, &hash); err != nil {
 		t.Fatal(err)
 	}
 	if len(salt) != 16 || bytes.Contains(hash, bytes.Repeat([]byte{1}, 32)) {
@@ -126,9 +134,9 @@ func TestAccountsAndSessions(t *testing.T) {
 
 func TestSessionsExpire(t *testing.T) {
 	s := newTestServer(t, Config{Signups: true, SessionTTL: time.Millisecond})
-	s.register("alice", key(1))
+	s.register(alice, key(1))
 	var res syncapi.LoginResponse
-	s.call("POST", "/v1/login", "", syncapi.LoginRequest{Username: "alice", AuthKey: key(1)}, &res)
+	s.call("POST", "/v1/login", "", syncapi.LoginRequest{Account: alice, AuthKey: key(1)}, &res)
 	token := res.Token
 	time.Sleep(5 * time.Millisecond)
 	if code, e := s.call("GET", "/v1/docs", token, nil, nil); code != http.StatusUnauthorized || e.Code != syncapi.ErrUnauthorized {
@@ -136,27 +144,22 @@ func TestSessionsExpire(t *testing.T) {
 	}
 }
 
-func TestSignupPolicy(t *testing.T) {
-	closed := newTestServer(t, Config{Signups: false})
-	if code, e := closed.call("POST", "/v1/register", "", syncapi.RegisterRequest{Username: "alice", AuthKey: key(1)}, nil); code != http.StatusForbidden || e.Code != syncapi.ErrSignupsClosed {
+// Closed sign-ups refuse new accounts; existing ones keep working.
+func TestSignupsClosed(t *testing.T) {
+	s := newTestServer(t, Config{Signups: true})
+	s.register(alice, key(1))
+	s.srv.cfg.Signups = false
+	if code, e := s.call("POST", "/v1/register", "", syncapi.RegisterRequest{Account: bob, AuthKey: key(2)}, nil); code != http.StatusForbidden || e.Code != syncapi.ErrSignupsClosed {
 		t.Fatalf("closed: %d %+v", code, e)
 	}
-	coded := newTestServer(t, Config{Signups: true, SignupCode: "letmein"})
-	for _, c := range []string{"", "wrong"} {
-		if code, e := coded.call("POST", "/v1/register", "", syncapi.RegisterRequest{Username: "alice", AuthKey: key(1), SignupCode: c}, nil); code != http.StatusForbidden || e.Code != syncapi.ErrSignupCode {
-			t.Fatalf("code %q: %d %+v", c, code, e)
-		}
-	}
-	if code, _ := coded.call("POST", "/v1/register", "", syncapi.RegisterRequest{Username: "alice", AuthKey: key(1), SignupCode: "letmein"}, nil); code != http.StatusCreated {
-		t.Fatalf("right code: %d", code)
-	}
+	s.login(alice, key(1))
 }
 
 func TestDocumentRevisions(t *testing.T) {
 	s := newTestServer(t, Config{Signups: true})
-	s.register("alice", key(1))
-	s.register("bob", key(2))
-	a, b := s.login("alice", key(1)), s.login("bob", key(2))
+	s.register(alice, key(1))
+	s.register(bob, key(2))
+	a, b := s.login(alice, key(1)), s.login(bob, key(2))
 
 	put := func(token, name string, base int64, data string) (int, syncapi.Error, int64) {
 		var res syncapi.PutResponse
@@ -199,8 +202,8 @@ func TestDocumentRevisions(t *testing.T) {
 
 func TestLimits(t *testing.T) {
 	s := newTestServer(t, Config{Signups: true, MaxDocBytes: 100, QuotaBytes: 250, MaxDocs: 3})
-	s.register("alice", key(1))
-	a := s.login("alice", key(1))
+	s.register(alice, key(1))
+	a := s.login(alice, key(1))
 	put := func(name string, base int64, n int) (int, syncapi.Error) {
 		return s.call("PUT", "/v1/docs/"+name, a, syncapi.PutRequest{BaseRev: base, Data: bytes.Repeat([]byte("x"), n)}, nil)
 	}
@@ -241,17 +244,17 @@ func TestLimits(t *testing.T) {
 
 func TestLoginRateLimit(t *testing.T) {
 	s := newTestServer(t, Config{Signups: true})
-	s.register("alice", key(1))
+	s.register(alice, key(1))
 	var code int
 	var e syncapi.Error
 	for i := 0; i < 11; i++ {
-		code, e = s.call("POST", "/v1/login", "", syncapi.LoginRequest{Username: "alice", AuthKey: key(byte(10 + i))}, nil)
+		code, e = s.call("POST", "/v1/login", "", syncapi.LoginRequest{Account: alice, AuthKey: key(byte(10 + i))}, nil)
 	}
 	if code != http.StatusTooManyRequests || e.Code != syncapi.ErrRateLimited {
 		t.Fatalf("after 11 wrong keys: %d %+v", code, e)
 	}
 	// Even the right key waits now.
-	if code, _ := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Username: "alice", AuthKey: key(1)}, nil); code != http.StatusTooManyRequests {
+	if code, _ := s.call("POST", "/v1/login", "", syncapi.LoginRequest{Account: alice, AuthKey: key(1)}, nil); code != http.StatusTooManyRequests {
 		t.Fatalf("right key while limited: %d", code)
 	}
 }

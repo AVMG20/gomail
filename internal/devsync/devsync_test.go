@@ -3,8 +3,10 @@ package devsync
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http/httptest"
 	"slices"
@@ -18,21 +20,87 @@ import (
 	"github.com/AVMG20/gomail/internal/syncserver"
 )
 
-func init() { KDFIterations = 1000 } // fast tests; the format is the same
+// Official BIP39 test vectors: the sync code is a standard 24-word mnemonic.
+var bip39Vectors = []struct{ entropy, words string }{
+	{"0000000000000000000000000000000000000000000000000000000000000000",
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"},
+	{"7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+		"legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title"},
+	{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote"},
+}
 
-func TestKeysAndSealing(t *testing.T) {
-	k1, err := DeriveKeys("alice", "correct horse battery")
+func TestSyncCodes(t *testing.T) {
+	if len(wordlist) != 2048 || wordlist[0] != "abandon" || wordlist[2047] != "zoo" {
+		t.Fatalf("wordlist: %d words", len(wordlist))
+	}
+	for _, v := range bip39Vectors {
+		entropy, _ := hex.DecodeString(v.entropy)
+		if got := encodeCode(entropy); got != v.words {
+			t.Errorf("encode %s:\n%s", v.entropy, got)
+		}
+		back, canonical, err := ParseCode(v.words)
+		if err != nil || !bytes.Equal(back, entropy) || canonical != v.words {
+			t.Errorf("parse %s: %v", v.entropy, err)
+		}
+	}
+	code, err := NewCode()
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _ := DeriveKeys("alice", "correct horse battery")
-	other, _ := DeriveKeys("alice", "wrong horse battery")
-	bob, _ := DeriveKeys("bob", "correct horse battery")
-	if !bytes.Equal(k1.Auth, again.Auth) || !bytes.Equal(k1.Enc, again.Enc) {
+	other, _ := NewCode()
+	if code == other || len(strings.Fields(code)) != CodeWords {
+		t.Fatalf("codes %q %q", code, other)
+	}
+	words := strings.Fields(code)
+	// Pasted from a numbered grid, in capitals, over several lines, or with
+	// four-letter abbreviations: the same code.
+	var numbered, abbreviated []string
+	for i, w := range words {
+		numbered = append(numbered, fmt.Sprintf("%d. %s", i+1, strings.ToUpper(w)))
+		abbreviated = append(abbreviated, w[:min(4, len(w))])
+	}
+	for _, typed := range []string{"  " + strings.Join(words, "\n") + "\n", strings.Join(numbered, "\t"), strings.Join(words, ", "), strings.Join(abbreviated, " ")} {
+		if _, canonical, err := ParseCode(typed); err != nil || canonical != code {
+			t.Errorf("%q: %v", typed, err)
+		}
+	}
+
+	// A typo names the word; a real word in the wrong place fails the checksum.
+	typo := slices.Clone(words)
+	typo[4] = "abandn"
+	var ce *CodeError
+	if _, _, err := ParseCode(strings.Join(typo, " ")); !errors.As(err, &ce) || ce.Word != 5 || !strings.Contains(err.Error(), "abandn") {
+		t.Fatalf("typo: %v", err)
+	}
+	swapped := slices.Clone(words)
+	swapped[0], swapped[1] = swapped[1], swapped[0]
+	if swapped[0] == swapped[1] {
+		swapped[0] = "zoo"
+	}
+	if _, _, err := ParseCode(strings.Join(swapped, " ")); err == nil || !strings.Contains(err.Error(), "aren't a valid sync code") {
+		t.Fatalf("checksum: %v", err)
+	}
+	if _, _, err := ParseCode(strings.Join(words[:23], " ")); err == nil || !strings.Contains(err.Error(), "has 23") {
+		t.Fatalf("short code: %v", err)
+	}
+	if _, _, err := ParseCode("   "); err == nil {
+		t.Fatal("empty code accepted")
+	}
+}
+
+func TestKeysAndSealing(t *testing.T) {
+	k1, _, err := KeysFromCode(bip39Vectors[1].words)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _, _ := KeysFromCode(strings.ToUpper(bip39Vectors[1].words))
+	other, _, _ := KeysFromCode(bip39Vectors[0].words)
+	if k1.Account != again.Account || !bytes.Equal(k1.Auth, again.Auth) || !bytes.Equal(k1.Enc, again.Enc) {
 		t.Fatal("keys aren't deterministic")
 	}
-	if bytes.Equal(k1.Auth, k1.Enc) || bytes.Equal(k1.Enc, other.Enc) || bytes.Equal(k1.Enc, bob.Enc) || len(k1.Enc) != 32 {
-		t.Fatal("keys must differ by purpose, passphrase and username")
+	if bytes.Equal(k1.Auth, k1.Enc) || bytes.Equal(k1.Enc, other.Enc) || k1.Account == other.Account || len(k1.Enc) != 32 || !syncapi.ValidAccount(k1.Account) {
+		t.Fatalf("keys must differ by purpose and code: %+v", k1)
 	}
 
 	plain := []byte(`{"theme":"dark","secret":"sk-or-123"}`)
@@ -52,7 +120,7 @@ func TestKeysAndSealing(t *testing.T) {
 		t.Fatalf("round trip: %v %q", err, got)
 	}
 	if _, err := Open(other.Enc, "settings", sealed); !errors.Is(err, ErrDecrypt) {
-		t.Fatalf("wrong passphrase: %v", err)
+		t.Fatalf("wrong code: %v", err)
 	}
 	if _, err := Open(k1.Enc, "labels", sealed); !errors.Is(err, ErrDecrypt) {
 		t.Fatalf("document swapped by the server: %v", err)
@@ -282,6 +350,26 @@ func (d *device) sync(t *testing.T) {
 	}
 }
 
+// create turns on sync with a new code.
+func (d *device) create(t *testing.T, url string, secrets bool) {
+	t.Helper()
+	if err := d.eng.Connect(context.Background(), ConnectParams{Server: url, Create: true, Secrets: secrets}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// join connects with the code of another device.
+func (d *device) join(t *testing.T, url string, from *device) {
+	t.Helper()
+	code, err := from.eng.Code()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.eng.Connect(context.Background(), ConnectParams{Server: url, Code: code}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newSyncServer(t *testing.T) (*syncserver.Server, string) {
 	srv, err := syncserver.New(syncserver.Config{DataDir: t.TempDir(), Signups: true})
 	if err != nil {
@@ -298,19 +386,17 @@ func TestTwoDevicesConverge(t *testing.T) {
 	a := newDevice(t, map[string]string{"theme": "dark", "color": "blue", "onlyA": "1"})
 	b := newDevice(t, map[string]string{"theme": "light", "onlyB": "2"})
 
-	if err := a.eng.Connect(ctx, ConnectParams{Server: url, Username: "alice", Passphrase: "short", Create: true}); err == nil {
-		t.Fatal("a short passphrase was accepted for a new account")
-	}
-	if err := a.eng.Connect(ctx, ConnectParams{Server: url, Username: "alice", Passphrase: "a long sync passphrase", Create: true, Secrets: true}); err != nil {
-		t.Fatal(err)
-	}
+	a.create(t, url, true)
 	a.sync(t)
-	if err := b.eng.Connect(ctx, ConnectParams{Server: url, Username: "Alice", Passphrase: "the wrong passphrase"}); err == nil || !strings.Contains(err.Error(), "wrong username or passphrase") {
-		t.Fatalf("wrong passphrase: %v", err)
+	// A valid code that no device turned on sync with.
+	unknown, _ := NewCode()
+	if err := b.eng.Connect(ctx, ConnectParams{Server: url, Code: unknown}); err == nil || !strings.Contains(err.Error(), "no sync account uses this code") {
+		t.Fatalf("unknown code: %v", err)
 	}
-	if err := b.eng.Connect(ctx, ConnectParams{Server: url, Username: "Alice", Passphrase: "a long sync passphrase"}); err != nil {
-		t.Fatal(err)
+	if err := b.eng.Connect(ctx, ConnectParams{Server: url, Code: "zoo zoo"}); err == nil {
+		t.Fatal("a broken code was accepted")
 	}
+	b.join(t, url, a)
 	b.sync(t)
 	// The joining device takes the synced values and adds its own.
 	want := map[string]string{"theme": "dark", "color": "blue", "onlyA": "1", "onlyB": "2"}
@@ -340,22 +426,23 @@ func TestTwoDevicesConverge(t *testing.T) {
 
 	// No echo: rounds without changes apply and upload nothing.
 	appliedA, appliedB := a.src.applied, b.src.applied
-	listBefore := docRevs(t, url, "alice", "a long sync passphrase")
+	listBefore := docRevs(t, url, a)
 	a.sync(t)
 	b.sync(t)
 	a.sync(t)
 	if a.src.applied != appliedA || b.src.applied != appliedB {
 		t.Fatalf("idle rounds applied something: %d->%d, %d->%d", appliedA, a.src.applied, appliedB, b.src.applied)
 	}
-	if after := docRevs(t, url, "alice", "a long sync passphrase"); !maps.Equal(listBefore, after) {
+	if after := docRevs(t, url, a); !maps.Equal(listBefore, after) {
 		t.Fatalf("idle rounds uploaded: %v -> %v", listBefore, after)
 	}
 }
 
-func docRevs(t *testing.T, url, user, pass string) map[string]int64 {
+func docRevs(t *testing.T, url string, d *device) map[string]int64 {
 	t.Helper()
-	keys, _ := DeriveKeys(user, pass)
-	cl := newClient(url, user, keys.Auth, nil)
+	code, _ := d.eng.Code()
+	keys, _, _ := KeysFromCode(code)
+	cl := newClient(url, keys, nil)
 	l, err := cl.list(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -369,13 +456,14 @@ func docRevs(t *testing.T, url, user, pass string) map[string]int64 {
 
 func TestUnknownKeysAreKept(t *testing.T) {
 	_, url := newSyncServer(t)
-	ctx := context.Background()
 	a := newDevice(t, map[string]string{"mailbox-x": "on", "shared": "1"})
 	b := newDevice(t, map[string]string{"shared": "1"})
 	b.src.foreign["mailbox-x"] = true // b doesn't have that mailbox
 	for i, d := range []*device{a, b} {
-		if err := d.eng.Connect(ctx, ConnectParams{Server: url, Username: "alice", Passphrase: "a long sync passphrase", Create: i == 0}); err != nil {
-			t.Fatal(err)
+		if i == 0 {
+			d.create(t, url, false)
+		} else {
+			d.join(t, url, a)
 		}
 		d.sync(t)
 	}
@@ -404,12 +492,11 @@ func TestServerOnlySeesCiphertext(t *testing.T) {
 	_ = srv
 	ctx := context.Background()
 	a := newDevice(t, map[string]string{"openrouter": "sk-or-v1-supersecret", "label": "Invoices from Acme"})
-	if err := a.eng.Connect(ctx, ConnectParams{Server: url, Username: "alice", Passphrase: "a long sync passphrase", Create: true}); err != nil {
-		t.Fatal(err)
-	}
+	a.create(t, url, false)
 	a.sync(t)
-	keys, _ := DeriveKeys("alice", "a long sync passphrase")
-	cl := newClient(url, "alice", keys.Auth, nil)
+	code, _ := a.eng.Code()
+	keys, _, _ := KeysFromCode(code)
+	cl := newClient(url, keys, nil)
 	doc, err := cl.get(ctx, "prefs")
 	if err != nil {
 		t.Fatal(err)
@@ -425,19 +512,19 @@ func TestServerOnlySeesCiphertext(t *testing.T) {
 			t.Fatalf("local state %s holds a secret in plain text", k)
 		}
 	}
-	if _, err := a.sec.Get(keysSecret); err != nil {
-		t.Fatal("keys not in the secret store")
+	if stored, err := a.sec.Get(codeSecret); err != nil || stored != code {
+		t.Fatal("the code isn't in the secret store")
 	}
 	for k, v := range a.state.m {
-		if bytes.Contains(v, []byte("long sync passphrase")) {
-			t.Fatalf("passphrase stored in %s", k)
+		if bytes.Contains(v, []byte(strings.Fields(code)[0]+" "+strings.Fields(code)[1])) {
+			t.Fatalf("sync code stored in %s", k)
 		}
 	}
 	// Disconnect forgets keys and state.
 	if err := a.eng.Disconnect(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.sec.Get(keysSecret); !errors.Is(err, secrets.ErrNotFound) || len(a.state.m) != 0 || a.eng.Connected() {
+	if _, err := a.sec.Get(codeSecret); !errors.Is(err, secrets.ErrNotFound) || len(a.state.m) != 0 || a.eng.Connected() {
 		t.Fatal("disconnect left keys or state behind")
 	}
 	if err := a.eng.SyncNow(ctx); !errors.Is(err, ErrNotConnected) {
@@ -449,14 +536,12 @@ func TestReconnectAfterRestart(t *testing.T) {
 	_, url := newSyncServer(t)
 	ctx := context.Background()
 	a := newDevice(t, map[string]string{"k": "v"})
-	if err := a.eng.Connect(ctx, ConnectParams{Server: url, Username: "alice", Passphrase: "a long sync passphrase", Create: true, Secrets: true}); err != nil {
-		t.Fatal(err)
-	}
+	a.create(t, url, true)
 	a.sync(t)
 	// A restart loads the connection from state and the secret store.
 	again := New(Options{Source: a.src, State: a.state, Secrets: a.sec, Now: func() time.Time { return *a.clock }})
 	st := again.Status()
-	if !st.Connected || st.Username != "alice" || !st.Secrets || st.LastSync.IsZero() {
+	if !st.Connected || !st.Secrets || st.LastSync.IsZero() {
 		t.Fatalf("status after restart %+v", st)
 	}
 	a.tick(time.Minute)
@@ -464,7 +549,7 @@ func TestReconnectAfterRestart(t *testing.T) {
 	if err := again.SyncNow(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if revs := docRevs(t, url, "alice", "a long sync passphrase"); revs["prefs"] != 2 {
+	if revs := docRevs(t, url, a); revs["prefs"] != 2 {
 		t.Fatalf("revisions %v", revs)
 	}
 }
@@ -477,8 +562,8 @@ func TestConnectErrors(t *testing.T) {
 	ts := httptest.NewServer(srv)
 	defer func() { ts.Close(); srv.Close() }()
 	d := newDevice(t, nil)
-	err = d.eng.Connect(context.Background(), ConnectParams{Server: ts.URL, Username: "alice", Passphrase: "a long sync passphrase", Create: true})
-	if err == nil || !strings.Contains(err.Error(), "doesn't accept new accounts") {
+	err = d.eng.Connect(context.Background(), ConnectParams{Server: ts.URL, Create: true})
+	if err == nil || !strings.Contains(err.Error(), "doesn't accept new sync accounts") {
 		t.Fatalf("closed signups: %v", err)
 	}
 	if !IsCode(&APIError{Body: syncapi.Error{Code: syncapi.ErrQuota}}, syncapi.ErrQuota) {
@@ -491,12 +576,13 @@ func TestConnectErrors(t *testing.T) {
 
 func TestConflictRetry(t *testing.T) {
 	_, url := newSyncServer(t)
-	ctx := context.Background()
 	a := newDevice(t, map[string]string{"x": "1", "y": "1"})
 	b := newDevice(t, map[string]string{})
 	for i, d := range []*device{a, b} {
-		if err := d.eng.Connect(ctx, ConnectParams{Server: url, Username: "alice", Passphrase: "a long sync passphrase", Create: i == 0}); err != nil {
-			t.Fatal(err)
+		if i == 0 {
+			d.create(t, url, false)
+		} else {
+			d.join(t, url, a)
 		}
 		d.sync(t)
 	}
@@ -514,7 +600,41 @@ func TestConflictRetry(t *testing.T) {
 			t.Fatalf("%s: %v", name, got)
 		}
 	}
-	if revs := docRevs(t, url, "alice", "a long sync passphrase"); revs["prefs"] != 3 {
+	if revs := docRevs(t, url, a); revs["prefs"] != 3 {
 		t.Fatalf("revisions %v (want a's upload, then b's merged one)", revs)
+	}
+}
+
+func TestPeriodicRounds(t *testing.T) {
+	t0 := time.Unix(1_800_000_000, 0)
+	for _, c := range []struct {
+		name            string
+		now, tick, last time.Time
+		interval        time.Duration
+		want            bool
+	}{
+		{"not yet", t0.Add(30 * time.Second), t0.Add(15 * time.Second), t0, time.Minute, false},
+		{"interval passed", t0.Add(time.Minute), t0.Add(45 * time.Second), t0, time.Minute, true},
+		{"every 15 minutes", t0.Add(10 * time.Minute), t0.Add(10*time.Minute - tickEvery), t0, 15 * time.Minute, false},
+		{"woke from sleep", t0.Add(5 * time.Minute), t0.Add(time.Minute), t0.Add(4 * time.Minute), 15 * time.Minute, true},
+		{"manual: never on its own", t0.Add(24 * time.Hour), t0, t0, 0, false},
+	} {
+		if got := due(c.now, c.tick, c.last, c.interval); got != c.want {
+			t.Errorf("%s: %v", c.name, got)
+		}
+	}
+}
+
+func TestManualSyncSkipsKicks(t *testing.T) {
+	_, url := newSyncServer(t)
+	d := newDevice(t, map[string]string{"k": "v"})
+	d.eng.opts.Interval = func() time.Duration { return 0 }
+	d.create(t, url, false)
+	<-d.eng.now // connecting starts a round even when syncing is manual
+	d.eng.Kick()
+	select {
+	case <-d.eng.now:
+		t.Fatal("back online started a round although syncing is manual")
+	default:
 	}
 }

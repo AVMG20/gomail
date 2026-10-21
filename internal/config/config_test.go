@@ -32,6 +32,20 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+func TestDeviceSyncInterval(t *testing.T) {
+	if DefaultSettings().DeviceSyncInterval != 1 {
+		t.Fatal("syncs every minute by default")
+	}
+	for in, want := range map[int]int{0: 1, 1: 1, 5: 5, 15: 15, 30: 30, 60: 60, -1: -1, 2: 1, -5: 1, 1440: 1} {
+		s := DefaultSettings()
+		s.DeviceSyncInterval = in
+		Normalize(&s)
+		if s.DeviceSyncInterval != want {
+			t.Errorf("%d -> %d, want %d", in, s.DeviceSyncInterval, want)
+		}
+	}
+}
+
 func fmtSlice(s []string) string {
 	out := "["
 	for i, x := range s {

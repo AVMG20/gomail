@@ -7,8 +7,8 @@
 //
 //	ADDR           listen address (default :8080)
 //	DATA_DIR       database directory (default ./data)
-//	SIGNUPS        open | closed: whether new accounts can be created (default open)
-//	SIGNUP_TOKEN   when set, creating an account needs this code
+//	SIGNUPS        open | closed: whether new sync accounts can be created
+//	               (default open; existing ones keep working when closed)
 //	MAX_DOC_MB     largest document (default 16)
 //	QUOTA_MB       storage per account (default 64)
 //	TRUST_PROXY    1 = count rate limits per X-Forwarded-For address (behind a proxy)
@@ -50,7 +50,6 @@ func run() error {
 
 	cfg := syncserver.Config{
 		DataDir:    env("DATA_DIR", "./data"),
-		SignupCode: os.Getenv("SIGNUP_TOKEN"),
 		TrustProxy: truthy(os.Getenv("TRUST_PROXY")),
 	}
 	switch strings.ToLower(env("SIGNUPS", "open")) {
@@ -89,7 +88,7 @@ func run() error {
 	defer stop()
 	errc := make(chan error, 1)
 	go func() { errc <- hs.ListenAndServe() }()
-	slog.Info("gomail-sync listening", "addr", addr, "dataDir", cfg.DataDir, "signups", cfg.Signups, "signupCode", cfg.SignupCode != "")
+	slog.Info("gomail-sync listening", "addr", addr, "dataDir", cfg.DataDir, "signups", cfg.Signups)
 	select {
 	case err := <-errc:
 		return err

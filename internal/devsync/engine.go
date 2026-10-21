@@ -1,9 +1,11 @@
 // Package devsync keeps several gomail installs in sync through a
 // gomail-sync server (internal/syncserver). The app describes its state as
 // a few documents of keyed JSON values (Source); the engine encrypts them
-// with a key derived from the user's passphrase, uploads changes a few
-// seconds after they happen, pulls other devices' changes on start, every
-// few minutes and after waking, and merges per key (last writer wins).
+// with a key derived from the account's sync code and syncs on start, every
+// minute, after waking and on request: each round uploads this device's
+// changes and takes the other devices', merged per key (last writer wins).
+// It isn't real-time; a change reaches the other devices within a minute
+// or two.
 //
 // Each document keeps a local shadow: the entries as last merged. A
 // round compares the app's current values with the shadow to find local
@@ -23,7 +25,6 @@ import (
 	"slices"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/AVMG20/gomail/internal/safe"
 	"github.com/AVMG20/gomail/internal/secrets"
@@ -63,10 +64,11 @@ type Options struct {
 	Source   Source
 	State    StateStore
 	Secrets  secrets.Store
-	HTTP     *http.Client     // nil = default with timeouts
-	OnStatus func(Status)     // status changes (optional)
-	Interval time.Duration    // pull this often (default 3 min)
-	Debounce time.Duration    // upload this long after the last change (default 4 s)
+	HTTP     *http.Client // nil = default with timeouts
+	OnStatus func(Status) // status changes (optional)
+	// Interval is how often to sync (read each time; 0 = only on start
+	// and SyncNow). nil = every minute.
+	Interval func() time.Duration
 	Delay    time.Duration    // first round after Start (default 5 s)
 	Now      func() time.Time // tests
 }
@@ -75,7 +77,6 @@ type Options struct {
 type Status struct {
 	Connected bool
 	Server    string
-	Username  string
 	Secrets   bool // sign-ins and API keys sync
 	Syncing   bool
 	LastSync  time.Time
@@ -87,7 +88,7 @@ const (
 	StatePrefix  = "devicesync."
 	configKey    = StatePrefix + "config"
 	docKeyPrefix = StatePrefix + "doc."
-	keysSecret   = "devicesync:keys"
+	codeSecret   = "devicesync:code"
 )
 
 // ErrNotConnected is returned when sync isn't set up.
@@ -95,7 +96,6 @@ var ErrNotConnected = errors.New("device sync isn't set up")
 
 type config struct {
 	Server   string    `json:"server"`
-	Username string    `json:"username"`
 	Secrets  bool      `json:"secrets"`
 	LastSync time.Time `json:"lastSync"`
 }
@@ -121,19 +121,15 @@ type Engine struct {
 	lastErr string
 	last    time.Time // last round attempt (wall clock)
 
-	kick   chan struct{} // debounced round
-	now    chan struct{} // immediate round
+	now    chan struct{} // a round right away (Kick)
 	cancel context.CancelFunc
 	done   chan struct{}
 }
 
 // New creates an engine; Start runs it.
 func New(opts Options) *Engine {
-	if opts.Interval <= 0 {
-		opts.Interval = 3 * time.Minute
-	}
-	if opts.Debounce <= 0 {
-		opts.Debounce = 4 * time.Second
+	if opts.Interval == nil {
+		opts.Interval = func() time.Duration { return time.Minute }
 	}
 	if opts.Delay <= 0 {
 		opts.Delay = 5 * time.Second
@@ -141,7 +137,7 @@ func New(opts Options) *Engine {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	e := &Engine{opts: opts, kick: make(chan struct{}, 1), now: make(chan struct{}, 1)}
+	e := &Engine{opts: opts, now: make(chan struct{}, 1)}
 	e.load()
 	return e
 }
@@ -153,19 +149,19 @@ func (e *Engine) load() {
 	if err != nil || !ok || cfg.Server == "" {
 		return
 	}
-	raw, err := e.opts.Secrets.Get(keysSecret)
+	code, err := e.opts.Secrets.Get(codeSecret)
 	if err != nil {
-		slog.Warn("device sync: keys unavailable", "err", err)
-		e.lastErr = "This computer's sync keys are missing. Connect again."
+		slog.Warn("device sync: sync code unavailable", "err", err)
+		e.lastErr = "This computer's sync code is missing from the keychain. Turn on sync again with the code from another device."
 		return
 	}
-	var keys Keys
-	if json.Unmarshal([]byte(raw), &keys) != nil || len(keys.Auth) != 32 || len(keys.Enc) != 32 {
-		e.lastErr = "This computer's sync keys are damaged. Connect again."
+	keys, _, err := KeysFromCode(code)
+	if err != nil {
+		e.lastErr = "This computer's sync code is damaged. Turn on sync again with the code from another device."
 		return
 	}
 	e.cfg, e.keys = &cfg, keys
-	e.cl = newClient(cfg.Server, cfg.Username, keys.Auth, e.opts.HTTP)
+	e.cl = newClient(cfg.Server, keys, e.opts.HTTP)
 }
 
 // Start runs the background loop until ctx ends or Stop.
@@ -203,8 +199,6 @@ func (e *Engine) loop(ctx context.Context) {
 	defer first.Stop()
 	tick := time.NewTicker(tickEvery)
 	defer tick.Stop()
-	debounce := time.NewTimer(time.Hour)
-	debounce.Stop()
 	lastTick := e.opts.Now().Round(0)
 	run := func() {
 		if e.Connected() {
@@ -215,10 +209,6 @@ func (e *Engine) loop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-e.kick:
-			debounce.Reset(e.opts.Debounce)
-		case <-debounce.C:
-			run()
 		case <-e.now:
 			run()
 		case <-first.C:
@@ -226,34 +216,38 @@ func (e *Engine) loop(ctx context.Context) {
 		case <-tick.C:
 			// Wall-clock time: the monotonic clock stops while asleep.
 			now := e.opts.Now().Round(0)
-			woke := now.Sub(lastTick) > 4*tickEvery
-			lastTick = now
 			e.mu.Lock()
-			due := now.Sub(e.last) >= e.opts.Interval
+			last := e.last
 			e.mu.Unlock()
-			if woke || due {
+			if due(now, lastTick, last, e.opts.Interval()) {
 				run()
 			}
+			lastTick = now
 		}
 	}
 }
 
-// Changed tells the engine local state changed: it syncs shortly.
-func (e *Engine) Changed() {
-	if !e.Connected() {
-		return
+// due reports whether a periodic round should run at now: the interval
+// passed since the last round, or the computer woke from sleep (the wall
+// clock jumped since the last tick). interval 0 means only on request.
+func due(now, lastTick, lastRound time.Time, interval time.Duration) bool {
+	if interval <= 0 {
+		return false
 	}
-	select {
-	case e.kick <- struct{}{}:
-	default:
-	}
+	return now.Sub(lastTick) > 4*tickEvery || now.Sub(lastRound) >= interval
 }
 
-// Kick syncs now in the background (e.g. back online).
+// Kick syncs now in the background (back online), unless syncing is
+// manual.
 func (e *Engine) Kick() {
-	if !e.Connected() {
+	if !e.Connected() || e.opts.Interval() <= 0 {
 		return
 	}
+	e.runSoon()
+}
+
+// runSoon starts a round in the background (after something the user did).
+func (e *Engine) runSoon() {
 	select {
 	case e.now <- struct{}{}:
 	default:
@@ -280,7 +274,7 @@ func (e *Engine) Status() Status {
 	defer e.mu.Unlock()
 	st := Status{Syncing: e.syncing, Error: e.lastErr}
 	if e.cfg != nil {
-		st.Connected, st.Server, st.Username, st.Secrets, st.LastSync = true, e.cfg.Server, e.cfg.Username, e.cfg.Secrets, e.cfg.LastSync
+		st.Connected, st.Server, st.Secrets, st.LastSync = true, e.cfg.Server, e.cfg.Secrets, e.cfg.LastSync
 	}
 	return st
 }
@@ -291,43 +285,35 @@ func (e *Engine) emit() {
 	}
 }
 
-// ConnectParams are what the user enters to connect.
+// ConnectParams start syncing a device.
 type ConnectParams struct {
-	Server     string
-	Username   string
-	Passphrase string
-	Create     bool   // create the account on the server first
-	SignupCode string // for servers that need one to create an account
-	Secrets    bool   // sync sign-ins and API keys (a new account; joining devices follow the account)
+	Server  string
+	Code    string // the sync code of another device; "" with Create
+	Create  bool   // turn on sync: a new code and sync account
+	Secrets bool   // sync sign-ins and API keys (a new account; joining devices follow the account)
 }
 
-// MinPassphrase is the shortest passphrase accepted for a new account.
-const MinPassphrase = 10
-
-// Connect signs in to (or creates) a sync account and starts syncing:
-// this device takes the synced settings, and adds what only it has.
+// Connect turns on sync: with Create, for a new sync account under a new
+// code (Code returns it); otherwise with another device's code, taking
+// the synced settings and adding what only this device has.
 func (e *Engine) Connect(ctx context.Context, p ConnectParams) error {
 	server, err := NormalizeServer(p.Server)
 	if err != nil {
 		return err
 	}
-	user := syncapi.NormalizeUsername(p.Username)
-	if !syncapi.ValidUsername(user) {
-		return errors.New("usernames are 3–64 characters: letters, digits and . _ @ + -")
+	code := p.Code
+	if p.Create {
+		if code, err = NewCode(); err != nil {
+			return err
+		}
 	}
-	if p.Passphrase == "" {
-		return errors.New("enter your sync passphrase")
-	}
-	if p.Create && utf8.RuneCountInString(p.Passphrase) < MinPassphrase {
-		return fmt.Errorf("use a passphrase of at least %d characters", MinPassphrase)
-	}
-	keys, err := DeriveKeys(user, p.Passphrase)
+	keys, code, err := KeysFromCode(code)
 	if err != nil {
 		return err
 	}
-	cl := newClient(server, user, keys.Auth, e.opts.HTTP)
+	cl := newClient(server, keys, e.opts.HTTP)
 	if p.Create {
-		if err := cl.register(ctx, p.SignupCode); err != nil {
+		if err := cl.register(ctx); err != nil {
 			return friendly(err)
 		}
 	}
@@ -336,15 +322,14 @@ func (e *Engine) Connect(ctx context.Context, p ConnectParams) error {
 	}
 	e.round.Lock()
 	defer e.round.Unlock()
-	raw, _ := json.Marshal(keys)
-	if err := e.opts.Secrets.Set(keysSecret, string(raw)); err != nil {
-		return fmt.Errorf("could not store the sync keys securely: %w", err)
+	if err := e.opts.Secrets.Set(codeSecret, code); err != nil {
+		return fmt.Errorf("could not store the sync code securely: %w", err)
 	}
 	// A fresh start: shadows of an earlier connection don't apply.
 	if err := e.opts.State.DeletePrefix(docKeyPrefix); err != nil {
 		return err
 	}
-	cfg := &config{Server: server, Username: user, Secrets: p.Secrets || !p.Create}
+	cfg := &config{Server: server, Secrets: p.Secrets || !p.Create}
 	if err := e.opts.State.Save(configKey, cfg); err != nil {
 		return err
 	}
@@ -353,7 +338,7 @@ func (e *Engine) Connect(ctx context.Context, p ConnectParams) error {
 	e.mu.Unlock()
 	slog.Info("device sync connected", "server", server, "created", p.Create)
 	e.emit()
-	e.Kick()
+	e.runSoon()
 	return nil
 }
 
@@ -365,10 +350,19 @@ func (e *Engine) Disconnect() error {
 	e.mu.Lock()
 	e.cfg, e.keys, e.cl, e.lastErr = nil, Keys{}, nil, ""
 	e.mu.Unlock()
-	err := errors.Join(e.opts.Secrets.Delete(keysSecret), e.opts.State.DeletePrefix(StatePrefix))
+	err := errors.Join(e.opts.Secrets.Delete(codeSecret), e.opts.State.DeletePrefix(StatePrefix))
 	slog.Info("device sync disconnected")
 	e.emit()
 	return err
+}
+
+// Code returns the sync code of the connected account (to set up another
+// device).
+func (e *Engine) Code() (string, error) {
+	if !e.Connected() {
+		return "", ErrNotConnected
+	}
+	return e.opts.Secrets.Get(codeSecret)
 }
 
 // SetSecrets turns syncing of sign-ins and API keys on or off for every
@@ -377,7 +371,7 @@ func (e *Engine) SetSecrets(on bool) error {
 	if err := e.setSecrets(on); err != nil {
 		return err
 	}
-	e.Kick()
+	e.runSoon()
 	return nil
 }
 
@@ -642,13 +636,11 @@ func friendly(err error) error {
 	}
 	switch ae.Body.Code {
 	case syncapi.ErrBadCredentials:
-		return errors.New("wrong username or passphrase")
-	case syncapi.ErrUserExists:
-		return errors.New("that username is taken on this server. Pick another, or connect with it")
+		return errors.New("no sync account uses this code on this server. Check the server address, and that sync is on on the other device")
+	case syncapi.ErrAccountExists:
+		return errors.New("this sync code is in use already; try again")
 	case syncapi.ErrSignupsClosed:
-		return errors.New("this server doesn't accept new accounts")
-	case syncapi.ErrSignupCode:
-		return errors.New("this server needs a valid sign-up code to create an account")
+		return errors.New("this server doesn't accept new sync accounts. You can still use a code from a device that syncs with it")
 	case syncapi.ErrRateLimited:
 		return errors.New("too many attempts. Wait a few minutes and try again")
 	case syncapi.ErrQuota:

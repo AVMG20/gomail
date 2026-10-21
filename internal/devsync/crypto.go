@@ -6,41 +6,52 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
-	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 )
 
-// KDFIterations is the PBKDF2-HMAC-SHA256 work factor for the passphrase
-// (tests lower it). Changing it changes every derived key.
-var KDFIterations = 600_000
-
-// Keys are derived from the username and sync passphrase on the device.
-// Auth is sent to the server (which stores a salted hash of it); Enc never
-// leaves the device. Neither reveals the other or the passphrase.
+// Keys are derived from the sync code on the device. Account names the
+// sync account on the server; Auth is sent to the server (which stores a
+// salted hash of it); Enc never leaves the device. None of them reveals the
+// code or another key. The code has 256 random bits, so HKDF needs no slow
+// stretching.
 type Keys struct {
-	Auth []byte `json:"auth"`
-	Enc  []byte `json:"enc"`
+	Account string `json:"account"`
+	Auth    []byte `json:"auth"`
+	Enc     []byte `json:"enc"`
 }
 
-// DeriveKeys stretches the passphrase (salted with the username) and splits
-// the result into the auth and encryption keys with HKDF.
-func DeriveKeys(username, passphrase string) (Keys, error) {
-	master, err := pbkdf2.Key(sha256.New, passphrase, []byte("gomail-sync/v1\x00"+username), KDFIterations, 32)
+// DeriveKeys derives the keys of a sync code's entropy (ParseCode).
+func DeriveKeys(entropy []byte) (Keys, error) {
+	if len(entropy) != 32 {
+		return Keys{}, errors.New("invalid sync code")
+	}
+	id, err := hkdf.Key(sha256.New, entropy, nil, "gomail-sync/v1 account", 16)
 	if err != nil {
 		return Keys{}, err
 	}
-	auth, err := hkdf.Key(sha256.New, master, nil, "gomail-sync/v1 auth", 32)
+	auth, err := hkdf.Key(sha256.New, entropy, nil, "gomail-sync/v1 auth", 32)
 	if err != nil {
 		return Keys{}, err
 	}
-	enc, err := hkdf.Key(sha256.New, master, nil, "gomail-sync/v1 encryption", 32)
+	enc, err := hkdf.Key(sha256.New, entropy, nil, "gomail-sync/v1 encryption", 32)
 	if err != nil {
 		return Keys{}, err
 	}
-	return Keys{Auth: auth, Enc: enc}, nil
+	return Keys{Account: hex.EncodeToString(id), Auth: auth, Enc: enc}, nil
+}
+
+// KeysFromCode parses a code and derives its keys.
+func KeysFromCode(code string) (Keys, string, error) {
+	entropy, canonical, err := ParseCode(code)
+	if err != nil {
+		return Keys{}, "", err
+	}
+	k, err := DeriveKeys(entropy)
+	return k, canonical, err
 }
 
 // Sealed document layout: version byte, 12-byte nonce, AES-256-GCM
@@ -48,9 +59,9 @@ func DeriveKeys(username, passphrase string) (Keys, error) {
 // authenticated too, so the server can't swap one document for another.
 const sealVersion = 1
 
-// ErrDecrypt means a document couldn't be decrypted: another passphrase
+// ErrDecrypt means a document couldn't be decrypted: another sync code
 // encrypted it, or it was damaged or tampered with.
-var ErrDecrypt = errors.New("a synced document couldn't be decrypted (was it encrypted with another passphrase?)")
+var ErrDecrypt = errors.New("a synced document couldn't be decrypted (was it encrypted with another sync code?)")
 
 func aad(name string) []byte { return []byte("gomail-sync/v1 doc:" + name) }
 

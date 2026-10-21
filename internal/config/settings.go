@@ -128,6 +128,7 @@ func DefaultSettings() models.Settings {
 		SyncDepthDays:            90,
 		AIDailyBudgetUSD:         1,
 		CheckUpdates:             true,
+		DeviceSyncInterval:       DefaultDeviceSyncInterval,
 		ShowInTray:               true,
 		Labels:                   []models.Label{JunkLabel()}, // mailboxes bring their own (MailboxDefaultLabels)
 		PrimaryColor:             DefaultPrimaryColor,
@@ -287,7 +288,19 @@ func Normalize(s *models.Settings) {
 	s.JunkStaysPut = uniqueTrimmed(s.JunkStaysPut)
 	s.NotJunkSenders = normalizeSenderLists(s.NotJunkSenders)
 	s.SyncIntervals = normalizeIntervals(s.SyncIntervals)
+	if !slices.Contains(DeviceSyncIntervals, s.DeviceSyncInterval) {
+		s.DeviceSyncInterval = DefaultDeviceSyncInterval
+	}
 }
+
+// Device sync intervals (Settings.DeviceSyncInterval, minutes).
+const (
+	DefaultDeviceSyncInterval = 1
+	DeviceSyncManual          = -1 // only on start and with "Sync now"
+)
+
+// DeviceSyncIntervals are the choices offered.
+var DeviceSyncIntervals = []int{1, 5, 15, 30, 60, DeviceSyncManual}
 
 // SyncIntervalChoices are the background check intervals offered (minutes).
 var SyncIntervalChoices = []int{1, 5, 15, 30, 60}

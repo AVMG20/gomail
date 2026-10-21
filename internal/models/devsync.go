@@ -8,7 +8,6 @@ type DeviceSyncStatus struct {
 	Available      bool       `json:"available"` // false in demo mode
 	Connected      bool       `json:"connected"`
 	ServerURL      string     `json:"serverUrl"`
-	Username       string     `json:"username"`
 	IncludeSecrets bool       `json:"includeSecrets"` // sign-ins and API keys sync too
 	Syncing        bool       `json:"syncing"`
 	LastSyncAt     *time.Time `json:"lastSyncAt"`
@@ -17,19 +16,23 @@ type DeviceSyncStatus struct {
 	DefaultServerURL string `json:"defaultServerUrl"`
 }
 
-// DeviceSyncConnect is what the user enters to connect a computer.
+// DeviceSyncConnect turns on sync for a computer.
 type DeviceSyncConnect struct {
-	ServerURL  string `json:"serverUrl"` // "" = the default server
-	Username   string `json:"username"`
-	Passphrase string `json:"passphrase"`
-	// Create makes a new account on the server (the first computer);
-	// otherwise the computer joins an existing one and takes its settings.
-	Create     bool   `json:"create"`
-	SignupCode string `json:"signupCode"` // for servers that need one for new accounts
+	ServerURL string `json:"serverUrl"` // "" = the default server
+	// Create turns on sync with a new sync code (the first computer; read
+	// it with GetDeviceSyncCode). Otherwise Code is the 24-word code of
+	// another computer, and this one takes the synced settings.
+	Create bool   `json:"create"`
+	Code   string `json:"code"`
 	// IncludeSecrets syncs sign-ins and API keys (a new account; a joining
 	// computer follows the account's choice).
 	IncludeSecrets bool `json:"includeSecrets"`
 }
 
-// EventDeviceSync carries a DeviceSyncStatus whenever it changes.
-const EventDeviceSync = "devicesync:status"
+// Device sync events.
+const (
+	EventDeviceSync = "devicesync:status" // DeviceSyncStatus, whenever it changes
+	// EventSettingsChanged: another computer changed settings; re-read
+	// them all (GetSettings), keeping edits that aren't saved yet.
+	EventSettingsChanged = "settings:changed"
+)

@@ -66,20 +66,20 @@ func IsCode(err error, code string) bool {
 // client talks to one sync server account. It signs in on first use and
 // again when the session expires.
 type client struct {
-	base     string
-	username string
-	authKey  []byte
-	http     *http.Client
+	base    string
+	account string
+	authKey []byte
+	http    *http.Client
 
 	mu    sync.Mutex
 	token string
 }
 
-func newClient(base, username string, authKey []byte, hc *http.Client) *client {
+func newClient(base string, keys Keys, hc *http.Client) *client {
 	if hc == nil {
 		hc = &http.Client{Timeout: 2 * time.Minute}
 	}
-	return &client{base: base, username: username, authKey: authKey, http: hc}
+	return &client{base: base, account: keys.Account, authKey: keys.Auth, http: hc}
 }
 
 func (c *client) do(ctx context.Context, method, path, token string, in, out any) error {
@@ -125,13 +125,13 @@ func (c *client) do(ctx context.Context, method, path, token string, in, out any
 
 func (c *client) authKeyB64() string { return base64.StdEncoding.EncodeToString(c.authKey) }
 
-func (c *client) register(ctx context.Context, signupCode string) error {
-	return c.do(ctx, http.MethodPost, "/v1/register", "", syncapi.RegisterRequest{Username: c.username, AuthKey: c.authKeyB64(), SignupCode: signupCode}, nil)
+func (c *client) register(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/v1/register", "", syncapi.RegisterRequest{Account: c.account, AuthKey: c.authKeyB64()}, nil)
 }
 
 func (c *client) login(ctx context.Context) (string, error) {
 	var res syncapi.LoginResponse
-	if err := c.do(ctx, http.MethodPost, "/v1/login", "", syncapi.LoginRequest{Username: c.username, AuthKey: c.authKeyB64()}, &res); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/v1/login", "", syncapi.LoginRequest{Account: c.account, AuthKey: c.authKeyB64()}, &res); err != nil {
 		return "", err
 	}
 	c.mu.Lock()

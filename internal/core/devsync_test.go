@@ -27,8 +27,6 @@ import (
 	"github.com/AVMG20/gomail/internal/syncserver"
 )
 
-func init() { devsync.KDFIterations = 1000 }
-
 // Every settings field is classified: synced, kept per computer, or synced
 // elsewhere. A new field fails here until it is put in one of the lists.
 func TestDeviceSyncClassifiesEverySetting(t *testing.T) {
@@ -143,7 +141,7 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 	addDemoAccount(t, work, 0, "w-gmail")
 	addDemoAccount(t, work, 1, "w-outlook")
 	st := work.GetSettings()
-	st.Theme, st.PrimaryColor, st.Zoom = "dark", "#10b981", 1.5
+	st.Theme, st.PrimaryColor, st.Zoom, st.DeviceSyncInterval = "dark", "#10b981", 1.5, 15
 	st.GoogleClientID, st.GoogleClientSecret = "client-id.apps.example.com", "client-secret-value"
 	st.Labels = append(st.Labels, models.Label{Name: "Side Project", Color: "#123456", Description: "Mail about the side project.", AccountIDs: []string{"w-gmail"}, Then: "archive"})
 	st.MutedMailboxes = []string{"w-outlook"}
@@ -183,8 +181,12 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := work.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: url, Username: "alex", Passphrase: "a long sync passphrase", Create: true, IncludeSecrets: true}); err != nil {
+	if _, err := work.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: url, Create: true, IncludeSecrets: true}); err != nil {
 		t.Fatal(err)
+	}
+	code, err := work.DeviceSyncCode()
+	if err != nil || len(strings.Fields(code)) != 24 {
+		t.Fatalf("sync code %q %v", code, err)
 	}
 	syncDevices(t, work)
 
@@ -196,7 +198,7 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 	if err := home.SaveSettings(hs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := home.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: url, Username: "Alex", Passphrase: "a long sync passphrase"}); err != nil {
+	if _, err := home.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: url, Code: strings.ToUpper(code)}); err != nil {
 		t.Fatal(err)
 	}
 	syncDevices(t, home)
@@ -222,7 +224,7 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 		t.Fatal("a working sign-in was replaced")
 	}
 	hs = home.GetSettings()
-	if hs.Theme != "dark" || hs.PrimaryColor != "#10b981" || hs.Zoom != 0.8 {
+	if hs.Theme != "dark" || hs.PrimaryColor != "#10b981" || hs.Zoom != 0.8 || hs.DeviceSyncInterval != 1 {
 		t.Fatalf("settings: theme %s color %s zoom %v", hs.Theme, hs.PrimaryColor, hs.Zoom)
 	}
 	if hs.GoogleClientID != "client-id.apps.example.com" || hs.GoogleClientSecret != "client-secret-value" || !hs.OpenRouterKeySet {
@@ -291,9 +293,9 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 	}
 
 	// ---- quiet: nothing to do uploads nothing ----
-	revs := serverRevs(t, url)
+	revs := serverRevs(t, url, code)
 	syncDevices(t, work, home, work, home)
-	if after := serverRevs(t, url); !reflect.DeepEqual(revs, after) {
+	if after := serverRevs(t, url, code); !reflect.DeepEqual(revs, after) {
 		t.Fatalf("idle rounds uploaded: %v -> %v", revs, after)
 	}
 
@@ -320,7 +322,7 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 		t.Fatal(err)
 	}
 	wal, _ := os.ReadFile(filepath.Join(serverDir, "sync.db-wal"))
-	for _, plain := range []string{"Side Project", "sk-or-test-key-123", "client-secret-value", "rt-w-gmail", "alex.demo", "boss@example.com", "#10b981"} {
+	for _, plain := range []string{strings.Fields(code)[0] + " " + strings.Fields(code)[1], "Side Project", "sk-or-test-key-123", "client-secret-value", "rt-w-gmail", "alex.demo", "boss@example.com", "#10b981"} {
 		if strings.Contains(string(db), plain) || strings.Contains(string(wal), plain) {
 			t.Fatalf("server database contains %q", plain)
 		}
@@ -351,10 +353,10 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 }
 
 // serverRevs lists the revisions of the account's documents on the server.
-func serverRevs(t *testing.T, url string) map[string]int64 {
+func serverRevs(t *testing.T, url, code string) map[string]int64 {
 	t.Helper()
-	keys, _ := devsync.DeriveKeys("alex", "a long sync passphrase")
-	b, _ := json.Marshal(syncapi.LoginRequest{Username: "alex", AuthKey: base64.StdEncoding.EncodeToString(keys.Auth)})
+	keys, _, _ := devsync.KeysFromCode(code)
+	b, _ := json.Marshal(syncapi.LoginRequest{Account: keys.Account, AuthKey: base64.StdEncoding.EncodeToString(keys.Auth)})
 	resp, err := http.Post(url+"/v1/login", "application/json", bytes.NewReader(b))
 	if err != nil {
 		t.Fatal(err)

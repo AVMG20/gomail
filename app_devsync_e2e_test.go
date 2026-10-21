@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/AVMG20/gomail/internal/core"
-	"github.com/AVMG20/gomail/internal/devsync"
 	"github.com/AVMG20/gomail/internal/fakes"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/secrets"
@@ -67,9 +68,6 @@ func devicesSync(t *testing.T, ms ...*MailService) {
 // sync server; the second one also gets the Gmail sign-in and reads mail
 // without signing in itself.
 func TestDeviceSyncTwoAppInstances(t *testing.T) {
-	old := devsync.KDFIterations
-	devsync.KDFIterations = 1000
-	t.Cleanup(func() { devsync.KDFIterations = old })
 	srv, err := syncserver.New(syncserver.Config{DataDir: t.TempDir(), Signups: true})
 	if err != nil {
 		t.Fatal(err)
@@ -118,14 +116,23 @@ func TestDeviceSyncTwoAppInstances(t *testing.T) {
 	if status, err := work.GetDeviceSyncStatus(); err != nil || status.Connected || status.DefaultServerURL != "https://gomail.avmg.nl" || !status.Available {
 		t.Fatalf("status before connecting %+v %v", status, err)
 	}
-	if _, err := work.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: ts.URL, Username: "alice", Passphrase: "work and home in sync", Create: true, IncludeSecrets: true}); err != nil {
+	if _, err := work.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: ts.URL, Create: true, IncludeSecrets: true}); err != nil {
+		t.Fatal(err)
+	}
+	code, err := work.GetDeviceSyncCode()
+	if err != nil {
 		t.Fatal(err)
 	}
 	devicesSync(t, work)
 
 	// ---- the home computer joins ----
 	home := e.peer()
-	if _, err := home.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: ts.URL, Username: "alice", Passphrase: "work and home in sync"}); err != nil {
+	// Typed in on the other computer: numbered, over several lines.
+	var typed []string
+	for i, w := range strings.Fields(code) {
+		typed = append(typed, fmt.Sprintf("%d. %s", i+1, w))
+	}
+	if _, err := home.ConnectDeviceSync(models.DeviceSyncConnect{ServerURL: ts.URL, Code: strings.Join(typed, "\n")}); err != nil {
 		t.Fatal(err)
 	}
 	devicesSync(t, home)
@@ -186,7 +193,7 @@ func TestDeviceSyncTwoAppInstances(t *testing.T) {
 	if m := e.msg(ga.ID, "Lunch"); !slices.Contains(m.Labels, receipts) {
 		t.Fatalf("home's label on Lunch didn't reach work: %v", m.Labels)
 	}
-	if status, _ := work.GetDeviceSyncStatus(); !status.Connected || status.LastSyncAt == nil || status.Username != "alice" || !status.IncludeSecrets {
+	if status, _ := work.GetDeviceSyncStatus(); !status.Connected || status.LastSyncAt == nil || !status.IncludeSecrets {
 		t.Fatalf("work status %+v", status)
 	}
 }

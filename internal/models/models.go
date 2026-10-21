@@ -335,6 +335,10 @@ type Settings struct {
 	AIDailyBudgetUSD        float64 `json:"aiDailyBudgetUsd"`        // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
 	LaunchAtLogin           bool    `json:"launchAtLogin"`           // start gomail at login, minimized to the tray when enabled (default false)
 	CheckUpdates            bool    `json:"checkUpdates"`            // check GitHub releases once a day (default true)
+	// DeviceSyncInterval is how often (minutes) this computer syncs with
+	// the others (Settings → Sync): 1 (default), 5, 15, 30 or 60; -1 = only
+	// on start and with "Sync now". Kept per computer.
+	DeviceSyncInterval int `json:"deviceSyncInterval"`
 
 	// TrustedLinkDomains open from mail without the "Open link?" prompt
 	// (lowercase host names without "www."; subdomains match too).

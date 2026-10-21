@@ -519,26 +519,21 @@ export interface DefaultPrompts {
 }
 
 /**
- * DeviceSyncConnect is what the user enters to connect a computer.
+ * DeviceSyncConnect turns on sync for a computer.
  */
 export interface DeviceSyncConnect {
     /**
      * "" = the default server
      */
     "serverUrl": string;
-    "username": string;
-    "passphrase": string;
 
     /**
-     * Create makes a new account on the server (the first computer);
-     * otherwise the computer joins an existing one and takes its settings.
+     * Create turns on sync with a new sync code (the first computer; read
+     * it with GetDeviceSyncCode). Otherwise Code is the 24-word code of
+     * another computer, and this one takes the synced settings.
      */
     "create": boolean;
-
-    /**
-     * for servers that need one for new accounts
-     */
-    "signupCode": string;
+    "code": string;
 
     /**
      * IncludeSecrets syncs sign-ins and API keys (a new account; a joining
@@ -558,7 +553,6 @@ export interface DeviceSyncStatus {
     "available": boolean;
     "connected": boolean;
     "serverUrl": string;
-    "username": string;
 
     /**
      * sign-ins and API keys sync too
@@ -1414,6 +1408,13 @@ export interface Settings {
      * check GitHub releases once a day (default true)
      */
     "checkUpdates": boolean;
+
+    /**
+     * DeviceSyncInterval is how often (minutes) this computer syncs with
+     * the others (Settings → Sync): 1 (default), 5, 15, 30 or 60; -1 = only
+     * on start and with "Sync now". Kept per computer.
+     */
+    "deviceSyncInterval": number;
 
     /**
      * TrustedLinkDomains open from mail without the "Open link?" prompt

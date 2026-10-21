@@ -322,10 +322,7 @@ func (s *Service) goBG(f func()) {
 	}()
 }
 
-func (s *Service) emit(event string, data any) {
-	s.ui.Emit(event, data)
-	s.deviceSyncChanged(event, data)
-}
+func (s *Service) emit(event string, data any) { s.ui.Emit(event, data) }
 
 // notifyingEmitter forwards engine events to the UI and shows a desktop
 // notification for new mail when enabled.
@@ -333,7 +330,7 @@ type notifyingEmitter struct{ s *Service }
 
 func (n notifyingEmitter) Emit(event string, data any) {
 	n.s.ui.Emit(event, data)
-	n.s.deviceSyncChanged(event, data)
+	n.s.deviceSyncOnline(event, data)
 	if ns, ok := data.(models.NetworkStatus); ok && event == models.EventNetworkStatus && ns.Online {
 		n.s.retryDrafts() // autosaves that failed while offline
 	}

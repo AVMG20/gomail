@@ -2,6 +2,10 @@
 // server (cmd/gomail-sync). The server stores opaque, client-encrypted
 // documents with a revision number; it never sees keys or plaintext.
 //
+// A sync account is created by the app from a random sync code: the code
+// derives the account id, the auth key (the server keeps a salted hash) and
+// the encryption key (never sent).
+//
 // Endpoints (JSON over HTTPS):
 //
 //	GET  /healthz                 liveness
@@ -16,7 +20,6 @@ package syncapi
 
 import (
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -24,10 +27,9 @@ import (
 const (
 	ErrBadRequest       = "bad_request"
 	ErrUnauthorized     = "unauthorized"    // missing/expired session
-	ErrBadCredentials   = "bad_credentials" // wrong username or passphrase
-	ErrUserExists       = "user_exists"     // register: the name is taken
+	ErrBadCredentials   = "bad_credentials" // no account for this account id and key
+	ErrAccountExists    = "account_exists"  // register: the account id is taken
 	ErrSignupsClosed    = "signups_closed"  // register: the server takes no new accounts
-	ErrSignupCode       = "signup_code"     // register: a sign-up code is needed (or was wrong)
 	ErrRateLimited      = "rate_limited"    // too many attempts; see Retry-After
 	ErrNotFound         = "not_found"       // no such document
 	ErrConflict         = "conflict"        // PUT: BaseRev isn't the current revision
@@ -44,18 +46,17 @@ type Error struct {
 	Rev     int64  `json:"rev,omitempty"` // ErrConflict: the current revision
 }
 
-// RegisterRequest creates an account. AuthKey is the base64 (std) of the
-// 32-byte key derived on the device; the server keeps only a salted hash.
+// RegisterRequest creates an account. Account is the id derived from the
+// sync code; AuthKey the base64 (std) of the 32-byte auth key.
 type RegisterRequest struct {
-	Username   string `json:"username"`
-	AuthKey    string `json:"authKey"`
-	SignupCode string `json:"signupCode,omitempty"`
+	Account string `json:"account"`
+	AuthKey string `json:"authKey"`
 }
 
 // LoginRequest exchanges the auth key for a session token.
 type LoginRequest struct {
-	Username string `json:"username"`
-	AuthKey  string `json:"authKey"`
+	Account string `json:"account"`
+	AuthKey string `json:"authKey"`
 }
 
 // LoginResponse holds a bearer token for the other endpoints.
@@ -99,16 +100,13 @@ type PutResponse struct {
 }
 
 var (
-	usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._@+-]{2,63}$`)
-	docNamePattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+	accountPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	docNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 )
 
-// NormalizeUsername lower-cases and trims a username.
-func NormalizeUsername(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
-
-// ValidUsername reports whether a (normalized) username is acceptable:
-// 3–64 characters of a-z, 0-9 and . _ @ + -.
-func ValidUsername(s string) bool { return usernamePattern.MatchString(s) }
+// ValidAccount reports whether an account id is well formed (32 lower-case
+// hex digits).
+func ValidAccount(s string) bool { return accountPattern.MatchString(s) }
 
 // ValidDocName reports whether a document name is acceptable.
 func ValidDocName(s string) bool { return docNamePattern.MatchString(s) }
