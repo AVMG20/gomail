@@ -66,6 +66,12 @@ async function setReminder(v: string) {
   }
   await cal.setReminders(ev.value, minutes, scope)
 }
+/** The location opens as a link: itself when it is one (a Teams room, a web page), else a Google Maps search. */
+const locationUrl = computed(() => {
+  const loc = ev.value.location.trim()
+  if (!loc) return ''
+  return isSafeExternalUrl(loc) ? loc : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`
+})
 const otherZone = computed(() => formatEventWhenInZone(ev.value))
 const canRespond = computed(() => !ev.value.isOrganizer && !!ev.value.myResponse)
 
@@ -159,7 +165,7 @@ function emailGuests() {
         </div>
         <div v-if="ev.location" class="flex items-start gap-4">
           <span class="flex h-5 w-5 shrink-0 items-center justify-center"><MapPinIcon class="text-muted-foreground size-4" /></span>
-          <span class="selectable min-w-0 break-words">{{ ev.location }}</span>
+          <a :href="locationUrl" class="min-w-0 break-words underline-offset-2 hover:underline" :title="isSafeExternalUrl(ev.location.trim()) ? 'Open link' : 'Open in Google Maps'" @click.prevent="api.openExternal(locationUrl)">{{ ev.location }}</a>
         </div>
 
         <div v-if="hasOthers" class="flex items-start gap-4">

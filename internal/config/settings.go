@@ -18,6 +18,8 @@ const (
 	DefaultTenant            = "common"
 	DefaultChatModel         = "openai/gpt-4o-mini"
 	DefaultClassifierModel   = "typesafe/jev-1.13"
+	DefaultTextAIReasoning   = "default"
+	DefaultEventAIReasoning  = "low"
 	DefaultClassifyThreshold = 0.5
 	DefaultRemoveThreshold   = 0.15
 	DefaultPrimaryColor      = "#2563eb"
@@ -102,6 +104,8 @@ func DefaultSettings() models.Settings {
 		MicrosoftTenant:     DefaultTenant,
 		OpenRouterModel:     DefaultChatModel,
 		ClassifierModel:     DefaultClassifierModel,
+		TextAIReasoning:     DefaultTextAIReasoning,
+		EventAIReasoning:    DefaultEventAIReasoning,
 		ClassifyThreshold:   DefaultClassifyThreshold,
 
 		ClassifyRemoveThreshold:  DefaultRemoveThreshold,
@@ -234,6 +238,13 @@ func Normalize(s *models.Settings) {
 	s.ClassifierModel = strings.TrimSpace(s.ClassifierModel)
 	if s.ClassifierModel == "" {
 		s.ClassifierModel = DefaultClassifierModel
+	}
+	s.EventAIModel = strings.TrimSpace(s.EventAIModel)
+	if !validEffort(s.TextAIReasoning) {
+		s.TextAIReasoning = DefaultTextAIReasoning
+	}
+	if !validEffort(s.EventAIReasoning) {
+		s.EventAIReasoning = DefaultEventAIReasoning
 	}
 	if s.ClassifyThreshold <= 0 || s.ClassifyThreshold > 1 {
 		s.ClassifyThreshold = DefaultClassifyThreshold
@@ -724,4 +735,14 @@ func uniqueTrimmed(in []string) []string {
 		}
 	}
 	return out
+}
+
+// validEffort reports whether v is a reasoning setting: OpenRouter's
+// efforts or "default" (send none, the model decides).
+func validEffort(v string) bool {
+	switch v {
+	case "default", "none", "minimal", "low", "medium", "high", "xhigh":
+		return true
+	}
+	return false
 }

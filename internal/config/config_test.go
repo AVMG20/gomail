@@ -396,3 +396,17 @@ func TestSyncIntervalPerMailbox(t *testing.T) {
 		t.Fatalf("default %d", SyncInterval(s, "b"))
 	}
 }
+
+func TestAIReasoningSettings(t *testing.T) {
+	// Settings saved before these existed (empty) get the defaults.
+	var s models.Settings
+	Normalize(&s)
+	if s.TextAIReasoning != "default" || s.EventAIReasoning != "low" || s.EventAIModel != "" {
+		t.Fatalf("defaults %q %q %q", s.TextAIReasoning, s.EventAIReasoning, s.EventAIModel)
+	}
+	s.TextAIReasoning, s.EventAIReasoning, s.EventAIModel = "high", "bogus", "  x/y  "
+	Normalize(&s)
+	if s.TextAIReasoning != "high" || s.EventAIReasoning != "low" || s.EventAIModel != "x/y" {
+		t.Fatalf("normalized %q %q %q", s.TextAIReasoning, s.EventAIReasoning, s.EventAIModel)
+	}
+}

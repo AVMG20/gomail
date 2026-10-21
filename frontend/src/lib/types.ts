@@ -383,6 +383,12 @@ export interface Settings {
   labelsRev?: number
   /** Chat model: used only for grammar improvement and summaries. */
   openRouterModel: string
+  /** Reasoning effort of the chat model: "default" (the model's own) or OpenRouter's none … xhigh. */
+  textAIReasoning?: string
+  /** Model that fills in new events from text ("" = openRouterModel). */
+  eventAIModel?: string
+  /** Its reasoning effort (default "low"). */
+  eventAIReasoning?: string
   /** Jev decision model used for AI labeling. */
   classifierModel: string
   /** 0..1; labels below this confidence are left unassigned. */

@@ -1388,9 +1388,26 @@ export interface Settings {
     "openRouterModel": string;
 
     /**
+     * TextAIReasoning is the text model's reasoning effort: OpenRouter's
+     * none | minimal | low | medium | high | xhigh, or "default" (the model's own).
+     */
+    "textAIReasoning": string;
+
+    /**
      * OpenRouter Decisions model, default "typesafe/jev-1.13"
      */
     "classifierModel": string;
+
+    /**
+     * EventAIModel fills in new calendar events from text ("" = OpenRouterModel).
+     */
+    "eventAIModel": string;
+
+    /**
+     * EventAIReasoning is its reasoning effort (as TextAIReasoning).
+     * Default "low": a form fill needs little thinking.
+     */
+    "eventAIReasoning": string;
 
     /**
      * Labels and AI labeling.

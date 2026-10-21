@@ -355,7 +355,15 @@ type Settings struct {
 	// (provider labels found by a sync) aren't taken as deleted.
 	LabelsRev       int64  `json:"labelsRev"`
 	OpenRouterModel string `json:"openRouterModel"` // chat model (grammar, summaries, drafts)
+	// TextAIReasoning is the text model's reasoning effort: OpenRouter's
+	// none | minimal | low | medium | high | xhigh, or "default" (the model's own).
+	TextAIReasoning string `json:"textAIReasoning"`
 	ClassifierModel string `json:"classifierModel"` // OpenRouter Decisions model, default "typesafe/jev-1.13"
+	// EventAIModel fills in new calendar events from text ("" = OpenRouterModel).
+	EventAIModel string `json:"eventAIModel"`
+	// EventAIReasoning is its reasoning effort (as TextAIReasoning).
+	// Default "low": a form fill needs little thinking.
+	EventAIReasoning string `json:"eventAIReasoning"`
 
 	// Labels and AI labeling.
 	Labels               []Label `json:"labels"`

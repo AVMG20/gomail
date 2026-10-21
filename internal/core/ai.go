@@ -86,6 +86,14 @@ func (s *Service) ListAIModels(force bool) ([]models.AIModel, error) {
 
 func (s *Service) chatModel() string { return s.Settings().OpenRouterModel }
 
+// effortParam is a reasoning setting as sent to OpenRouter ("default" = none sent).
+func effortParam(v string) string {
+	if v == "default" {
+		return ""
+	}
+	return v
+}
+
 // ImproveGrammar fixes spelling and grammar with the chat model.
 func (s *Service) ImproveGrammar(text string) (string, error) {
 	if len(text) > 100_000 {
@@ -94,7 +102,7 @@ func (s *Service) ImproveGrammar(text string) (string, error) {
 	st := s.Settings()
 	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
 	defer cancel()
-	return s.ai.ImproveGrammar(ctx, st.OpenRouterModel, st.GrammarSystemPrompt, text)
+	return s.ai.ImproveGrammar(ctx, st.OpenRouterModel, effortParam(st.TextAIReasoning), st.GrammarSystemPrompt, text)
 }
 
 func emailForPrompt(m models.Message) string {
@@ -109,16 +117,21 @@ func emailForPrompt(m models.Message) string {
 }
 
 // ParseEventText fills a new event from a natural-language description with
-// the chat model chosen in Settings → AI.
+// the event model and reasoning effort chosen in Settings → AI.
 // timeZone is the UI's IANA zone (Go's local zone has no usable name).
 func (s *Service) ParseEventText(text, timeZone string) (models.EventDraft, error) {
 	now := time.Now()
 	if loc, err := time.LoadLocation(timeZone); err == nil && timeZone != "" {
 		now = now.In(loc)
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, time.Minute)
+	st := s.Settings()
+	model := st.EventAIModel
+	if model == "" {
+		model = st.OpenRouterModel
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
 	defer cancel()
-	return s.ai.ParseEvent(ctx, s.chatModel(), text, now)
+	return s.ai.ParseEvent(ctx, model, text, now, effortParam(st.EventAIReasoning))
 }
 
 // SummarizeMessage returns a short bullet summary.
@@ -129,7 +142,8 @@ func (s *Service) SummarizeMessage(id string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
 	defer cancel()
-	return s.ai.Summarize(ctx, s.chatModel(), emailForPrompt(m))
+	st := s.Settings()
+	return s.ai.Summarize(ctx, st.OpenRouterModel, effortParam(st.TextAIReasoning), emailForPrompt(m))
 }
 
 // ---- classification ----

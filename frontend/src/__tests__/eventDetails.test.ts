@@ -129,3 +129,17 @@ describe('EventDetails on an invitation', () => {
     c.unmount()
   })
 })
+
+describe('EventDetails location', () => {
+  it('opens an address in Google Maps, and a link as itself', async () => {
+    const open = vi.spyOn(api, 'openExternal').mockResolvedValue()
+    let c = mount({ ...invite, location: 'Basisweg 63, Amsterdam' } as CalendarEvent)
+    document.body.querySelector<HTMLElement>('a[title="Open in Google Maps"]')!.click()
+    expect(open).toHaveBeenCalledWith('https://www.google.com/maps/search/?api=1&query=Basisweg%2063%2C%20Amsterdam')
+    c.unmount()
+    c = mount({ ...invite, location: 'https://example.com/room' } as CalendarEvent)
+    document.body.querySelector<HTMLElement>('a[title="Open link"]')!.click()
+    expect(open).toHaveBeenLastCalledWith('https://example.com/room')
+    c.unmount()
+  })
+})
