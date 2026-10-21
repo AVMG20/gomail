@@ -20,8 +20,8 @@ export function useShortcuts() {
     if (mail.openId) await compose.respondToThread(mode, mail.openId)
   }
 
-  /** Act on the selection (all N in this view when chosen), else the open message. */
-  const bulk = mail.actOnTargets
+  /** Act on the selection (all N in this view when chosen), else the hovered row, else the open message. */
+  const bulk = (fn: Parameters<typeof mail.actOnTargets>[0]) => mail.actOnTargets(fn, { hovered: true })
 
   function onKey(e: KeyboardEvent) {
     if (e.defaultPrevented) return
@@ -151,14 +151,17 @@ export function useShortcuts() {
         void bulk((x) => mail.setRead(x, false))
         break
       case 'I':
-        void mail.markTargetsRead()
+        void mail.markTargetsRead({ hovered: true })
         break
       case '!':
         // Move to Junk (like Gmail); in Junk itself: Not junk (back to the Inbox).
         void bulk(mail.mailbox.kind === 'spam' ? mail.notJunk : mail.junk)
         break
       case 'x':
-        if (mail.openId) mail.toggleSelect(mail.openId)
+        {
+          const id = mail.hoveredTarget() ?? mail.openId
+          if (id) mail.toggleSelect(id)
+        }
         break
       case 'l':
         // With mail selected, label the selection (not just the open message).

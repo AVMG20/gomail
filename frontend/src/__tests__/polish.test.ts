@@ -120,6 +120,25 @@ describe('triage', () => {
     expect(seen).toEqual([['m1', 'm2'], ['m3']])
   })
 
+  it('shortcuts act on the hovered row, unless j/k moved since the pointer last did', async () => {
+    const mail = setup()
+    mail.messages = [row('m1'), row('m2'), row('m3')]
+    mail.open('m1')
+    const seen: string[][] = []
+    const act = () => mail.actOnTargets((ids) => void seen.push(ids), { hovered: true })
+    mail.pointAt('m3', true)
+    await act()
+    // The palette keeps acting on the open message.
+    await mail.actOnTargets((ids) => void seen.push(ids))
+    mail.move(1)
+    mail.pointAt('m3', false) // a row slid under the resting pointer
+    await act()
+    mail.pointAt('m3', true)
+    mail.toggleSelect('m1')
+    await act()
+    expect(seen).toEqual([['m3'], ['m1'], ['m2'], ['m1']])
+  })
+
   it('a move to another mailbox’s folder leaves that mail where it is, and says so', async () => {
     const mail = setup()
     mail.setMailbox({ accountId: '', folderId: '', kind: 'inbox' })

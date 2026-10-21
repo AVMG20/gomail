@@ -86,9 +86,7 @@ function toggleRead(read: boolean) {
       </DropdownMenuContent>
     </DropdownMenu>
     <Tip label="Label with AI">
-      <Button variant="ghost" size="sm" class="gap-1.5 px-2" aria-label="Label with AI" @click="ai.labelSelection()">
-        <SparklesIcon class="text-violet-500" /> <span class="hidden text-xs @[460px]:inline">Label with AI</span>
-      </Button>
+      <Button variant="ghost" size="icon-sm" aria-label="Label with AI" @click="ai.labelSelection()"><SparklesIcon class="text-violet-500" /></Button>
     </Tip>
     <div class="flex-1" />
     <Tip label="Clear selection" shortcut="esc"><Button variant="ghost" size="icon-sm" aria-label="Clear selection" @click="mail.clearSelection()"><XIcon /></Button></Tip>

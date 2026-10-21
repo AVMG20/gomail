@@ -100,6 +100,11 @@ export const useMailStore = defineStore('mail', () => {
   const openId = ref<string | null>(null)
   const selection = shallowRef<Set<string>>(new Set())
   const anchorId = ref<string | null>(null)
+  /** The list row under the pointer: single-key shortcuts act on it when nothing is selected. */
+  const hoveredId = ref<string | null>(null)
+  // Keyboard navigation pauses hover targeting until the pointer really moves, so a mouse
+  // resting on the list (rows scrolling under it) never steals j/k + e from the open message.
+  let hoverPaused = false
   /** "Select all N in this view" — selection is the whole query, not just loaded rows. */
   const selectAllQuery = ref(false)
 
@@ -477,8 +482,17 @@ export const useMailStore = defineStore('mail', () => {
     if (!list.length) return
     const idx = openId.value ? indexById.value.get(openId.value) ?? -1 : -1
     const next = Math.max(0, Math.min(list.length - 1, idx < 0 ? 0 : idx + delta))
+    hoveredId.value = null
+    hoverPaused = true
     open(list[next].id)
     if (next >= list.length - 5) void loadMore()
+  }
+
+  /** The pointer is over row `id` (null: off the list). `moved`: a real pointer move or wheel,
+   *  not a row sliding under a resting pointer. */
+  function pointAt(id: string | null, moved: boolean) {
+    if (moved) hoverPaused = false
+    if (!hoverPaused || id === null) hoveredId.value = id
   }
 
   // ------------------------------------------------------------ selection
@@ -547,18 +561,25 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   /** What a keyboard or palette action applies to: the selection (all N in this view when chosen),
-   *  else the open message. */
-  async function currentTargets(): Promise<string[]> {
+   *  else (keyboard, `hovered`) the row under the pointer, else the open message. */
+  async function currentTargets(opts: { hovered?: boolean } = {}): Promise<string[]> {
     if (selectAllQuery.value) return targetIdsForQuery()
     if (selection.value.size) return [...selection.value]
+    const hov = opts.hovered ? hoveredTarget() : null
+    if (hov) return [hov]
     return openId.value ? [openId.value] : []
+  }
+
+  /** The hovered row, if it is still in the list. */
+  function hoveredTarget(): string | null {
+    return hoveredId.value && byId.value.has(hoveredId.value) ? hoveredId.value : null
   }
 
   /** Run a keyboard/palette action on currentTargets(). The selection is cleared first (its rows
    *  are about to change or leave); `allInView` says it was "all N in this view". */
-  async function actOnTargets(fn: (ids: string[], allInView: boolean) => unknown) {
+  async function actOnTargets(fn: (ids: string[], allInView: boolean) => unknown, opts: { hovered?: boolean } = {}) {
     const allInView = selectAllQuery.value
-    const ids = await currentTargets()
+    const ids = await currentTargets(opts)
     if (!ids.length) return
     if (selection.value.size || selectAllQuery.value) clearSelection()
     await fn(ids, allInView)
@@ -566,12 +587,12 @@ export const useMailStore = defineStore('mail', () => {
 
   /** Mark the targets read. "All in this view" goes through markAllRead, which also covers mail
    *  that is only on the server (like the bulk bar). */
-  function markTargetsRead() {
+  function markTargetsRead(opts: { hovered?: boolean } = {}) {
     if (selectAllQuery.value) {
       clearSelection()
       return markAllRead()
     }
-    return actOnTargets((ids) => setRead(ids, true))
+    return actOnTargets((ids) => setRead(ids, true), opts)
   }
 
   /** Star or unstar? Star unless every one is already starred. "All in this view" can't see the
@@ -1030,7 +1051,7 @@ export const useMailStore = defineStore('mail', () => {
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
     lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
-    actionIds, snapshot, undoMove, currentTargets, actOnTargets, markTargetsRead, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
+    actionIds, snapshot, undoMove, currentTargets, actOnTargets, markTargetsRead, hoveredId, pointAt, hoveredTarget, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, suggestAddresses,
   }
 })

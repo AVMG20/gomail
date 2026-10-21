@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { refDebounced, useThrottleFn } from '@vueuse/core'
 import {
@@ -70,12 +70,26 @@ function onSearchKey(e: KeyboardEvent) {
   }
 }
 
-// Track the hovered row via delegation so only it mounts quick actions.
+// Track the hovered row via delegation so only it mounts quick actions; the store also
+// learns it, so single-key shortcuts (e, #, s, …) act on the hovered row.
 const hoveredId = ref<string | null>(null)
-function onHover(e: MouseEvent) {
-  const id = ((e.target as HTMLElement).closest('[data-id]') as HTMLElement | null)?.dataset.id ?? null
-  if (id !== hoveredId.value) hoveredId.value = id
+function rowAt(e: MouseEvent): string | null {
+  return ((e.target as HTMLElement).closest('[data-id]') as HTMLElement | null)?.dataset.id ?? null
 }
+function onHover(e: MouseEvent) {
+  const id = rowAt(e)
+  if (id !== hoveredId.value) hoveredId.value = id
+  mail.pointAt(id, false)
+}
+// Only a real move (not a row sliding under a resting pointer) resumes hover targeting.
+function onPointerMove(e: MouseEvent) {
+  if (e.movementX || e.movementY) mail.pointAt(rowAt(e), true)
+}
+function onLeave() {
+  hoveredId.value = null
+  mail.pointAt(null, true)
+}
+onBeforeUnmount(onLeave)
 
 // Group label per message object (objects are stable across pages).
 const groupCache = new WeakMap<object, string>()
@@ -410,7 +424,9 @@ const emptyState = computed(() => {
           aria-multiselectable="true"
           @scroll.passive="onScroll"
           @mouseover="onHover"
-          @mouseleave="hoveredId = null"
+          @mousemove="onPointerMove"
+          @wheel.passive="(e: WheelEvent) => mail.pointAt(rowAt(e), true)"
+          @mouseleave="onLeave"
           @contextmenu="onContext"
         >
           <div v-if="mail.status === 'loading'" aria-busy="true">

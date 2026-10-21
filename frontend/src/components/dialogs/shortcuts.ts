@@ -12,7 +12,7 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutDef[] }[] = [
   {
     title: 'Actions',
     items: [
-      { keys: 'e', label: 'Archive' }, { keys: '#', label: 'Delete' }, { keys: '!', label: 'Move to Junk (in Junk: not junk)' }, { keys: 's', label: 'Star / unstar' }, { keys: 'u', label: 'Mark unread' },
+      { keys: 'e', label: 'Archive (the hovered message, else the open one)' }, { keys: '#', label: 'Delete' }, { keys: '!', label: 'Move to Junk (in Junk: not junk)' }, { keys: 's', label: 'Star / unstar' }, { keys: 'u', label: 'Mark unread' },
       { keys: 'shift+i', label: 'Mark read' }, { keys: 'l', label: 'Labels… (of the selection when mail is selected)' }, { keys: 'x', label: 'Select message' }, { keys: 'mod+a', label: 'Select all loaded' },
     ],
   },
