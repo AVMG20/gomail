@@ -50,16 +50,17 @@ async function checkNow() {
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Download mail from" description="How much mail gomail downloads to this computer. Older mail stays on the server: scroll to the bottom of the list and click “Load older mail” to see it.">
+      <SettingRow title="Mail kept on this computer" stacked>
+        <template #description>
+          gomail copies your recent mail to this computer, so it opens instantly and works offline. Older mail isn’t deleted: it stays
+          in your Gmail or Outlook account. To read it in gomail, scroll to the bottom of a folder and click “Load older mail”, or search for it.
+        </template>
         <Select :model-value="String(settings.settings.syncDepthDays ?? 90)" @update:model-value="(v) => settings.update({ syncDepthDays: Number(v) })">
-          <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
+          <SelectTrigger class="w-56"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem v-for="d in [30, 90, 365, 0]" :key="d" :value="String(d)">{{ d === 0 ? 'All time' : d === 365 ? 'The last year' : `The last ${d} days` }}</SelectItem>
+            <SelectItem v-for="d in [30, 90, 365, 0]" :key="d" :value="String(d)">{{ d === 0 ? 'All mail' : d === 365 ? 'The last year' : `The last ${d} days` }}</SelectItem>
           </SelectContent>
         </Select>
-      </SettingRow>
-      <SettingRow title="Pause downloading older mail" description="Stops the background download of the period above. New mail still arrives.">
-        <Switch :model-value="!!settings.settings.backfillPaused" @update:model-value="(v: boolean) => settings.update({ backfillPaused: v })" />
       </SettingRow>
     </SettingSection>
 

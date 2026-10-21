@@ -89,6 +89,7 @@ const syncText = computed(() => {
   const list = account.value ? [account.value] : accounts.accounts
   if (list.some((a) => accounts.syncing.has(a.id) || a.syncing)) return 'Syncing…'
   if (backfill.value !== null) return `Downloading older mail… ${backfill.value}%`
+  if (settings.settings?.backfillPaused) return 'Older mail paused'
   const err = list.find((a) => a.syncError)
   if (err) return `Sync error: ${err.syncError}`
   const times = list.map((a) => a.lastSyncAt).filter(Boolean) as string[]
@@ -244,6 +245,14 @@ function formatCount(n: number) {
       <template v-else>
         <span class="size-1.5 shrink-0 rounded-full" :class="syncing ? 'animate-pulse bg-amber-500' : syncText.startsWith('Sync error') ? 'bg-destructive' : 'bg-emerald-500'" />
         <span class="text-muted-foreground min-w-0 flex-1 truncate text-xs" :title="syncText">{{ syncText }}</span>
+        <!-- Pausing belongs where the download shows (e.g. on a slow or metered connection), not in Settings. -->
+        <button
+          v-if="backfill !== null || settings.settings?.backfillPaused"
+          type="button"
+          class="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+          :aria-label="settings.settings?.backfillPaused ? 'Resume downloading older mail' : 'Pause downloading older mail'"
+          @click="settings.update({ backfillPaused: !settings.settings?.backfillPaused }, 0)"
+        >{{ settings.settings?.backfillPaused ? 'Resume' : 'Pause' }}</button>
       </template>
       <button
         type="button"
