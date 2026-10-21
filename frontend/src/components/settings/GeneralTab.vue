@@ -33,7 +33,7 @@ async function checkNow() {
       <SettingRow title="Open gomail when you log in" description="Starts in the background, so new mail arrives right away.">
         <Switch :model-value="!!settings.settings.launchAtLogin" @update:model-value="(v: boolean) => settings.update({ launchAtLogin: v })" />
       </SettingRow>
-      <SettingRow title="Show in menu bar / system tray" description="With a badge for unread mail.">
+      <SettingRow title="Show in menu bar / system tray" description="Shows how much mail is unread.">
         <Switch :model-value="settings.settings.showInTray ?? true" @update:model-value="(v: boolean) => settings.update({ showInTray: v })" />
       </SettingRow>
       <SettingRow v-if="settings.settings.showInTray ?? true" title="Keep running when the window is closed" description="Closing the window hides gomail, so new mail still arrives.">
@@ -42,7 +42,7 @@ async function checkNow() {
     </SettingSection>
 
     <SettingSection title="Sync & storage" all-mailboxes>
-      <SettingRow title="Check for new mail" description="How often gomail syncs in the background.">
+      <SettingRow title="Check for new mail" description="How often gomail looks for new mail in the background.">
         <Select :model-value="String(settings.settings.syncIntervalMinutes)" @update:model-value="(v) => settings.update({ syncIntervalMinutes: Number(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -50,21 +50,21 @@ async function checkNow() {
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Keep mail offline for" description="Older mail stays on the server and loads when you open it.">
+      <SettingRow title="Download mail from" description="gomail keeps this much of your mail on this computer. Anything older stays on the server: load it at the end of a folder.">
         <Select :model-value="String(settings.settings.syncDepthDays ?? 90)" @update:model-value="(v) => settings.update({ syncDepthDays: Number(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem v-for="d in [30, 90, 365, 0]" :key="d" :value="String(d)">{{ d === 0 ? 'Everything' : d === 365 ? '1 year' : `${d} days` }}</SelectItem>
+            <SelectItem v-for="d in [30, 90, 365, 0]" :key="d" :value="String(d)">{{ d === 0 ? 'All time' : d === 365 ? 'The last year' : `The last ${d} days` }}</SelectItem>
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Pause background download" description="Stops fetching older mail. New mail still arrives.">
+      <SettingRow title="Pause downloading older mail" description="Stops the background download of the period above. New mail still arrives.">
         <Switch :model-value="!!settings.settings.backfillPaused" @update:model-value="(v: boolean) => settings.update({ backfillPaused: v })" />
       </SettingRow>
     </SettingSection>
 
     <SettingSection title="Updates">
-      <SettingRow title="Check for updates automatically" description="Looks for a new version on GitHub once a day. Nothing installs on its own.">
+      <SettingRow title="Check for updates automatically" description="Checks GitHub once a day. Nothing installs without you.">
         <Switch :model-value="settings.settings.checkUpdates !== false" @update:model-value="(v: boolean) => settings.update({ checkUpdates: v })" />
       </SettingRow>
       <SettingRow

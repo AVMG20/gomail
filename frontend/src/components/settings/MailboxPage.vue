@@ -226,7 +226,7 @@ function labelAll() {
           <SettingRow v-if="s.notifications && mb.notifies(a.id)" title="Arrive quietly" description="New mail with these labels doesn’t notify." stacked>
             <QuietLabelChips :account="a" />
           </SettingRow>
-          <SettingRow title="Mute this mailbox" description="No notifications and no unread count on its icon in the sidebar. Its folders still show what’s unread when you open it.">
+          <SettingRow title="Mute this mailbox" description="No notifications and no unread badge in the sidebar. Inside the mailbox you still see what’s unread.">
             <Switch :model-value="mb.isMuted(a.id)" @update:model-value="(v: boolean) => mb.setMuted(a!.id, v)" />
           </SettingRow>
           <SettingRow v-if="!s.notifications" title="Turn on desktop notifications">
@@ -247,7 +247,7 @@ function labelAll() {
           <SettingRow v-if="hasMethod('ReauthAccount')" title="Sign in again" description="If syncing stopped or you changed your password.">
             <Button variant="outline" size="sm" :disabled="reconnecting" @click="reconnect"><LoaderIcon v-if="reconnecting" class="animate-spin" /><KeyRoundIcon v-else /> Reconnect…</Button>
           </SettingRow>
-          <SettingRow title="Remove this mailbox" description="Deletes its local mail and sign-in here. Nothing is deleted on the server.">
+          <SettingRow title="Remove this mailbox" description="Removes it from gomail on this computer. Nothing is deleted from the server.">
             <Button variant="outline" size="sm" class="text-destructive hover:text-destructive" @click="askRemove"><Trash2Icon /> Remove…</Button>
           </SettingRow>
         </SettingSection>
@@ -256,14 +256,14 @@ function labelAll() {
 
 
       <TabsContent value="sorting">
-        <SettingSection title="Jev, your AI assistant" description="Jev reads new mail and sorts it into this mailbox’s labels.">
-          <SettingRow title="Auto-label new mail with Jev" :description="noKey ? 'Needs an OpenRouter key (AI settings).' : 'Sorts new mail into this mailbox’s labels after each sync.'">
+        <SettingSection title="Jev (AI)" description="Jev is the AI that sorts mail into this mailbox’s labels.">
+          <SettingRow title="Label new mail automatically" :description="noKey ? 'Needs an OpenRouter key (AI settings).' : 'Jev labels new mail here as it arrives.'">
             <Switch :model-value="!noKey && mb.autoLabels(a.id)" :disabled="noKey" @update:model-value="(v: boolean) => mb.setAutoLabel(a!.id, v)" />
           </SettingRow>
           <SettingRow :title="`Let Jev remove wrong ${a.provider === 'gmail' ? 'Gmail labels' : 'Outlook categories'}`" :description="s.aiCorrectsProviderLabels ? 'Only when it’s sure.' : 'Off for all mailboxes in AI settings.'">
             <Switch :model-value="s.aiCorrectsProviderLabels && mb.corrects(a.id)" :disabled="!s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => mb.setCorrects(a!.id, v)" />
           </SettingRow>
-          <SettingRow title="Label existing mail" description="Run Jev once on mail already downloaded here.">
+          <SettingRow title="Label existing mail" description="Let Jev label the mail that’s already here, once.">
             <div class="flex items-center gap-2">
               <Button v-if="noKey" size="sm" variant="ghost" @click="ui.settingsTab = 'ai'">AI settings</Button>
               <Button size="sm" variant="outline" :disabled="noKey || (!!ai.job && !ai.job.finished)" @click="labelAll"><SparklesIcon class="text-violet-500" /> Label all mail…</Button>

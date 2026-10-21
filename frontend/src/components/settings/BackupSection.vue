@@ -49,9 +49,9 @@ async function importBackup() {
   <SettingSection
     v-if="hasMethod('ExportBackup')"
     title="Backup & restore"
-    description="Saves your settings, accounts, labels and rules to a file, for a new computer or a reinstall. Your mail isn’t in it: it downloads again when you sign in."
+    description="Your settings, mailboxes, labels and rules in one file, for a new computer or a reinstall. Mail isn’t included; it downloads again."
   >
-    <SettingRow title="Export a backup" description="Saves a .gomailbackup file. Sign-ins are never included, so restored accounts ask you to sign in again.">
+    <SettingRow title="Export a backup" description="Saves a .gomailbackup file. Sign-ins aren’t included: you sign in again after restoring.">
       <Button size="sm" variant="outline" :disabled="!!busy" @click="exportBackup">
         <LoaderIcon v-if="busy === 'export'" class="animate-spin" /><DownloadIcon v-else /> Export…
       </Button>
@@ -67,7 +67,7 @@ async function importBackup() {
       </p>
       <p v-else class="text-muted-foreground mt-1 ml-6.5 text-xs">When off, you enter your OpenRouter key again after restoring.</p>
     </div>
-    <SettingRow title="Restore a backup" description="Adds a backup to this install. Nothing is deleted, and accounts you already have stay as they are.">
+    <SettingRow title="Restore a backup" description="Adds a backup to this install. Nothing is deleted, and your mailboxes stay connected.">
       <Button size="sm" variant="outline" :disabled="!!busy" @click="importBackup">
         <LoaderIcon v-if="busy === 'import'" class="animate-spin" /><UploadIcon v-else /> Import…
       </Button>

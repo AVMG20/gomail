@@ -91,7 +91,7 @@ function onThemeKey(e: KeyboardEvent) {
     </SettingSection>
 
     <SettingSection title="Layout">
-      <SettingRow title="Reading pane" description="Off shows a full-width list. Messages then open in place, with a back button.">
+      <SettingRow title="Reading pane" description="Off: the list uses the full width and mail opens in its place.">
         <SegmentedControl
           :model-value="settings.settings.readingPane ?? 'right'"
           :options="[{ value: 'right', label: 'Right' }, { value: 'off', label: 'Off' }]"
@@ -130,7 +130,7 @@ function onThemeKey(e: KeyboardEvent) {
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Email background in dark mode" description="Auto shows plain emails in dark colors. Designed emails always stay light.">
+      <SettingRow title="Email background in dark mode" description="Auto shows plain mail in dark colors. Designed mail stays light.">
         <SegmentedControl
           :model-value="s.emailBackground ?? 'auto'"
           :options="[{ value: 'auto', label: 'Auto' }, { value: 'light', label: 'Always light' }]"

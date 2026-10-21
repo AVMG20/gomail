@@ -28,7 +28,7 @@ async function setConversation(v: boolean) {
       <SettingRow title="Group messages into conversations" description="One row per conversation instead of one per message.">
         <Switch :model-value="settings.settings.conversationView ?? true" @update:model-value="(v: boolean) => setConversation(v)" />
       </SettingRow>
-      <SettingRow title="Mark as read" description="When an opened message counts as read.">
+      <SettingRow title="Mark as read" description="When opening a message marks it read.">
         <Select :model-value="settings.settings.markReadMode ?? 'immediate'" @update:model-value="(v) => settings.update({ markReadMode: v as 'immediate' | 'delay' | 'manual' })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -41,13 +41,13 @@ async function setConversation(v: boolean) {
     </SettingSection>
 
     <SettingSection title="Labels" all-mailboxes>
-      <SettingRow title="Move mail when you add a label yourself" description="Jev and rules move mail by each label’s choice (Archive, Junk, Trash). Turn on to do the same when you add a label yourself.">
+      <SettingRow title="Move mail when you add a label yourself" description="A label can move mail to Archive, Junk or Trash when Jev or a rule adds it. Turn this on to do the same when you add it yourself.">
         <Switch :model-value="settings.settings.manualLabelActions ?? false" @update:model-value="(v: boolean) => settings.update({ manualLabelActions: v }, 0)" />
       </SettingRow>
     </SettingSection>
 
     <SettingSection title="Writing" all-mailboxes>
-      <SettingRow title="Undo send" description="Waits a few seconds before sending, so you can take it back.">
+      <SettingRow title="Undo send" description="Holds mail for a few seconds so you can take it back.">
         <Select :model-value="String(settings.settings.undoSendSeconds ?? 5)" @update:model-value="(v) => settings.update({ undoSendSeconds: Number(v) })">
           <SelectTrigger class="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -65,13 +65,13 @@ async function setConversation(v: boolean) {
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Signatures" description="Set per mailbox, on its page.">
+      <SettingRow title="Signatures" description="Each mailbox has its own, on the mailbox’s page.">
         <Button size="sm" variant="outline" @click="ui.settingsTab = 'accounts'">Mailboxes</Button>
       </SettingRow>
     </SettingSection>
 
     <SettingSection title="Privacy" all-mailboxes>
-      <SettingRow title="Load remote images automatically" description="Images from the web can tell the sender when you opened a message. When off, you can load them per message.">
+      <SettingRow title="Load remote images automatically" description="Web images can tell senders when you open their mail. When off, you load them per message.">
         <Switch :model-value="settings.settings.showRemoteImages" @update:model-value="(v: boolean) => settings.update({ showRemoteImages: v })" />
       </SettingRow>
       <SettingRow title="Trusted senders and sites" description="Senders whose images always load, and sites whose links open without asking.">

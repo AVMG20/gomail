@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
-  chipLabelIds, groupByName, groupCount, labelInAccount, labelInMailbox, labelsForAccount, labelsForAccounts, nameTaken, newLabelId, sameNameIds, viewLabelId,
+  groupByName, groupCount, labelInAccount, labelInMailbox, labelsForAccount, labelsForAccounts, nameTaken, newLabelId, sameNameIds, viewLabelId,
 } from '@/lib/labelScope'
 import { mergeLabelImport } from '@/lib/labelsIO'
 import type { Label, LabelCount, Settings } from '@/lib/types'
@@ -121,15 +121,6 @@ describe('label scope in the stores', () => {
     mail.mailbox = { accountId: '', folderId: '', kind: 'inbox' }
     mail.setLabelFilter({ labels: ['news'], unlabeled: false, hidden: [] })
     expect([...(mail.query.labels ?? [])].sort()).toEqual(['news', 'news-2'])
-  })
-})
-
-describe('chipLabelIds', () => {
-  const kinds: Record<string, string> = { f_spam: 'spam', f_inbox: 'inbox' }
-  it('drops the Junk chip only for mail in a Junk folder', () => {
-    expect(chipLabelIds(['junk', 'news'], ['f_spam'], (f) => kinds[f])).toEqual(['news'])
-    expect(chipLabelIds(['junk', 'news'], ['f_inbox'], (f) => kinds[f])).toEqual(['junk', 'news'])
-    expect(chipLabelIds(['news'], undefined, (f) => kinds[f])).toEqual(['news'])
   })
 })
 

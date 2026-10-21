@@ -96,7 +96,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
 
 <template>
   <div v-if="settings.settings">
-    <SettingSection title="OpenRouter key" description="Optional, with your own key. Mail goes to the model only to label it or improve your text.">
+    <SettingSection title="OpenRouter key" description="Your own key turns on the AI features. Mail is only sent to the AI to label it or to help you write.">
       <SettingRow title="API key" stacked>
         <template #description>
           <span v-if="s.openRouterKeySet" class="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><CheckCircle2Icon class="size-3.5" aria-hidden="true" /> A key is set. It’s kept in your system keychain and never shown again.</span>
@@ -125,7 +125,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
         </div>
       </div>
       <p v-if="usage?.budgetReached" class="mb-1 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">Today’s budget is used up, so automatic labeling is paused until tomorrow. Manual labeling still works.</p>
-      <SettingRow title="Daily budget" description="Auto-labeling pauses for the day when AI spend reaches this. 0 means no limit.">
+      <SettingRow title="Daily budget" description="Automatic labeling stops for the day once AI costs reach this. 0 means no limit.">
         <div class="flex items-center gap-1.5">
           <span class="text-muted-foreground text-sm">$</span>
           <Input type="number" min="0" step="0.25" class="h-8 w-24 text-right tabular-nums" placeholder="0" :model-value="s.aiDailyBudgetUsd ?? 1" aria-label="Daily AI budget in US dollars" @update:model-value="onBudget" />
@@ -133,9 +133,9 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       </SettingRow>
     </SettingSection>
 
-    <SettingSection title="AI labeling" description="Jev, a decision model on OpenRouter, sorts mail into your labels.">
+    <SettingSection title="AI labeling" description="Jev is the AI that sorts your mail into labels.">
       <p v-if="!s.openRouterKeySet" class="text-muted-foreground py-2 text-xs">Add an OpenRouter key above to use AI labeling.</p>
-      <SettingRow title="Auto-label new mail in" description="Jev labels new mail of these mailboxes after each sync. You can always label by hand." stacked>
+      <SettingRow title="Label new mail automatically in" description="Jev labels new mail in these mailboxes as it arrives." stacked>
         <p v-if="!accounts.accounts.length" class="text-muted-foreground text-xs">Add a mailbox first.</p>
         <ul v-else class="space-y-1.5" aria-label="Auto-labeling per mailbox">
           <li v-for="a in accounts.accounts" :key="a.id" class="flex items-center gap-3">
@@ -151,18 +151,18 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       <SettingRow title="Labeling model" stacked>
         <ModelPicker v-model="classifierModel" kind="decision" :recommended="JEV_MODELS" recommended-kind="decision" recommended-heading="Recommended for labeling" class="max-w-md" />
       </SettingRow>
-      <SettingRow title="How sure before adding a label" stacked>
-        <template #description>Higher means fewer, more certain labels.</template>
+      <SettingRow title="How sure Jev must be to add a label" stacked>
+        <template #description>Higher means fewer labels, but fewer mistakes.</template>
         <div class="flex max-w-md items-center gap-3">
           <Slider :model-value="[s.classifyThreshold]" :min="0.05" :max="0.95" :step="0.05" class="flex-1" @update:model-value="(v) => v && settings.update({ classifyThreshold: v[0] })" />
           <span class="w-10 text-right text-xs tabular-nums">{{ pct(s.classifyThreshold) }}</span>
         </div>
       </SettingRow>
-      <SettingRow title="Let AI correct Gmail/Outlook labels" description="Removes imported labels it’s sure don’t apply, never your own. Each mailbox can opt out on its page.">
+      <SettingRow title="Let Jev remove wrong Gmail/Outlook labels" description="Only imported labels it’s sure are wrong, never your own. Each mailbox can turn this off.">
         <Switch :model-value="s.aiCorrectsProviderLabels" @update:model-value="(v: boolean) => settings.update({ aiCorrectsProviderLabels: v })" />
       </SettingRow>
-      <SettingRow v-if="s.aiCorrectsProviderLabels" title="Remove imported labels below" stacked>
-        <template #description>Imported labels scored below this are removed.</template>
+      <SettingRow v-if="s.aiCorrectsProviderLabels" title="Remove an imported label when Jev is below" stacked>
+        <template #description>Lower means Jev removes fewer labels.</template>
         <div class="flex max-w-md items-center gap-3">
           <Slider :model-value="[s.classifyRemoveThreshold]" :min="0" :max="0.5" :step="0.05" class="flex-1" @update:model-value="(v) => v && settings.update({ classifyRemoveThreshold: v[0] })" />
           <span class="w-10 text-right text-xs tabular-nums">{{ pct(s.classifyRemoveThreshold) }}</span>
@@ -171,11 +171,11 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
       <SettingRow title="Labeling instructions" stacked>
         <template #description>
           <span class="flex items-center justify-between gap-2">
-            General guidance for the AI. Each label’s description is added automatically.
+            Extra guidance for Jev. Each label’s description is added for you.
             <button type="button" class="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1" :disabled="!settings.defaults.classify" @click="settings.update({ classifyInstructions: settings.defaults.classify })"><RotateCcwIcon class="size-3" aria-hidden="true" /> Reset to default</button>
           </span>
         </template>
-        <Textarea :model-value="s.classifyInstructions || settings.defaults.classify" rows="3" class="text-xs" placeholder="Empty: the built-in instructions are used" @update:model-value="(v) => settings.update({ classifyInstructions: String(v) }, 600)" />
+        <Textarea :model-value="s.classifyInstructions || settings.defaults.classify" rows="3" class="text-xs" placeholder="Leave empty to use the built-in instructions" @update:model-value="(v) => settings.update({ classifyInstructions: String(v) }, 600)" />
       </SettingRow>
       <div class="flex items-center gap-3 py-3.5">
         <Button variant="outline" size="sm" :disabled="!s.openRouterKeySet || (!!ai.job && !ai.job.finished)" :title="!s.openRouterKeySet ? 'Add an OpenRouter key first' : ai.job && !ai.job.finished ? 'A labeling run is in progress' : undefined" @click="labelCurrent"><SparklesIcon class="text-violet-500" /> Label current folder…</Button>
@@ -187,7 +187,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
 
     <SettingSection title="Writing & summaries" description="To fix grammar while writing, right-click the text and choose “Improve grammar”." all-mailboxes>
       <p v-if="!s.openRouterKeySet" class="text-muted-foreground py-2 text-xs">Add an OpenRouter key above to use writing help.</p>
-      <SettingRow title="Text model" description="Improves grammar, summarizes messages and turns a description into a calendar event." stacked>
+      <SettingRow title="Text model" description="Used to fix grammar, summarize mail and turn text into calendar events." stacked>
         <ModelPicker v-model="chatModel" kind="chat" class="max-w-md" />
       </SettingRow>
       <SettingRow title="Grammar instructions" stacked>

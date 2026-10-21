@@ -16,7 +16,7 @@ const mb = useMailboxSettings()
 </script>
 
 <template>
-  <SettingRow title="Per mailbox" description="Turn a mailbox off, or let mail with some labels arrive quietly. Junk never notifies." stacked>
+  <SettingRow title="Per mailbox" description="Turn a mailbox off, or let mail with certain labels arrive without a notification. Junk never notifies." stacked>
     <ul class="space-y-1.5" aria-label="Notifications per mailbox">
       <li v-for="a in accounts.accounts" :key="a.id" class="flex items-start gap-3">
         <Switch

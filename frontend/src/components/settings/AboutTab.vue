@@ -31,7 +31,7 @@ async function copy(text: string) {
       <Button size="sm" variant="outline" @click="ui.settingsTab = 'general'">{{ settings.updateInfo?.available ? `Get version ${settings.updateInfo.latest}` : 'Updates' }}</Button>
     </div>
     <SettingSection title="Help">
-      <SettingRow title="Welcome guide" description="Walk through connecting mail, AI labeling and starter labels again.">
+      <SettingRow title="Welcome guide" description="Run the setup again: mailboxes, AI and starter labels.">
         <Button size="sm" variant="outline" @click="ui.welcomeTick++">Show again</Button>
       </SettingRow>
     </SettingSection>

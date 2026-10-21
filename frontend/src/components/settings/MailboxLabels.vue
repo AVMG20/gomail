@@ -190,8 +190,8 @@ async function onImportFile(e: Event) {
 
 <template>
   <div v-if="settings.settings">
-    <SettingSection title="Labels" description="This mailbox’s labels; other mailboxes have their own. Jev uses each description to decide when a label applies.">
-      <SettingRow v-if="account" title="Labels that go to Junk" description="Mail that gets one of these labels moves to Junk, marked read. Same as “Move to Junk” on a label below." stacked>
+    <SettingSection title="Labels" description="Each mailbox has its own labels. Jev reads a label’s description to decide when it fits.">
+      <SettingRow v-if="account" title="Labels that go to Junk" description="Mail that gets one of these labels moves to Junk and is marked read." stacked>
         <JunkLabelChips :account="account" />
       </SettingRow>
       <div v-for="(l, i) in userLabels" :key="l.id" class="group flex items-start gap-3 py-3">
@@ -257,7 +257,7 @@ async function onImportFile(e: Event) {
       <template #actions>
         <span class="text-muted-foreground inline-flex items-center gap-1 text-[11px]"><ProviderIcon v-if="account" :provider="account.provider" class="size-3" /> Imported</span>
       </template>
-      <SettingRow :title="`Show ${account?.provider === 'outlook' ? 'Outlook categories' : 'Gmail labels'}`" description="For every mailbox. When off, they stay in sync but are hidden.">
+      <SettingRow :title="`Show ${account?.provider === 'outlook' ? 'Outlook categories' : 'Gmail labels'}`" description="For every mailbox. When off, they’re hidden but still kept in sync.">
         <Switch :model-value="s.importProviderLabels" @update:model-value="(v: boolean) => settings.update({ importProviderLabels: v })" />
       </SettingRow>
       <template v-if="s.importProviderLabels">

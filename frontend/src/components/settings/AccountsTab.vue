@@ -26,7 +26,7 @@ const setupOpen = ref(!setUp.value)
 
 <template>
   <div v-if="settings.settings">
-    <SettingSection title="Your mailboxes" description="Open one for its name, notifications, labels, rules and Jev. Drag to change the order.">
+    <SettingSection title="Your mailboxes" description="Click a mailbox to change its settings. Drag to reorder.">
       <button
         v-for="(a, i) in accounts.accounts"
         :key="a.id"
@@ -62,19 +62,19 @@ const setupOpen = ref(!setUp.value)
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <SettingSection title="Sign-in apps (OAuth)" description="Needed before you add a mailbox. Your own app keeps your sign-ins away from third parties.">
+        <SettingSection title="Sign-in apps (OAuth)" description="Needed once, before you add your first mailbox. With your own app, you sign in directly with Google or Microsoft.">
           <SettingRow title="Google client ID" stacked>
-            <template #description>In Google Cloud Console → APIs &amp; Services → Credentials, create a “Desktop app” OAuth client, with the Gmail API turned on.</template>
+            <template #description>In Google Cloud Console → APIs &amp; Services → Credentials, create an OAuth client of type “Desktop app”, and turn on the Gmail API.</template>
             <Input :model-value="settings.settings.googleClientId" placeholder="1234567890-abc.apps.googleusercontent.com" class="font-mono text-xs" @update:model-value="(v) => settings.update({ googleClientId: String(v).trim() }, 600)" />
           </SettingRow>
-          <SettingRow title="Google client secret" description="Optional. Paste it if Google shows one for your desktop client." stacked>
+          <SettingRow title="Google client secret" description="Only if Google shows one for your client." stacked>
             <Input type="password" :model-value="settings.settings.googleClientSecret" placeholder="Optional" class="font-mono text-xs" @update:model-value="(v) => settings.update({ googleClientSecret: String(v).trim() }, 600)" />
           </SettingRow>
           <SettingRow title="Microsoft client ID" stacked>
             <template #description>In Microsoft Entra ID → App registrations, register a public client with redirect <code class="bg-muted rounded px-1">http://localhost</code> and the Mail.ReadWrite and Mail.Send permissions.</template>
             <Input :model-value="settings.settings.microsoftClientId" placeholder="00000000-0000-0000-0000-000000000000" class="font-mono text-xs" @update:model-value="(v) => settings.update({ microsoftClientId: String(v).trim() }, 600)" />
           </SettingRow>
-          <SettingRow title="Microsoft tenant" description="“common” works for personal and work accounts. Or enter your tenant ID." stacked>
+          <SettingRow title="Microsoft tenant" description="“common” works for personal and work accounts, “consumers” for personal only. Or enter your tenant ID." stacked>
             <Input :model-value="settings.settings.microsoftTenant" placeholder="common" class="max-w-64 font-mono text-xs" @update:model-value="(v) => settings.update({ microsoftTenant: String(v).trim() || 'common' }, 600)" />
           </SettingRow>
         </SettingSection>

@@ -896,6 +896,12 @@ export interface MessagePage {
      * only when asked (never automatically on scrolling).
      */
     "olderBeyondDepth": boolean;
+
+    /**
+     * Similar is true when the search as typed matched nothing and the
+     * page shows close matches (spelling corrected) instead.
+     */
+    "similar": boolean;
 }
 
 export interface MessageSummary {

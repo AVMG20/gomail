@@ -111,12 +111,6 @@ export function openLabelSettings(accountId: string) {
   else ui.openSettings('accounts')
 }
 
-/** Label ids worth showing as chips: Junk is left out for mail in a Junk folder (the folder says it already). */
-export function chipLabelIds(labels: string[], folderIds: string[] | undefined, kindOf: (folderId: string) => string | undefined): string[] {
-  if (!labels.includes('junk') || !(folderIds ?? []).some((f) => kindOf(f) === 'spam')) return labels
-  return labels.filter((id) => id !== 'junk')
-}
-
 /** Copies a mailbox's own labels (name, color, description, action) to another mailbox, skipping
  *  names it already has. Returns the new label list and how many were copied. */
 export function copyLabelsTo(labels: Label[], fromId: string, toId: string): { labels: Label[]; copied: number } {

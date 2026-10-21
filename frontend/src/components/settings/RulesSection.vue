@@ -88,7 +88,7 @@ async function applyNow() {
 </script>
 
 <template>
-  <SettingSection title="Rules" description="Label this mailbox’s new mail by sender or subject, or move it to Junk. Rules run on every new mail, no AI needed.">
+  <SettingSection title="Rules" description="Label new mail or send it to Junk, by sender or subject. Rules work without AI.">
     <div
       v-for="(r, i) in rules"
       :key="r.id"
