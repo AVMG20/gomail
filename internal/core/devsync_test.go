@@ -174,10 +174,13 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 	if err := work.RemoveLabel([]string{rejected.ID}, finance.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := work.store.ReplaceCalendars("w-gmail", []calendar.Calendar{{RemoteID: "cal-team", Name: "Team"}}); err != nil {
+	if err := work.store.ReplaceCalendars("w-gmail", []calendar.Calendar{{RemoteID: "cal-team", Name: "Team"}, {RemoteID: "cal-gym", Name: "Gym"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := work.store.SetCalendarVisible(store.CalendarID("w-gmail", "cal-team"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := work.store.SetCalendarRemindersMuted(store.CalendarID("w-gmail", "cal-gym"), true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -242,7 +245,8 @@ func TestDeviceSyncTwoComputers(t *testing.T) {
 	}) || !slices.Equal(hs.QuietLabels[hGmail.ID], []string{hSide.ID}) {
 		t.Fatalf("rules %+v quiet %v", hs.LabelRules, hs.QuietLabels)
 	}
-	if cals, _ := home.store.ExportCalendarPrefs(hGmail.ID); len(cals) != 1 || cals[0].RemoteID != "cal-team" || cals[0].Visible {
+	if cals, _ := home.store.ExportCalendarPrefs(hGmail.ID); len(cals) != 2 || cals[0] != (store.CalendarPref{RemoteID: "cal-gym", Visible: true, Muted: true}) ||
+		cals[1] != (store.CalendarPref{RemoteID: "cal-team"}) {
 		t.Fatalf("calendar choices %+v", cals)
 	}
 

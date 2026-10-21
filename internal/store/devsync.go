@@ -72,15 +72,15 @@ func (s *Store) SetLabelMarks(accountID string, marks map[string][]LabelMark) er
 }
 
 // SetCalendarPrefs replaces an account's calendar choices: calendars not
-// in prefs are shown in the provider's color; prefs for calendars that
-// haven't synced yet apply when they arrive.
+// in prefs are shown, in the provider's color, with reminders; prefs for
+// calendars that haven't synced yet apply when they arrive.
 func (s *Store) SetCalendarPrefs(accountID string, prefs []CalendarPref) error {
 	provider, email, err := accountKey(s.db, accountID)
 	if err != nil {
 		return err
 	}
 	return s.tx(context.Background(), func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`UPDATE calendars SET visible = 1, color_override = '' WHERE account_id = ?`, accountID); err != nil {
+		if _, err := tx.Exec(`UPDATE calendars SET visible = 1, color_override = '', muted = 0 WHERE account_id = ?`, accountID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`DELETE FROM pending_calendars WHERE provider = ? AND email = ?`, provider, email); err != nil {
@@ -90,8 +90,8 @@ func (s *Store) SetCalendarPrefs(accountID string, prefs []CalendarPref) error {
 			if p.RemoteID == "" {
 				continue
 			}
-			if _, err := tx.Exec(`INSERT OR REPLACE INTO pending_calendars(provider, email, remote_id, visible, color) VALUES(?,?,?,?,?)`,
-				provider, email, p.RemoteID, boolInt(p.Visible), p.Color); err != nil {
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO pending_calendars(provider, email, remote_id, visible, color, muted) VALUES(?,?,?,?,?,?)`,
+				provider, email, p.RemoteID, boolInt(p.Visible), p.Color, boolInt(p.Muted)); err != nil {
 				return err
 			}
 		}
