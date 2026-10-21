@@ -4,6 +4,7 @@ import { useElementSize } from '@vueuse/core'
 import {
   ArchiveIcon, CornerUpLeftIcon, ForwardIcon, MailIcon, MoreHorizontalIcon, ReplyAllIcon, SparklesIcon, StarIcon,
   Trash2Icon, FolderInputIcon, TextQuoteIcon, LoaderIcon, MailOpenIcon, XIcon, ArrowLeftIcon, PencilIcon, OctagonAlertIcon, InboxIcon,
+  ContrastIcon,
 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -16,6 +17,7 @@ import LabelPill from '@/components/common/LabelPill.vue'
 import Tip from '@/components/common/Tip.vue'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { displayName } from '@/lib/format'
+import { themeState } from '@/lib/theme'
 import { needsRemoteRefetch, normalizeSenders, remoteAllowedFor } from '@/lib/trust'
 import type { Label, Message, MessageLabel } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
@@ -137,6 +139,17 @@ const current = computed(() => {
 const newest = computed(() => thread.value[thread.value.length - 1] ?? null)
 /** Meeting invitation carried by the conversation (latest one wins). */
 const invite = computed(() => [...thread.value].reverse().find((m) => m.invite)?.invite ?? null)
+/** Experimental dark designed mail is on: the toolbar offers the original colors for this conversation. */
+const darkenOn = computed(() => themeState.value.dark && (settings.settings?.emailBackground ?? 'auto') === 'auto' && !!settings.settings?.darkenDesignedMail)
+const originalColors = computed(() => !!current.value && mail.originalColors.has(current.value.threadId))
+function toggleOriginalColors() {
+  const t = current.value?.threadId
+  if (!t) return
+  const next = new Set(mail.originalColors)
+  if (next.has(t)) next.delete(t)
+  else next.add(t)
+  mail.originalColors = next
+}
 const ownEmail = computed(() => (current.value ? accounts.accountMap.get(current.value.accountId)?.email ?? '' : ''))
 const account = computed(() => (current.value ? accounts.accountMap.get(current.value.accountId) : undefined))
 const trustedSenders = computed(() => settings.settings?.trustedImageSenders ?? [])
@@ -292,6 +305,9 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
             <LoaderIcon v-if="labelingNow" class="animate-spin" />
             <SparklesIcon v-else class="text-violet-500" />
           </Button>
+        </Tip>
+        <Tip v-if="darkenOn" :label="originalColors ? 'Show in dark colors' : 'Show original colors'">
+          <Button variant="ghost" size="icon-sm" :aria-label="originalColors ? 'Show in dark colors' : 'Show original colors'" :aria-pressed="originalColors" :class="originalColors && 'bg-muted text-foreground'" @click="toggleOriginalColors"><ContrastIcon /></Button>
         </Tip>
         <div class="flex-1" />
         <Button v-if="isDraft" size="sm" class="mr-1 gap-1.5" @click="editDraft"><PencilIcon /> Edit draft</Button>

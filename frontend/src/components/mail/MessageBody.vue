@@ -17,6 +17,7 @@ import DOMPurify from 'dompurify'
 import { ImageOffIcon, LoaderIcon, ShieldAlertIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { shade } from '@/lib/color'
+import { darkenDocument } from '@/lib/darkMail'
 import { isSimpleHtml } from '@/lib/emailTheme'
 import { linkify } from '@/lib/format'
 import { checkPhishing } from '@/lib/phishing'
@@ -155,6 +156,10 @@ const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml
 const simple = computed(() => isHtml.value && isSimpleHtml(props.message.bodyHtml))
 /** Render this HTML mail with theme colors (no white card). */
 const themed = computed(() => darkAuto.value && simple.value)
+/** Experimental: designed mail recolored dark (unless "show original colors" for this conversation). */
+const darkened = computed(() => darkAuto.value && isHtml.value && !simple.value && !!settings.settings?.darkenDesignedMail && !mail.originalColors.has(props.message.threadId))
+/** Darkened mail is hidden until the frame has been recolored (no white flash). */
+const recolored = ref(false)
 
 function themedCss(): string {
   const cs = getComputedStyle(document.documentElement)
@@ -180,7 +185,8 @@ const srcdoc = computed(() => {
   // Track theme/accent so the frame re-renders when they change.
   void themeState.value
   const img = remoteOn.value ? 'img-src data: cid: https: http:;' : 'img-src data: cid:;'
-  return `<!doctype html><html><head><meta charset="utf-8">
+  // A different document when darkened, so "show original colors" gets a fresh frame.
+  return `<!doctype html><html${darkened.value ? ' class="gm-dark"' : ''}><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; ${img} style-src 'unsafe-inline'${remoteOn.value ? ' https:' : ''}; font-src data:${remoteOn.value ? ' https:' : ''};">
 <meta name="color-scheme" content="${dark ? 'dark' : 'light'}">
 <style>
@@ -270,6 +276,10 @@ function onFrameClick(e: MouseEvent) {
 function onLoad() {
   const doc = frame.value?.contentDocument
   if (!doc) return
+  if (darkened.value) {
+    darkenDocument(doc)
+    recolored.value = true
+  }
   measure()
   ro?.disconnect()
   if (typeof ResizeObserver !== 'undefined') {
@@ -304,6 +314,7 @@ function onTextClick(e: MouseEvent) {
 // body, or stayed at the reset height, until the mail was reopened.
 const frameKey = ref(0)
 watch(srcdoc, () => {
+  recolored.value = false
   height.value = 80
   fitScale = 1
   ro?.disconnect()
@@ -337,7 +348,7 @@ onBeforeUnmount(() => ro?.disconnect())
     <div v-else-if="isHtml && allowRemote && message.remoteContentBlocked" class="text-muted-foreground mb-3 flex items-center gap-2 px-3 py-1.5 text-xs" role="status">
       <LoaderIcon class="size-3.5 shrink-0 animate-spin" /> Loading images…
     </div>
-    <div v-if="isHtml" :class="themed ? '' : 'overflow-hidden rounded-lg border border-black/5 bg-white dark:border-white/10'" :data-email-theme="themed ? 'dark' : 'light'">
+    <div v-if="isHtml" :class="themed ? '' : darkened ? 'overflow-hidden rounded-lg border border-white/10' : 'overflow-hidden rounded-lg border border-black/5 bg-white dark:border-white/10'" :data-email-theme="themed || darkened ? 'dark' : 'light'">
       <iframe
         :key="frameKey"
         ref="frame"
@@ -346,7 +357,7 @@ onBeforeUnmount(() => ro?.disconnect())
         referrerpolicy="no-referrer"
         title="Message content"
         class="block w-full border-0"
-        :style="{ height: `${height}px` }"
+        :style="{ height: `${height}px`, visibility: darkened && !recolored ? 'hidden' : undefined }"
         @load="onLoad"
       />
     </div>

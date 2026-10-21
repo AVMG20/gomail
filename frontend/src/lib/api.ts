@@ -313,6 +313,7 @@ export function normSettings(s: Settings): Settings {
     readingPane: s.readingPane ?? readLocal('readingPane', 'right'),
     zoom: typeof s.zoom === 'number' && s.zoom > 0 ? s.zoom : readLocal('zoom', 1),
     emailBackground: s.emailBackground === 'light' ? 'light' : 'auto',
+    darkenDesignedMail: s.darkenDesignedMail ?? false,
     launchAtLogin: s.launchAtLogin ?? false,
     checkUpdates: s.checkUpdates ?? true,
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,

@@ -40,7 +40,7 @@ export function parseCssColor(input: string): { r: number; g: number; b: number;
   return null
 }
 
-function luminance({ r, g, b }: { r: number; g: number; b: number }): number {
+export function luminance({ r, g, b }: { r: number; g: number; b: number }): number {
   const f = (c: number) => {
     const s = c / 255
     return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4

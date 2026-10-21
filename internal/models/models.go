@@ -313,6 +313,9 @@ type Settings struct {
 	// EmailBackground is "auto" (follow the theme, dark bodies in dark mode
 	// where the email allows it) or "light" (always render emails on white).
 	EmailBackground string `json:"emailBackground"` // default "auto"
+	// DarkenDesignedMail (experimental): in dark mode, also show designed (white)
+	// mail dark by inverting its colors, photos excepted. Default false.
+	DarkenDesignedMail bool `json:"darkenDesignedMail"`
 	// Calendar preferences.
 	CalendarWeekStart       string  `json:"calendarWeekStart"`       // "auto" | "sunday" | "monday" | "saturday" (default "auto")
 	CalendarTimeFormat      string  `json:"calendarTimeFormat"`      // "auto" | "12h" | "24h" (default "auto": follows the locale)

@@ -424,6 +424,8 @@ export interface Settings {
   readingPane?: 'right' | 'off'
   /** Dark mode: "auto" renders simple emails with theme colors; "light" always uses a light card. */
   emailBackground?: 'auto' | 'light'
+  /** Experimental: dark mode + Auto also inverts designed (white) mail; photos keep their colors. */
+  darkenDesignedMail?: boolean
   /** UI zoom factor 0.9–1.25. */
   zoom?: number
   /** Daily AI spend cap in USD (0 = unlimited). Next backend pass. */

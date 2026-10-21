@@ -65,6 +65,7 @@ export const SEED_SETTINGS: Settings = {
   closeToTray: false,
   aiDailyBudgetUsd: 1,
   emailBackground: 'auto',
+  darkenDesignedMail: false,
   calendarWeekStart: 'auto',
   calendarDefaultView: 'week',
   calendarDefaultDuration: 30,

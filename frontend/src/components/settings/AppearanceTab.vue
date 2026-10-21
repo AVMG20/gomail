@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { CheckIcon, MonitorIcon, MoonIcon, SunIcon } from '@lucide/vue'
 import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { localeUses12h } from '@/lib/calendar'
 import { ACCENT_PRESETS, readableForeground } from '@/lib/color'
@@ -136,6 +137,13 @@ function onThemeKey(e: KeyboardEvent) {
           :options="[{ value: 'auto', label: 'Auto' }, { value: 'light', label: 'Always light' }]"
           @update:model-value="(v) => settings.update({ emailBackground: v as 'auto' | 'light' })"
         />
+      </SettingRow>
+      <SettingRow
+        v-if="(s.emailBackground ?? 'auto') === 'auto'"
+        title="Dark designed mail (experimental)"
+        description="In dark mode, designed mail is shown dark too, by flipping its colors. Photos and logos keep theirs. Some mail may look off; turn it off again if so."
+      >
+        <Switch :model-value="!!s.darkenDesignedMail" aria-label="Dark designed mail" @update:model-value="(v: boolean) => settings.update({ darkenDesignedMail: v })" />
       </SettingRow>
     </SettingSection>
   </div>
