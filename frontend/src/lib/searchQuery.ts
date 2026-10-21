@@ -85,8 +85,9 @@ export function operatorCompletions(
   return (OPERATOR_VALUES[op] ?? []).filter((o) => o.startsWith(rest) && o !== rest).map((o) => ({ value: `${op}:${o}`, label: `${op}:${o}` }))
 }
 
-/** Replace the last token with a completion (and add a trailing space). */
+/** Replace the last token with a completion (and add a trailing space, except after a bare operator). */
 export function applyCompletion(query: string, value: string): string {
   // A function replacement: "$&" or "$$" in a label/contact name stay literal.
-  return query.replace(/(\S*)$/, () => `${value} `)
+  // An operator alone ("from:") keeps the cursor on it, so its value can be typed (and completed) next.
+  return query.replace(/(\S*)$/, () => (value.endsWith(':') ? value : `${value} `))
 }

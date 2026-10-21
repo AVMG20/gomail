@@ -295,6 +295,15 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     e.stopPropagation()
     showAll()
+    return
+  }
+  // Tab completes like Enter on a suggestion: the highlighted one, else the first.
+  if (e.key === 'Tab' && !e.shiftKey && !hasMod(e) && !e.altKey && completions.value.length) {
+    const hl = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>('[data-highlighted][data-complete]')
+    const c = completions.value[Number(hl?.dataset.complete ?? 0)] ?? completions.value[0]
+    e.preventDefault()
+    e.stopPropagation()
+    complete(c)
   }
 }
 
@@ -354,7 +363,7 @@ const tipKeys = shortcutLabel('mod+enter')
           </CmdGroup>
 
           <CmdGroup v-if="completions.length" heading="Suggestions">
-            <CmdItem v-for="c in completions" :key="c.value" :value="`complete:${c.value}`" @select="complete(c)">
+            <CmdItem v-for="(c, i) in completions" :key="c.value" :value="`complete:${c.value}`" :data-complete="i" @select="complete(c)">
               <span v-if="c.color" class="size-2.5 rounded-full" :style="{ background: c.color }" />
               <SearchIcon v-else class="text-muted-foreground size-4" />
               <span class="truncate">{{ c.label }}</span>
@@ -440,6 +449,7 @@ const tipKeys = shortcutLabel('mod+enter')
         <div class="border-border text-muted-foreground flex items-center gap-4 border-t px-3 py-2 text-[11px]">
           <span class="flex items-center gap-1"><KeyCaps combo="up" /><KeyCaps combo="down" /> navigate</span>
           <span class="flex items-center gap-1"><CornerDownLeftIcon class="size-3" /> open</span>
+          <span v-if="completions.length" class="flex items-center gap-1"><KeyCaps combo="tab" /> complete</span>
           <span class="flex items-center gap-1">{{ tipKeys }} show all</span>
           <span class="ml-auto flex items-center gap-1"><KeyCaps combo="esc" /> close</span>
         </div>

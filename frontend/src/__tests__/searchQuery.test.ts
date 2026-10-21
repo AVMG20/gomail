@@ -72,7 +72,7 @@ describe('operator completions', () => {
   })
 
   it('applies a completion to the last token', () => {
-    expect(applyCompletion('invoice fr', 'from:')).toBe('invoice from: ')
+    expect(applyCompletion('invoice fr', 'from:')).toBe('invoice from:')
     expect(applyCompletion('label:fi', 'label:Finance')).toBe('label:Finance ')
   })
 })
