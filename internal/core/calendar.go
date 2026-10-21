@@ -283,6 +283,20 @@ func (s *Service) SetCalendarVisible(calendarID string, visible bool) error {
 	return nil
 }
 
+// SetCalendarMuted keeps a calendar shown but turns off reminders for its
+// events (someone else's calendar you follow).
+func (s *Service) SetCalendarMuted(calendarID string, muted bool) error {
+	row, err := s.store.Calendar(calendarID)
+	if err != nil {
+		return errors.New("calendar not found")
+	}
+	if err := s.store.SetCalendarRemindersMuted(calendarID, muted); err != nil {
+		return err
+	}
+	s.emitCalendar(row.AccountID)
+	return nil
+}
+
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // SetCalendarColor changes the color gomail shows for a calendar and its

@@ -495,6 +495,11 @@ DELETE FROM sync_state WHERE key LIKE 'delta:%' AND account_id IN
 	`
 ALTER TABLE events ADD COLUMN reminders_off INTEGER NOT NULL DEFAULT 0;
 `,
+	// 20: calendars you see but don't want reminders of (and their backup copy).
+	`
+ALTER TABLE calendars ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pending_calendars ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

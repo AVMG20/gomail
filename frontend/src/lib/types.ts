@@ -52,6 +52,8 @@ export interface Calendar {
   primary: boolean
   canEdit: boolean
   visible: boolean
+  /** Shown, but its events never remind (someone else's calendar you follow). */
+  muted?: boolean
   /** Video meetings this calendar can create: "meet" (Google), "teams" (Microsoft) or "" (none). */
   videoCallProvider?: 'meet' | 'teams' | 'skype' | '' | string
 }

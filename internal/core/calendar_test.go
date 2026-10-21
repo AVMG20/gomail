@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -595,7 +596,7 @@ func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
 		s.checkReminders()
 	}
 
-	// Hidden calendar: a view filter only. Events stay synced and remind.
+	// Hidden calendar: events stay synced, but aren't listed and don't remind.
 	work := calByName(t, s, demo.GmailAccountID, "Work")
 	if err := s.SetCalendarVisible(work.ID, false); err != nil {
 		t.Fatal(err)
@@ -609,10 +610,30 @@ func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
 		t.Fatal("hidden calendars not synced")
 	}
 	remindAt(gmailEv)
-	if notified(gmailEv.Title) != 1 {
-		t.Fatal("no reminder for a hidden calendar")
+	if notified(gmailEv.Title) != 0 {
+		t.Fatal("reminder for a hidden calendar")
 	}
 	_ = s.SetCalendarVisible(work.ID, true)
+
+	// A muted calendar (someone else's you follow): listed, no reminders.
+	if err := s.SetCalendarMuted(work.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if cals, _ := s.ListCalendars(); !slices.ContainsFunc(cals, func(c models.Calendar) bool { return c.ID == work.ID && c.Muted && c.Visible }) {
+		t.Fatal("muted calendar not listed as muted")
+	}
+	if n := countCal(t, s, work.ID, from, to); n == 0 {
+		t.Fatal("muted calendar's events hidden")
+	}
+	remindAt(gmailEv)
+	if notified(gmailEv.Title) != 0 {
+		t.Fatal("reminder for a muted calendar")
+	}
+	_ = s.SetCalendarMuted(work.ID, false)
+	remindAt(gmailEv)
+	if notified(gmailEv.Title) != 1 {
+		t.Fatal("no reminder after unmuting")
+	}
 
 	// Muted: events sync and show, no reminders.
 	if err := s.SetAccountCalendarMuted(demo.OutlookAccountID, true); err != nil {

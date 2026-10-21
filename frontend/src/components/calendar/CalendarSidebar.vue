@@ -5,7 +5,7 @@
 // color. Right-click a calendar to show/hide it, show only it, or recolor it.
 // Mailboxes without calendar access show "Connect" instead.
 import { computed, ref } from 'vue'
-import { BellOffIcon, ChevronRightIcon, EllipsisIcon, EyeIcon, EyeOffIcon, LoaderIcon, PaletteIcon, PlusIcon, ScanEyeIcon } from '@lucide/vue'
+import { BellIcon, BellOffIcon, ChevronRightIcon, EllipsisIcon, EyeIcon, EyeOffIcon, LoaderIcon, PaletteIcon, PlusIcon, ScanEyeIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent,
@@ -127,7 +127,7 @@ const busyDays = computed(() => eventDays(cal.visibleEvents))
                     'flex items-center gap-2.5 rounded-md px-1.5 py-1 text-[13px]',
                     a.calendarEnabled === false ? 'text-muted-foreground mbx-disabled cursor-default' : 'hover:bg-sidebar-accent/60 cursor-pointer',
                   ]"
-                  :title="a.calendarEnabled === false ? `${c.name}\nThis mailbox’s calendar is disabled` : `${c.name}\nShow or hide · Alt-click to show only this calendar`"
+                  :title="a.calendarEnabled === false ? `${c.name}\nThis mailbox’s calendar is disabled` : `${c.name}${c.muted ? ' · no reminders' : ''}\nShow or hide · Alt-click to show only this calendar · Right-click for more`"
                   @click.alt.prevent="a.calendarEnabled !== false && cal.soloCalendar(c.id)"
                   @click="ignoreSecondaryClick"
                   @contextmenu="menuOpenedAt = Date.now()"
@@ -147,6 +147,7 @@ const busyDays = computed(() => eventDays(cal.visibleEvents))
                     <svg v-if="c.visible" viewBox="0 0 24 24" class="size-2.5 text-white" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
                   </span>
                   <span class="min-w-0 flex-1 truncate">{{ c.name }}</span>
+                  <BellOffIcon v-if="c.muted" class="text-muted-foreground size-3 shrink-0" aria-label="No reminders" />
                   <span v-if="!c.canEdit" class="text-muted-foreground text-[10.5px]">read-only</span>
                 </label>
                 </ContextMenuTrigger>
@@ -156,6 +157,9 @@ const busyDays = computed(() => eventDays(cal.visibleEvents))
                     <component :is="c.visible ? EyeOffIcon : EyeIcon" /> {{ c.visible ? 'Hide calendar' : 'Show calendar' }}
                   </ContextMenuItem>
                   <ContextMenuItem :disabled="a.calendarEnabled === false" @select="cal.soloCalendar(c.id)"><ScanEyeIcon /> Show only this calendar</ContextMenuItem>
+                  <ContextMenuItem :disabled="a.calendarEnabled === false" @select="cal.setCalendarMuted(c.id, !c.muted)">
+                    <component :is="c.muted ? BellIcon : BellOffIcon" /> {{ c.muted ? 'Turn reminders back on' : 'Mute reminders' }}
+                  </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuSub>
                     <ContextMenuSubTrigger class="gap-2"><PaletteIcon class="text-muted-foreground size-4" /> Color</ContextMenuSubTrigger>

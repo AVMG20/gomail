@@ -34,16 +34,16 @@ func (c CalendarRow) Provider() calendar.Calendar {
 }
 
 // color is the user's pick when there is one (SetCalendarColor), else the provider's.
-const calendarCols = `id, account_id, remote_id, name, CASE WHEN color_override != '' THEN color_override ELSE color END, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end, video_provider`
+const calendarCols = `id, account_id, remote_id, name, CASE WHEN color_override != '' THEN color_override ELSE color END, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end, video_provider, muted`
 
 func scanCalendar(sc interface{ Scan(...any) error }) (CalendarRow, error) {
 	var c CalendarRow
-	var primary, canEdit, visible int
+	var primary, canEdit, visible, muted int
 	var rem string
 	var ws, we int64
 	err := sc.Scan(&c.ID, &c.AccountID, &c.RemoteID, &c.Name, &c.Color, &primary, &canEdit, &visible, &c.TimeZone, &rem, &c.State, &ws, &we,
-		&c.VideoCallProvider)
-	c.Primary, c.CanEdit, c.Visible = primary == 1, canEdit == 1, visible == 1
+		&c.VideoCallProvider, &muted)
+	c.Primary, c.CanEdit, c.Visible, c.Muted = primary == 1, canEdit == 1, visible == 1, muted == 1
 	if rem != "" {
 		_ = json.Unmarshal([]byte(rem), &c.DefaultReminders)
 	}
@@ -129,6 +129,18 @@ func (s *Store) Calendar(id string) (CalendarRow, error) {
 // SetCalendarVisible shows or hides a calendar in the unified view.
 func (s *Store) SetCalendarVisible(id string, visible bool) error {
 	res, err := s.db.Exec(`UPDATE calendars SET visible = ? WHERE id = ?`, boolInt(visible), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetCalendarRemindersMuted turns a calendar's event reminders off (or on again).
+func (s *Store) SetCalendarRemindersMuted(id string, muted bool) error {
+	res, err := s.db.Exec(`UPDATE calendars SET muted = ? WHERE id = ?`, boolInt(muted), id)
 	if err != nil {
 		return err
 	}
@@ -322,13 +334,14 @@ func (s *Store) Events(start, end time.Time, showDeclined bool) ([]models.Calend
 }
 
 // ReminderEvents lists the events overlapping [start, end) that may show
-// reminders: accounts with access, enabled and not muted, any calendar
-// visibility, not cancelled or declined.
+// reminders: accounts with access, enabled and not muted, calendars shown
+// and not muted, not cancelled or declined.
 func (s *Store) ReminderEvents(start, end time.Time) ([]models.CalendarEvent, error) {
 	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events e
 		JOIN calendars c ON c.id = e.calendar_id
 		JOIN accounts a ON a.id = c.account_id
-		WHERE a.calendar_consent = 1 AND a.calendar_enabled = 1 AND a.calendar_muted = 0 AND e.status != 'cancelled'
+		WHERE a.calendar_consent = 1 AND a.calendar_enabled = 1 AND a.calendar_muted = 0 AND c.visible = 1 AND c.muted = 0
+			AND e.status != 'cancelled'
 			AND e.my_response != 'declined' AND e.start_ms < ? AND e.end_ms > ?
 		ORDER BY e.start_ms`, toMillis(end), toMillis(start))
 	if err != nil {

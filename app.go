@@ -1187,6 +1187,15 @@ func (m *MailService) SetCalendarVisible(calendarID string, visible bool) error 
 	return uiError(s.SetCalendarVisible(calendarID, visible))
 }
 
+// SetCalendarMuted keeps a calendar shown without reminders for its events.
+func (m *MailService) SetCalendarMuted(calendarID string, muted bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetCalendarMuted(calendarID, muted))
+}
+
 // SetCalendarColor changes the color shown for a calendar ("" = the provider's).
 func (m *MailService) SetCalendarColor(calendarID, color string) error {
 	s, err := m.ready()

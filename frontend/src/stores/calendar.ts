@@ -129,6 +129,18 @@ export const useCalendarStore = defineStore('calendar', () => {
     }
   }
 
+  /** Keep a calendar shown without reminders for its events (or remind again). */
+  async function setCalendarMuted(id: string, muted: boolean) {
+    const before = calendars.value
+    calendars.value = calendars.value.map((c) => (c.id === id ? { ...c, muted } : c))
+    try {
+      await api.setCalendarMuted(id, muted)
+    } catch (e) {
+      calendars.value = before
+      toast.error('Couldn’t update the calendar', { description: errorMessage(e) })
+    }
+  }
+
   /** Mailbox menu: disable (no sync, no events, no reminders) or enable again, with Undo. */
   async function setAccountEnabled(accountId: string, enabled: boolean, undoable = true) {
     const a = accounts.accounts.find((x) => x.id === accountId)
@@ -378,7 +390,7 @@ export const useCalendarStore = defineStore('calendar', () => {
 
   return {
     calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, openEventId, canEditEvent, canManageEvent, available, calendarMap, weekStart, showDeclined,
-    visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible, setCalendarColor,
+    visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible, setCalendarMuted, setCalendarColor,
     soloCalendar, setAccountEnabled, setAccountMuted, soloAccount, syncAccount, connect, create, update, move, remove, respond, setReminders,
   }
 })
