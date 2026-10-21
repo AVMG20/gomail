@@ -65,6 +65,10 @@ type LoginResponse struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// Revisions only grow and never repeat for a document, even after the
+// server lost or restored its data: they are at least the server's clock
+// in Unix ms. 0 means no document.
+
 // DocInfo describes a stored document.
 type DocInfo struct {
 	Name      string    `json:"name"`

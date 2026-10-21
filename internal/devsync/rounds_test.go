@@ -6,9 +6,13 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/AVMG20/gomail/internal/syncserver"
 )
 
 // hookTransport runs a function before a request to a path (once).
@@ -312,5 +316,54 @@ func TestStartStop(t *testing.T) {
 	}
 	if err := d.eng.SyncNow(ctx); err == nil {
 		t.Fatal("a round ran after Stop")
+	}
+}
+
+// swapServer lets a test replace the server behind a URL (its data lost).
+type swapServer struct {
+	h atomic.Pointer[syncserver.Server]
+}
+
+func (s *swapServer) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.h.Load().ServeHTTP(w, r) }
+
+func (s *swapServer) reset(t *testing.T, signups bool) {
+	srv, err := syncserver.New(syncserver.Config{DataDir: t.TempDir(), Signups: signups})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	s.h.Store(srv)
+}
+
+// A server that lost its data gets the account back from the devices:
+// the first one to sync signs up again under the same code and uploads
+// everything. With sign-ups closed, the devices say so.
+func TestServerLostItsData(t *testing.T) {
+	sw := &swapServer{}
+	sw.reset(t, true)
+	ts := httptest.NewServer(sw)
+	t.Cleanup(ts.Close)
+	a := newDevice(t, map[string]string{"theme": "dark"})
+	b := newDevice(t, map[string]string{})
+	a.create(t, ts.URL, true)
+	a.sync(t)
+	b.join(t, ts.URL, a)
+	b.sync(t)
+
+	sw.reset(t, false)
+	if err := a.eng.SyncNow(context.Background()); err == nil || !strings.Contains(a.eng.Status().Error, "doesn't accept new sync accounts") {
+		t.Fatalf("closed sign-ups: %v / %q", err, a.eng.Status().Error)
+	}
+
+	sw.reset(t, true)
+	a.tick(time.Minute)
+	a.src.set("theme", "light")
+	a.sync(t)
+	b.sync(t)
+	if got := b.src.values()["theme"]; got != "light" {
+		t.Fatalf("b after the server was restored: %q", got)
+	}
+	if revs := docRevs(t, ts.URL, a); revs["prefs"] == 0 {
+		t.Fatalf("nothing uploaded again: %v", revs)
 	}
 }

@@ -445,6 +445,13 @@ func (e *Engine) SyncNow(ctx context.Context) error {
 	e.mu.Unlock()
 	e.emit()
 	err := e.syncAll(ctx, cl, keys.Enc, joining)
+	if IsCode(err, syncapi.ErrBadCredentials) && ctx.Err() == nil {
+		// The server lost the account (its data was reset): sign up again
+		// under the same code, and upload everything.
+		if err = e.reRegister(ctx, cl); err == nil {
+			err = e.syncAll(ctx, cl, keys.Enc, joining)
+		}
+	}
 	e.mu.Lock()
 	e.syncing = false
 	if err != nil {
@@ -464,6 +471,22 @@ func (e *Engine) SyncNow(ctx context.Context) error {
 	e.emit()
 	return err
 }
+
+// reRegister signs up the account again after the server forgot it.
+func (e *Engine) reRegister(ctx context.Context, cl *client) error {
+	err := cl.register(ctx)
+	switch {
+	case IsCode(err, syncapi.ErrSignupsClosed):
+		return errAccountGone
+	case err != nil && !IsCode(err, syncapi.ErrAccountExists): // another device was faster
+		return err
+	}
+	slog.Info("device sync: the server lost this sync account; signed up again")
+	return nil
+}
+
+// errAccountGone: the server lost the account and takes no new ones.
+var errAccountGone = errors.New("the sync server no longer has your synced data and doesn't accept new sync accounts. Ask its owner to allow sign-ups (SIGNUPS=open) or restore its data")
 
 func (e *Engine) syncAll(ctx context.Context, cl *client, encKey []byte, joining bool) error {
 	list, err := cl.list(ctx)

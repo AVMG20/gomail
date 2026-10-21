@@ -187,7 +187,10 @@ func (d *db) putDoc(account, name string, baseRev int64, data []byte, quota int6
 	if used+int64(len(data)) > quota || (!exists && count >= int64(maxDocs)) {
 		return putResult{rev: cur, quota: true}, nil
 	}
-	res.rev = cur + 1
+	// Revisions follow the clock (and only grow), so they don't repeat
+	// after the database was lost or restored from a backup: a device
+	// whose revision matched an old one would miss the new content.
+	res.rev = max(cur+1, time.Now().UnixMilli())
 	if _, err := tx.Exec(`INSERT INTO docs(account, name, rev, data, updated_at) VALUES(?,?,?,?,?)
 		ON CONFLICT(account, name) DO UPDATE SET rev = excluded.rev, data = excluded.data, updated_at = excluded.updated_at`,
 		account, name, res.rev, data, time.Now().UnixMilli()); err != nil {

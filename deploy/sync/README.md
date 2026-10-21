@@ -73,9 +73,16 @@ for a new computer: it uses the existing code).
 
 Everything lives in the `gomail-sync-data` volume (`/data/sync.db`, SQLite).
 In Coolify, add a *Scheduled Backup* for the volume, or back it up from the
-host (`docker volume inspect` shows its path). Losing the volume isn't
-fatal: every computer still has its own data and uploads it again on its next
-sync.
+host (`docker volume inspect` shows its path). Restoring a backup is safe:
+computers merge what changed since and upload it.
+
+Losing the volume costs no settings, as long as a computer still syncs:
+each one keeps its own data. With `SIGNUPS=open`, the first computer that
+syncs signs up again under your sync code and uploads everything; the
+others follow. With `SIGNUPS=closed`, they show that the server lost your
+data: set `SIGNUPS=open`, redeploy, click *Sync now* on one computer, then
+close sign-ups again. Use a computer that already synced for this: a new
+one can only join once the account is back.
 
 ## Updating
 

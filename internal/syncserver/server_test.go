@@ -166,21 +166,23 @@ func TestDocumentRevisions(t *testing.T) {
 		code, e := s.call("PUT", "/v1/docs/"+name, token, syncapi.PutRequest{BaseRev: base, Data: []byte(data)}, &res)
 		return code, e, res.Rev
 	}
-	if code, _, rev := put(a, "settings", 0, "v1"); code != http.StatusOK || rev != 1 {
-		t.Fatalf("first put: %d rev %d", code, rev)
+	code, _, rev1 := put(a, "settings", 0, "v1")
+	if code != http.StatusOK || rev1 < time.Now().Add(-time.Minute).UnixMilli() {
+		t.Fatalf("first put: %d rev %d", code, rev1)
 	}
-	if code, _, rev := put(a, "settings", 1, "v2"); code != http.StatusOK || rev != 2 {
-		t.Fatalf("second put: %d rev %d", code, rev)
+	code, _, rev2 := put(a, "settings", rev1, "v2")
+	if code != http.StatusOK || rev2 <= rev1 {
+		t.Fatalf("second put: %d rev %d", code, rev2)
 	}
 	// A device that read revision 1 loses the race and learns the current one.
-	if code, e, _ := put(a, "settings", 1, "stale"); code != http.StatusConflict || e.Code != syncapi.ErrConflict || e.Rev != 2 {
+	if code, e, _ := put(a, "settings", rev1, "stale"); code != http.StatusConflict || e.Code != syncapi.ErrConflict || e.Rev != rev2 {
 		t.Fatalf("stale put: %d %+v", code, e)
 	}
 	if code, e, _ := put(a, "fresh", 3, "x"); code != http.StatusConflict || e.Rev != 0 {
 		t.Fatalf("put to a new doc with a base: %d %+v", code, e)
 	}
 	var doc syncapi.Doc
-	if code, _ := s.call("GET", "/v1/docs/settings", a, nil, &doc); code != http.StatusOK || doc.Rev != 2 || string(doc.Data) != "v2" {
+	if code, _ := s.call("GET", "/v1/docs/settings", a, nil, &doc); code != http.StatusOK || doc.Rev != rev2 || string(doc.Data) != "v2" {
 		t.Fatalf("get: %d %+v", code, doc)
 	}
 	// Accounts don't see each other's documents.
@@ -195,7 +197,7 @@ func TestDocumentRevisions(t *testing.T) {
 	}
 	var list syncapi.DocList
 	s.call("GET", "/v1/docs", a, nil, &list)
-	if len(list.Docs) != 1 || list.Docs[0].Name != "settings" || list.Docs[0].Rev != 2 || list.UsedBytes != 2 {
+	if len(list.Docs) != 1 || list.Docs[0].Name != "settings" || list.Docs[0].Rev != rev2 || list.UsedBytes != 2 {
 		t.Fatalf("list %+v", list)
 	}
 }
@@ -204,8 +206,12 @@ func TestLimits(t *testing.T) {
 	s := newTestServer(t, Config{Signups: true, MaxDocBytes: 100, QuotaBytes: 250, MaxDocs: 3})
 	s.register(alice, key(1))
 	a := s.login(alice, key(1))
+	revs := map[string]int64{}
 	put := func(name string, base int64, n int) (int, syncapi.Error) {
-		return s.call("PUT", "/v1/docs/"+name, a, syncapi.PutRequest{BaseRev: base, Data: bytes.Repeat([]byte("x"), n)}, nil)
+		var res syncapi.PutResponse
+		code, e := s.call("PUT", "/v1/docs/"+name, a, syncapi.PutRequest{BaseRev: base, Data: bytes.Repeat([]byte("x"), n)}, &res)
+		revs[name] = res.Rev
+		return code, e
 	}
 	if code, e := put("big", 0, 101); code != http.StatusRequestEntityTooLarge || e.Code != syncapi.ErrTooLarge {
 		t.Fatalf("too large: %d %+v", code, e)
@@ -220,7 +226,7 @@ func TestLimits(t *testing.T) {
 		t.Fatalf("over quota: %d %+v", code, e)
 	}
 	// Replacing a document counts its new size only.
-	if code, _ := put("two", 1, 50); code != http.StatusOK {
+	if code, _ := put("two", revs["two"], 50); code != http.StatusOK {
 		t.Fatalf("shrink: %d", code)
 	}
 	if code, _ := put("three", 0, 50); code != http.StatusOK {

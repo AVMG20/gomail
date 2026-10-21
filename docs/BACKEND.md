@@ -646,7 +646,9 @@ and the AES-256-GCM key (never sent). The code is kept in the OS keychain
 
 **Documents.** The engine (`internal/devsync`) syncs a few documents of keyed
 JSON values, each encrypted (gzip, then AES-GCM with the document name as
-associated data) and stored with a revision. A key's entry carries its value and the time it was written, from a hybrid
+associated data) and stored with a revision (at least the server's clock in
+ms, so revisions never repeat after the server lost or restored its data).
+A key's entry carries its value and the time it was written, from a hybrid
 clock: never below a time the computer has already seen, so a clock that is
 behind can't lose a later change. Merging takes the newer entry per key;
 deletions leave tombstones, kept for good.
@@ -692,7 +694,9 @@ per-mailbox choice at its default that hasn't synced yet isn't a change
 mailbox it doesn't have, a label decision whose label hasn't arrived) are
 kept and applied once it can. A sign-in from another computer is only used
 for a mailbox without a working one; a rotated refresh token isn't
-uploaded again, and one that stopped working here isn't removed.
+uploaded again, and one that stopped working here isn't removed. If the
+server lost the account, the next round signs up again under the same
+code (when the server takes sign-ups) and uploads everything.
 After applying, the backend emits `settings:changed` (the UI re-reads its
 settings) and `devicesync:status` carries `DeviceSyncStatus`.
 
