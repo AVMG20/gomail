@@ -1,14 +1,14 @@
 <script setup lang="ts">
-// Event details card: time, calendar, location, Join, guests with responses,
-// RSVP buttons, Edit / Delete / Email guests.
+// Event details card: time, location, Join, guests with responses, notes,
+// reminders, calendar; RSVP buttons; Edit / Delete / Email guests up top.
 import { computed, ref } from 'vue'
 import {
-  CalendarIcon, CheckIcon, GlobeIcon, CircleHelpIcon, ClockIcon, MailIcon, MapPinIcon, PencilIcon, RepeatIcon, Trash2Icon, UsersIcon, VideoIcon, XIcon,
+  AlignLeftIcon, BellIcon, CalendarIcon, CheckIcon, GlobeIcon, CircleHelpIcon, ClockIcon, MailIcon, MapPinIcon, PencilIcon, RepeatIcon, Trash2Icon, UsersIcon, VideoIcon, XIcon,
 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import FloatingCard, { type AnchorRect } from '@/components/common/FloatingCard.vue'
 import { api } from '@/lib/api'
-import { describeRepeat, formatEventWhen, formatEventWhenInZone, needsScopeChoice, parseRRule } from '@/lib/calendar'
+import { describeRepeat, formatEventWhen, formatEventWhenInZone, formatReminder, needsScopeChoice, parseRRule } from '@/lib/calendar'
 import { isEditableTarget } from '@/lib/platform'
 import { isSafeExternalUrl } from '@/lib/format'
 import type { AttendeeResponse, CalendarEvent } from '@/lib/types'
@@ -38,6 +38,15 @@ const guests = computed(() => {
   if (org?.email && !list.some((a) => a.email.toLowerCase() === org.email.toLowerCase())) list.unshift({ ...org, response: 'accepted' })
   return list
 })
+const isMe = (email: string) => !!email && email.toLowerCase() === myEmail.value
+/** Guests are only worth listing when someone besides you is invited. */
+const hasOthers = computed(() => guests.value.some((g) => g.email && !isMe(g.email)))
+/** The mailbox address, unless the calendar is already named after it (Google's primary calendar). */
+const accountHint = computed(() => {
+  const email = account.value?.email ?? ''
+  return email.toLowerCase() === (calendar.value?.name ?? '').toLowerCase() ? '' : email
+})
+const reminderText = computed(() => [...ev.value.reminders].sort((a, b) => a - b).map(formatReminder).join(', '))
 const otherZone = computed(() => formatEventWhenInZone(ev.value))
 const canRespond = computed(() => !ev.value.isOrganizer && !!ev.value.myResponse)
 
@@ -94,53 +103,74 @@ function onKey(e: KeyboardEvent) {
 }
 
 function emailGuests() {
-  const to = guests.value.filter((g) => g.email && g.email.toLowerCase() !== myEmail.value).map((g) => ({ name: g.name, email: g.email }))
+  const to = guests.value.filter((g) => g.email && !isMe(g.email)).map((g) => ({ name: g.name, email: g.email }))
   compose.composeWith({ accountId: ev.value.accountId, to, subject: ev.value.title, body: `${formatEventWhen(ev.value)}${ev.value.location ? `\n${ev.value.location}` : ''}\n\n` })
   emit('close')
 }
 </script>
 
 <template>
-  <FloatingCard :anchor="anchor" :width="360" :label="ev.title || 'Event'" @close="emit('close')" @key="onKey">
-    <div class="p-4">
-      <div class="flex items-start gap-3">
-        <span class="mt-1.5 size-3 shrink-0 rounded-[4px]" :style="{ background: calendar?.color ?? 'var(--muted-foreground)' }" />
+  <FloatingCard :anchor="anchor" :width="420" :label="ev.title || 'Event'" @close="emit('close')" @key="onKey">
+    <div class="px-5 pt-2.5 pb-5">
+      <div class="-mr-2.5 flex justify-end">
+        <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Edit event" aria-keyshortcuts="E" @click="edit"><PencilIcon /></Button>
+        <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Delete event" aria-keyshortcuts="Delete" class="hover:text-destructive" @click="del"><Trash2Icon /></Button>
+        <Button v-if="hasOthers" variant="ghost" size="icon-sm" aria-label="Email guests" title="Email guests" @click="emailGuests"><MailIcon /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Close" @click="emit('close')"><XIcon /></Button>
+      </div>
+
+      <div class="flex items-start gap-4">
+        <span class="flex h-7 w-5 shrink-0 items-center justify-center"><span class="size-3.5 rounded-[4px]" :style="{ background: calendar?.color ?? 'var(--muted-foreground)' }" /></span>
         <div class="min-w-0 flex-1">
-          <h3 :class="['text-base leading-snug font-semibold break-words [overflow-wrap:anywhere]', ev.myResponse === 'declined' && 'text-muted-foreground line-through']">{{ ev.title || 'Untitled event' }}</h3>
-          <p class="text-muted-foreground mt-0.5 text-[13px]">{{ formatEventWhen(ev) }}</p>
+          <h3 :class="['text-xl leading-7 font-normal break-words [overflow-wrap:anywhere]', ev.myResponse === 'declined' && 'text-muted-foreground line-through']">{{ ev.title || 'Untitled event' }}</h3>
+          <p class="text-muted-foreground mt-1 text-sm">{{ formatEventWhen(ev, undefined, true) }}</p>
           <p v-if="otherZone" class="text-muted-foreground mt-0.5 flex items-center gap-1.5 text-xs" :title="ev.timeZone"><GlobeIcon class="size-3" /> {{ otherZone }}</p>
           <p v-if="repeat" class="text-muted-foreground mt-0.5 flex items-center gap-1.5 text-xs"><RepeatIcon class="size-3" /> {{ repeat }}</p>
         </div>
-        <div class="-mt-1 -mr-1 flex shrink-0">
-          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Edit event" aria-keyshortcuts="E" @click="edit"><PencilIcon /></Button>
-          <Button v-if="canEdit" variant="ghost" size="icon-sm" aria-label="Delete event" aria-keyshortcuts="Delete" class="hover:text-destructive" @click="del"><Trash2Icon /></Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Close" @click="emit('close')"><XIcon /></Button>
-        </div>
       </div>
 
-      <div class="mt-3 space-y-2.5 text-[13px]">
-        <Button v-if="joinUrl" size="sm" class="w-full" @click="api.openExternal(joinUrl)"><VideoIcon /> Join meeting</Button>
-        <p v-if="ev.location" class="flex items-start gap-2.5"><MapPinIcon class="text-muted-foreground mt-0.5 size-3.5 shrink-0" /> <span class="selectable">{{ ev.location }}</span></p>
-        <p class="flex items-center gap-2.5"><CalendarIcon class="text-muted-foreground size-3.5 shrink-0" /> <span class="truncate">{{ calendar?.name }}</span><span class="text-muted-foreground truncate text-xs">{{ account?.email }}</span></p>
+      <div class="mt-4 space-y-3.5 text-sm">
+        <div v-if="joinUrl" class="flex items-center gap-4">
+          <span class="flex w-5 shrink-0 justify-center"><VideoIcon class="text-muted-foreground size-4" /></span>
+          <Button size="sm" @click="api.openExternal(joinUrl)">Join meeting</Button>
+        </div>
+        <div v-if="ev.location" class="flex items-start gap-4">
+          <span class="flex h-5 w-5 shrink-0 items-center justify-center"><MapPinIcon class="text-muted-foreground size-4" /></span>
+          <span class="selectable min-w-0 break-words">{{ ev.location }}</span>
+        </div>
 
-        <div v-if="guests.length" class="flex items-start gap-2.5">
-          <UsersIcon class="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
-          <ul class="min-w-0 flex-1 space-y-1">
-            <li class="text-muted-foreground text-xs">{{ guests.length }} guest{{ guests.length === 1 ? '' : 's' }}</li>
+        <div v-if="hasOthers" class="flex items-start gap-4">
+          <span class="flex h-5 w-5 shrink-0 items-center justify-center"><UsersIcon class="text-muted-foreground size-4" /></span>
+          <ul class="min-w-0 flex-1 space-y-1.5">
+            <li>{{ guests.length }} guest{{ guests.length === 1 ? '' : 's' }}</li>
             <li v-for="g in guests.slice(0, 8)" :key="g.email" class="flex items-center gap-2">
               <component :is="responseIcon(g.response)" :class="['size-3.5 shrink-0', g.response === 'accepted' ? 'text-emerald-600 dark:text-emerald-400' : g.response === 'declined' ? 'text-destructive' : 'text-muted-foreground']" :aria-label="responseLabel(g.response)" />
-              <span class="min-w-0 flex-1 truncate">{{ g.name || g.email }}<span v-if="g.email === ev.organizer?.email" class="text-muted-foreground"> · organizer</span></span>
+              <span class="min-w-0 flex-1 truncate" :title="g.email">{{ g.name || g.email }}<span v-if="isMe(g.email)" class="text-muted-foreground"> (you)</span><span v-if="g.email === ev.organizer?.email" class="text-muted-foreground"> · organizer</span></span>
             </li>
             <li v-if="guests.length > 8" class="text-muted-foreground text-xs">+{{ guests.length - 8 }} more</li>
           </ul>
         </div>
 
-        <p v-if="ev.description" class="text-muted-foreground selectable line-clamp-4 text-xs leading-relaxed whitespace-pre-line">{{ ev.description }}</p>
-        <p v-if="!canEdit && !canRespond" class="text-muted-foreground text-xs">Read-only calendar</p>
+        <div v-if="ev.description" class="flex items-start gap-4">
+          <span class="flex h-5 w-5 shrink-0 items-center justify-center"><AlignLeftIcon class="text-muted-foreground size-4" /></span>
+          <p class="selectable line-clamp-6 min-w-0 break-words whitespace-pre-line">{{ ev.description }}</p>
+        </div>
+        <div v-if="reminderText" class="flex items-start gap-4">
+          <span class="flex h-5 w-5 shrink-0 items-center justify-center"><BellIcon class="text-muted-foreground size-4" /></span>
+          <span>{{ reminderText }}</span>
+        </div>
+        <div class="flex items-start gap-4">
+          <span class="flex h-5 w-5 shrink-0 items-center justify-center"><CalendarIcon class="text-muted-foreground size-4" /></span>
+          <div class="min-w-0">
+            <p class="truncate">{{ calendar?.name }}</p>
+            <p v-if="accountHint" class="text-muted-foreground truncate text-xs">{{ accountHint }}</p>
+            <p v-if="!canEdit && !canRespond" class="text-muted-foreground text-xs">Read-only calendar</p>
+          </div>
+        </div>
       </div>
 
-      <div v-if="canRespond" class="border-border mt-3 flex items-center gap-1.5 border-t pt-3">
-        <span class="text-muted-foreground mr-auto text-xs">Going?</span>
+      <div v-if="canRespond" class="border-border mt-4 flex items-center gap-1.5 border-t pt-3">
+        <span class="text-muted-foreground mr-auto text-sm">Going?</span>
         <Button
           v-for="r in RESPONSES"
           :key="r.value"
@@ -152,9 +182,6 @@ function emailGuests() {
         >{{ r.label }}</Button>
       </div>
       <p v-if="respondError" role="alert" class="text-destructive mt-2 text-xs">{{ respondError }}</p>
-      <div v-if="guests.some((g) => g.email && g.email.toLowerCase() !== myEmail)" class="mt-2 flex justify-end">
-        <Button variant="ghost" size="xs" class="text-muted-foreground" @click="emailGuests"><MailIcon /> Email guests</Button>
-      </div>
     </div>
   </FloatingCard>
 </template>

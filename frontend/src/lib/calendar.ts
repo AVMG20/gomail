@@ -504,11 +504,11 @@ export function formatClock(d: Date, locale = LOCALE()): string {
   return d.toLocaleTimeString(locale, clockOptions(locale))
 }
 
-/** "Tue 20 Oct · 14:00 – 15:00", "Tue 20 Oct (all day)", "Wed 28 – Fri 30 Oct". */
-export function formatEventWhen(ev: Pick<CalendarEvent, 'start' | 'end' | 'allDay'>, locale = LOCALE()): string {
+/** "Tue 20 Oct · 14:00 – 15:00", "Tue 20 Oct (all day)", "Wed 28 – Fri 30 Oct"; `long` spells out the day and month ("Tuesday 20 October"). */
+export function formatEventWhen(ev: Pick<CalendarEvent, 'start' | 'end' | 'allDay'>, locale = LOCALE(), long = false): string {
   const s = eventDate(ev.start, ev.allDay)
   const e = eventDate(ev.end || ev.start, ev.allDay)
-  const day = (d: Date) => d.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' })
+  const day = (d: Date) => d.toLocaleDateString(locale, long ? { weekday: 'long', day: 'numeric', month: 'long' } : { weekday: 'short', day: 'numeric', month: 'short' })
   if (ev.allDay) {
     const last = addDays(e, -1)
     if (last <= s) return `${day(s)} · All day`
