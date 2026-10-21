@@ -27,6 +27,9 @@
 		</dict>
 		<key>NSHighResolutionCapable</key>
 		<string>true</string>
+		<!-- No App Nap: a minimised or hidden window must keep syncing (and notifying) on time. -->
+		<key>NSAppSleepDisabled</key>
+		<true/>
 		<key>NSHumanReadableCopyright</key>
 		<string>(c) 2026, gomail contributors</string>
 	</dict>
