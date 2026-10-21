@@ -19,7 +19,7 @@ import { FOLDER_ICONS } from '@/components/mail/folderIcons'
 import { api, hasMethod } from '@/lib/api'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import { openLabelSettings } from '@/lib/labelScope'
-import { applyCompletion, operatorCompletions, type Completion } from '@/lib/searchQuery'
+import { applyCompletion, hasOperator, operatorCompletions, type Completion } from '@/lib/searchQuery'
 import { displayName, listDate } from '@/lib/format'
 import { hasMod, shortcutLabel } from '@/lib/platform'
 import { currentIsDark } from '@/lib/theme'
@@ -290,8 +290,23 @@ function runAction(a: Action) {
   setTimeout(a.run, 0)
 }
 
+/** Enter (without arrowing to an item) puts the search in the mail list. */
+const enterSearches = computed(() => !!q.value && (hasOperator(query.value) || (completions.value.length > 0 && !/(^|\s)\w+:$/.test(q.value))))
+/** The user moved the highlight with the arrow keys since the query last changed. */
+let navigated = false
+watch(query, () => (navigated = false))
+
 function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') navigated = true
   if (e.key === 'Enter' && hasMod(e)) {
+    e.preventDefault()
+    e.stopPropagation()
+    showAll()
+    return
+  }
+  // Enter searches the mail list when the query is a search ("from:asana invoice") or has suggestions
+  // (Tab completes those). An item picked with the arrow keys still opens.
+  if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !navigated && enterSearches.value) {
     e.preventDefault()
     e.stopPropagation()
     showAll()
@@ -448,7 +463,7 @@ const tipKeys = shortcutLabel('mod+enter')
 
         <div class="border-border text-muted-foreground flex items-center gap-4 border-t px-3 py-2 text-[11px]">
           <span class="flex items-center gap-1"><KeyCaps combo="up" /><KeyCaps combo="down" /> navigate</span>
-          <span class="flex items-center gap-1"><CornerDownLeftIcon class="size-3" /> open</span>
+          <span class="flex items-center gap-1"><CornerDownLeftIcon class="size-3" /> {{ enterSearches ? 'search mail' : 'open' }}</span>
           <span v-if="completions.length" class="flex items-center gap-1"><KeyCaps combo="tab" /> complete</span>
           <span class="flex items-center gap-1">{{ tipKeys }} show all</span>
           <span class="ml-auto flex items-center gap-1"><KeyCaps combo="esc" /> close</span>

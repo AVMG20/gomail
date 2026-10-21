@@ -46,6 +46,11 @@ export function parseSearch(q: string): ParsedSearch {
   return out
 }
 
+/** The query uses an operator with a value ("from:asana", "is:unread"): a search for the mail list. */
+export function hasOperator(query: string): boolean {
+  return /(^|\s)(from|to|subject|label|in|is|has|before|after):\S/i.test(query)
+}
+
 export interface Completion { value: string; label: string; hint?: string; color?: string }
 
 export const OPERATOR_STARTERS = ['from:', 'label:', 'is:unread', 'has:attachment', 'in:']
