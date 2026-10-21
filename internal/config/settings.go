@@ -163,9 +163,18 @@ func Normalize(s *models.Settings) {
 	default:
 		s.ReplyQuote = "header"
 	}
-	if s.EmailBackground != "light" {
-		s.EmailBackground = "auto"
+	switch s.EmailBackground {
+	case "light", "dark":
+	default:
+		// "dark" used to be "auto" plus the DarkenDesignedMail switch.
+		if s.DarkenDesignedMail {
+			s.EmailBackground = "dark"
+		} else {
+			s.EmailBackground = "auto"
+		}
 	}
+	// Migrated once: left on, it would turn a later choice of "auto" back into "dark".
+	s.DarkenDesignedMail = false
 	switch s.CalendarTimeFormat {
 	case "auto", "12h", "24h":
 	default:

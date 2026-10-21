@@ -314,8 +314,10 @@ export function normSettings(s: Settings): Settings {
     replyQuote: s.replyQuote || readLocal('replyQuote', 'header'),
     readingPane: s.readingPane ?? readLocal('readingPane', 'right'),
     zoom: typeof s.zoom === 'number' && s.zoom > 0 ? s.zoom : readLocal('zoom', 1),
-    emailBackground: s.emailBackground === 'light' ? 'light' : 'auto',
-    darkenDesignedMail: s.darkenDesignedMail ?? false,
+    // "dark" used to be "auto" plus the darkenDesignedMail switch; migrated once, it's cleared
+    // (left on, the backend would turn a later choice of "auto" back into "dark").
+    emailBackground: s.emailBackground === 'light' || s.emailBackground === 'dark' ? s.emailBackground : s.darkenDesignedMail ? 'dark' : 'auto',
+    darkenDesignedMail: false,
     launchAtLogin: s.launchAtLogin ?? false,
     checkUpdates: s.checkUpdates ?? true,
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,

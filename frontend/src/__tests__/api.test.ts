@@ -35,7 +35,12 @@ describe('api normalisation (Go nil slices / legacy fields)', () => {
     expect(s.emailBackground).toBe('auto')
     expect(s.checkUpdates).toBe(true)
     expect(normSettings({ emailBackground: 'light' } as unknown as Settings).emailBackground).toBe('light')
+    expect(normSettings({ emailBackground: 'dark' } as unknown as Settings).emailBackground).toBe('dark')
     expect(normSettings({ emailBackground: 'bogus' } as unknown as Settings).emailBackground).toBe('auto')
+    // The older "Dark designed mail" switch on top of Auto becomes "All mail dark", then is cleared.
+    const migrated = normSettings({ emailBackground: 'auto', darkenDesignedMail: true } as unknown as Settings)
+    expect([migrated.emailBackground, migrated.darkenDesignedMail]).toEqual(['dark', false])
+    expect(normSettings({ emailBackground: 'light', darkenDesignedMail: true } as unknown as Settings).emailBackground).toBe('light')
   })
 
   it('keeps explicit zeros and falls back to locally stored prefs for older backends', () => {

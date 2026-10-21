@@ -427,9 +427,12 @@ export interface Settings {
   replyQuote?: 'header' | 'plain' | 'none'
   /** "right" = three panes; "off" = full-width list, message opens in the main area. */
   readingPane?: 'right' | 'off'
-  /** Dark mode: "auto" renders simple emails with theme colors; "light" always uses a light card. */
-  emailBackground?: 'auto' | 'light'
-  /** Experimental: dark mode + Auto also inverts designed (white) mail; photos keep their colors. */
+  /**
+   * Dark mode: "auto" renders simple emails with theme colors (designed mail stays on a light card);
+   * "light" always uses a light card; "dark" (experimental) also recolors designed mail dark, photos excepted.
+   */
+  emailBackground?: 'auto' | 'light' | 'dark'
+  /** Older versions' switch for what is now emailBackground "dark" (migrated, then cleared); not used by the UI. */
   darkenDesignedMail?: boolean
   /** UI zoom factor 0.9–1.25. */
   zoom?: number

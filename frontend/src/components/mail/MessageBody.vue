@@ -20,6 +20,7 @@ import { shade } from '@/lib/color'
 import { darkenDocument } from '@/lib/darkMail'
 import { isSimpleHtml } from '@/lib/emailTheme'
 import { linkify } from '@/lib/format'
+import { hasMod } from '@/lib/platform'
 import { checkPhishing } from '@/lib/phishing'
 import { followMailLink } from '@/composables/useLinkPrompt'
 import { themeState } from '@/lib/theme'
@@ -46,8 +47,10 @@ const allowRemote = computed(() => props.allowRemote && !warned.value)
 function dismissWarning() {
   mail.phishingDismissed = new Set([...mail.phishingDismissed, props.message.id])
 }
-/** Dark theme + "Auto" email background: simple mail follows the app theme. */
-const darkAuto = computed(() => themeState.value.dark && (settings.settings?.emailBackground ?? 'auto') !== 'light')
+/** Email background setting: "light" (always light), "auto" (plain mail dark) or "dark" (all mail dark). */
+const emailBackground = computed(() => settings.settings?.emailBackground ?? 'auto')
+/** Dark theme and not "Always light": simple mail follows the app theme. */
+const darkAuto = computed(() => themeState.value.dark && emailBackground.value !== 'light')
 const forceLight = computed(() => themeState.value.dark && !darkAuto.value)
 const frame = ref<HTMLIFrameElement | null>(null)
 const height = ref(80)
@@ -156,8 +159,8 @@ const sanitized = computed(() => (isHtml.value ? sanitize(props.message.bodyHtml
 const simple = computed(() => isHtml.value && isSimpleHtml(props.message.bodyHtml))
 /** Render this HTML mail with theme colors (no white card). */
 const themed = computed(() => darkAuto.value && simple.value)
-/** Experimental: designed mail recolored dark (unless "show original colors" for this conversation). */
-const darkened = computed(() => darkAuto.value && isHtml.value && !simple.value && !!settings.settings?.darkenDesignedMail && !mail.originalColors.has(props.message.threadId))
+/** Experimental "All mail dark": designed mail recolored dark (unless "show original colors" for this conversation). */
+const darkened = computed(() => darkAuto.value && emailBackground.value === 'dark' && isHtml.value && !simple.value && !mail.originalColors.has(props.message.threadId))
 /** Darkened mail is hidden until the frame has been recolored (no white flash). */
 const recolored = ref(false)
 
@@ -261,6 +264,17 @@ function linkText(a: LinkEl): string {
   return a.tagName === 'AREA' ? (a as HTMLAreaElement).alt : a.textContent ?? ''
 }
 
+/**
+ * Whether a key pressed in the frame goes on to the app's shortcuts. Combos with ⌘/Ctrl or
+ * Alt belong to the frame (select all, copy, find), except the app-wide ones: the palette
+ * (mod+K), settings (mod+,), switching mailbox (mod+1…9, mod+shift+0) and text size (mod+= - 0).
+ */
+function forwardFromFrame(e: KeyboardEvent): boolean {
+  if (!e.metaKey && !e.ctrlKey && !e.altKey) return true
+  if (!hasMod(e) || e.altKey) return false
+  return ['k', 'K', ',', '=', '+', '-'].includes(e.key) || /^[0-9]$/.test(e.key) || e.code === 'Digit0'
+}
+
 /** Every activation (click, middle click, ⌘/Ctrl-click) is handled here; the frame never navigates. */
 function onFrameClick(e: MouseEvent) {
   const a = linkFrom(e)
@@ -295,6 +309,7 @@ function onLoad() {
   doc.addEventListener('dragstart', (e) => linkFrom(e) && e.preventDefault(), true)
   // Let keyboard shortcuts work while the frame has focus.
   doc.addEventListener('keydown', (e) => {
+    if (!forwardFromFrame(e)) return
     window.dispatchEvent(new KeyboardEvent('keydown', { key: e.key, code: e.code, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey }))
   })
   setTimeout(measure, 200)

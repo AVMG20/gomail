@@ -1,10 +1,9 @@
 <script setup lang="ts">
-// Settings → Notifications, every mailbox at a glance:
-//  - a switch that turns new-mail notifications off for that mailbox (calendar reminders are separate);
-//  - the labels whose new mail arrives quietly (QuietLabelChips).
-// A mailbox without its own list uses the default (Junk only), like the backend.
-// Each mailbox's own settings page shows the same two settings.
-import { Switch } from '@/components/ui/switch'
+// Settings → Notifications, every mailbox at a glance: the labels whose new mail arrives
+// quietly (QuietLabelChips), or "Muted" for a muted mailbox (it never notifies; muting is
+// on the mailbox's own page and in its menu). A mailbox without its own list uses the
+// default (Junk only), like the backend. Each mailbox's own settings page shows the same.
+import { BellOffIcon } from '@lucide/vue'
 import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useMailboxSettings } from './mailboxSettings'
@@ -16,23 +15,15 @@ const mb = useMailboxSettings()
 </script>
 
 <template>
-  <SettingRow title="Per mailbox" description="Turn a mailbox off, or let mail with certain labels arrive without a notification. Junk never notifies." stacked>
+  <SettingRow title="Per mailbox" description="Let mail with certain labels arrive without a notification. Junk never notifies, and neither does a muted mailbox." stacked>
     <ul class="space-y-1.5" aria-label="Notifications per mailbox">
-      <li v-for="a in accounts.accounts" :key="a.id" class="flex items-start gap-3">
-        <Switch
-          class="mt-0.5 shrink-0"
-          :model-value="mb.notifies(a.id)"
-          :aria-label="`Notifications for ${a.email}`"
-          @update:model-value="(v: boolean) => mb.setNotify(a.id, v)"
-        />
-        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-          <span class="flex w-52 min-w-0 items-center gap-2 text-[13px]" :class="!mb.notifies(a.id) && 'text-muted-foreground'">
-            <AccountAvatar :account="a" :size="18" :glyph="false" />
-            <span class="truncate" :title="a.email">{{ a.email }}</span>
-          </span>
-          <span v-if="!mb.notifies(a.id)" class="text-muted-foreground text-xs">Notifications off</span>
-          <QuietLabelChips v-else :account="a" />
-        </div>
+      <li v-for="a in accounts.accounts" :key="a.id" class="flex min-w-0 flex-wrap items-center gap-1.5">
+        <span class="flex w-52 min-w-0 items-center gap-2 text-[13px]" :class="mb.isMuted(a.id) && 'text-muted-foreground'">
+          <AccountAvatar :account="a" :size="18" :glyph="false" />
+          <span class="truncate" :title="a.email">{{ a.email }}</span>
+        </span>
+        <span v-if="mb.isMuted(a.id)" class="text-muted-foreground inline-flex items-center gap-1 text-xs"><BellOffIcon class="size-3.5" aria-hidden="true" /> Muted</span>
+        <QuietLabelChips v-else :account="a" />
       </li>
     </ul>
   </SettingRow>

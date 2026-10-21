@@ -139,8 +139,8 @@ const current = computed(() => {
 const newest = computed(() => thread.value[thread.value.length - 1] ?? null)
 /** Meeting invitation carried by the conversation (latest one wins). */
 const invite = computed(() => [...thread.value].reverse().find((m) => m.invite)?.invite ?? null)
-/** Experimental dark designed mail is on: the toolbar offers the original colors for this conversation. */
-const darkenOn = computed(() => themeState.value.dark && (settings.settings?.emailBackground ?? 'auto') === 'auto' && !!settings.settings?.darkenDesignedMail)
+/** Experimental "All mail dark" is on: the toolbar offers the original colors for this conversation. */
+const darkenOn = computed(() => themeState.value.dark && settings.settings?.emailBackground === 'dark')
 const originalColors = computed(() => !!current.value && mail.originalColors.has(current.value.threadId))
 function toggleOriginalColors() {
   const t = current.value?.threadId

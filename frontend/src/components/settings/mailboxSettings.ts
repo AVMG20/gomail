@@ -1,5 +1,5 @@
 // Per-mailbox settings that live in the global Settings object, keyed by account id:
-// new-mail notifications (mutedMailboxes: a muted mailbox also shows no unread count), quiet
+// mute (mutedMailboxes: no new-mail notifications and no unread count), quiet
 // labels (quietLabels), Jev auto-labeling (autoLabelAccounts), AI corrections of imported labels (aiCorrectsOff)
 // and which labels send mail to Junk (junkStaysPut for the Junk label, Label.then for the others).
 // Shared by the overview lists and each mailbox's own settings page.
@@ -30,18 +30,14 @@ export function useMailboxSettings() {
   const correctsOff = computed(() => new Set(settings.settings?.aiCorrectsOff ?? []))
   const junkStays = computed(() => new Set(settings.settings?.junkStaysPut ?? []))
 
-  // ---- notifications
-  const notifies = (accountId: string) => !muted.value.has(accountId)
-  function setNotify(accountId: string, on: boolean) {
-    const next = new Set(muted.value)
-    if (on) next.delete(accountId)
-    else next.add(accountId)
-    void settings.update({ mutedMailboxes: [...next] }, 0)
-  }
-
   // ---- mute: no new-mail notifications and no unread count on badges or in All inboxes.
   const isMuted = (accountId: string) => muted.value.has(accountId)
-  const setMuted = (accountId: string, on: boolean) => setNotify(accountId, !on)
+  function setMuted(accountId: string, on: boolean) {
+    const next = new Set(muted.value)
+    if (on) next.add(accountId)
+    else next.delete(accountId)
+    void settings.update({ mutedMailboxes: [...next] }, 0)
+  }
 
   // ---- background sync: each mailbox on its own interval (minutes), every 5 minutes unless changed
   const syncInterval = (accountId: string) => settings.settings?.syncIntervals?.[accountId] ?? DEFAULT_SYNC_INTERVAL
@@ -152,7 +148,7 @@ export function useMailboxSettings() {
   }
 
   return {
-    notifies, setNotify, isMuted, setMuted, syncInterval, setSyncInterval, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel,
+    isMuted, setMuted, syncInterval, setSyncInterval, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel,
     autoLabels, setAutoLabel, corrects, setCorrects, setThen, applyThen, isApplying, placeOf, junkOptions, junkList, setGoesToJunk,
   }
 }

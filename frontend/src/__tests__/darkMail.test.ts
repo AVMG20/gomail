@@ -1,4 +1,4 @@
-// Experimental dark designed mail: light colors turn dark, brand colors stay, only when turned on.
+// Experimental "All mail dark": light colors turn dark, brand colors stay, only when chosen.
 import { describe, expect, it } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -36,10 +36,10 @@ const designed = '<table bgcolor="#f4f4f4"><tr><td style="color:#3b1f4f">Sale</t
 const msg = { id: 'm1', accountId: 'a', threadId: 't1', folderIds: [], from: { name: '', email: 'x@y.z' }, to: [], cc: [], bcc: [], replyTo: [], subject: 's', snippet: '', date: '2026-01-01T00:00:00Z', unread: false, starred: false, hasAttachments: false, labels: [], labelDetails: [], bodyText: '', bodyHtml: designed, attachments: [] } as unknown as Message
 
 describe('dark designed mail', () => {
-  function mount(on: boolean) {
+  function mount(emailBackground: 'auto' | 'light' | 'dark') {
     const pinia = createPinia()
     setActivePinia(pinia)
-    useSettingsStore().settings = { emailBackground: 'auto', darkenDesignedMail: on } as never
+    useSettingsStore().settings = { emailBackground } as never
     themeState.value = { ...themeState.value, dark: true }
     const el = document.createElement('div')
     document.body.appendChild(el)
@@ -49,11 +49,13 @@ describe('dark designed mail', () => {
     return { srcdoc: () => el.querySelector('iframe')!.getAttribute('srcdoc') ?? '', unmount: () => host.unmount() }
   }
 
-  it('is off by default, on when enabled, off again for "show original colors"', async () => {
-    const off = mount(false)
-    expect(off.srcdoc()).not.toContain('gm-dark')
-    off.unmount()
-    const on = mount(true)
+  it('is off for "Plain mail dark" and "Always light", on for "All mail dark", off again for "show original colors"', async () => {
+    for (const bg of ['auto', 'light'] as const) {
+      const off = mount(bg)
+      expect(off.srcdoc()).not.toContain('gm-dark')
+      off.unmount()
+    }
+    const on = mount('dark')
     expect(on.srcdoc()).toContain('class="gm-dark"')
     // "Show original colors" for this conversation.
     useMailStore().originalColors = new Set(['t1'])

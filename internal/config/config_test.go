@@ -90,12 +90,21 @@ func TestEmailBackgroundSetting(t *testing.T) {
 	if DefaultSettings().EmailBackground != "auto" {
 		t.Fatal("default")
 	}
-	for in, want := range map[string]string{"": "auto", "auto": "auto", "light": "light", "dark": "auto"} {
+	for in, want := range map[string]string{"": "auto", "auto": "auto", "light": "light", "dark": "dark", "bogus": "auto"} {
 		s := DefaultSettings()
 		s.EmailBackground = in
 		Normalize(&s)
 		if s.EmailBackground != want {
 			t.Errorf("%q -> %q, want %q", in, s.EmailBackground, want)
+		}
+	}
+	// The older "Dark designed mail" switch on top of Auto becomes "dark"; Always light stays light.
+	for in, want := range map[string]string{"": "dark", "auto": "dark", "light": "light", "dark": "dark"} {
+		s := DefaultSettings()
+		s.EmailBackground, s.DarkenDesignedMail = in, true
+		Normalize(&s)
+		if s.EmailBackground != want || s.DarkenDesignedMail {
+			t.Errorf("darkened %q -> %q (flag %v), want %q", in, s.EmailBackground, s.DarkenDesignedMail, want)
 		}
 	}
 }

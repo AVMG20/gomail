@@ -235,30 +235,44 @@ func (e *Engine) keepLocalChanges(accountID string, folders []mail.Folder, ups [
 
 // perAccount runs push for each account concurrently; failed accounts are
 // reverted with revert. It returns a combined human-readable error.
+//
+// While the network is down a push is not an error: the optimistic change
+// stays, and the push waits in the account's pending queue until the engine
+// is online again (see deferPush). The queue lives in memory only, so
+// changes made offline are lost when gomail quits before reconnecting; the
+// next sync then shows the server's state again.
 func (e *Engine) perAccount(groups map[string][]models.MessageSummary, kind, what string,
 	push func(ctx context.Context, accountID string, ms []models.MessageSummary) error,
 	revert func(accountID string, ms []models.MessageSummary)) error {
 	var mu sync.Mutex
 	var errs []string
 	var wg sync.WaitGroup
+	seq := e.nextSeq()
 	for acct, ms := range groups {
 		wg.Add(1)
 		done := e.local.begin(kind, localIDs(ms))
 		go func(acct string, ms []models.MessageSummary) {
 			defer wg.Done()
-			defer done()
+			p := &pendingPush{seq: seq, what: what, ms: ms, push: push, revert: revert, done: done}
+			if e.deferPush(acct, p) {
+				return // the local-change guard is released after the replay
+			}
 			ctx, cancel := context.WithTimeout(e.ctx, 2*time.Minute)
 			defer cancel()
-			if err := safe.Call(what, func() error { return push(ctx, acct, ms) }); err != nil {
-				slog.Warn("action failed", "action", what, "account", acct, "err", err)
-				unlock := e.lockApply(acct)
-				revert(acct, failedOnly(ms, err))
-				unlock()
-				a, _ := e.cfg.Store.Account(acct)
+			err := safe.Call(what, func() error { return push(ctx, acct, ms) })
+			if err != nil && e.networkDown(err) {
+				if p.ms = failedOnly(ms, err); len(p.ms) > 0 {
+					e.enqueue(acct, p)
+					return
+				}
+				err = nil
+			}
+			defer done()
+			if err != nil {
+				msg := e.failPush(acct, p, err)
 				mu.Lock()
-				errs = append(errs, fmt.Sprintf("Couldn't %s on %s: %s", what, a.Email, HumanError(a, err)))
+				errs = append(errs, msg)
 				mu.Unlock()
-				e.changed(acct)
 			}
 		}(acct, ms)
 	}
@@ -268,6 +282,162 @@ func (e *Engine) perAccount(groups map[string][]models.MessageSummary, kind, wha
 		return errors.New(joinErrs(errs))
 	}
 	return nil
+}
+
+// failPush reverts the messages of a push the provider refused and returns
+// the error for the UI.
+func (e *Engine) failPush(acct string, p *pendingPush, err error) string {
+	slog.Warn("action failed", "action", p.what, "account", acct, "err", err)
+	unlock := e.lockApply(acct)
+	p.revert(acct, failedOnly(p.ms, err))
+	unlock()
+	a, _ := e.cfg.Store.Account(acct)
+	e.changed(acct)
+	return fmt.Sprintf("Couldn't %s on %s: %s", p.what, a.Email, HumanError(a, err))
+}
+
+// pendingPush is a mailbox change (move, read, star, label) whose push to
+// the provider waits for the network. Sending mail is never queued.
+type pendingPush struct {
+	seq  uint64 // order in which the user made the changes
+	what string
+	ms   []models.MessageSummary
+	push func(ctx context.Context, accountID string, ms []models.MessageSummary) error
+	// revert undoes the local change when the provider refuses it; nil
+	// means local state is authoritative (labels) and failures are logged.
+	revert func(accountID string, ms []models.MessageSummary)
+	// done releases the local-change guard (nil: none), so syncs keep the
+	// local state until the change reached the server.
+	done func()
+}
+
+func (e *Engine) nextSeq() uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.seq++
+	return e.seq
+}
+
+// networkDown reports whether err means the network is gone rather than
+// the server refusing (connectivity probe), and marks the engine offline.
+func (e *Engine) networkDown(err error) bool {
+	if !IsNetworkError(err) || errors.Is(err, context.Canceled) || e.ctx.Err() != nil {
+		return false
+	}
+	if e.cfg.Online != nil && e.cfg.Online(e.ctx) {
+		return false
+	}
+	e.setOnline(false)
+	return true
+}
+
+// deferPush queues p instead of pushing it now when the engine is offline,
+// or when earlier changes of the account still wait (they go first).
+func (e *Engine) deferPush(acct string, p *pendingPush) bool {
+	st := e.state(acct)
+	e.mu.Lock()
+	queue := e.offline || len(st.pending) > 0
+	e.mu.Unlock()
+	if queue {
+		e.enqueue(acct, p)
+	}
+	return queue
+}
+
+// enqueue adds p to the account's pending pushes, in the order the changes
+// were made, and replays them if the engine is online.
+func (e *Engine) enqueue(acct string, p *pendingPush) {
+	st := e.state(acct)
+	e.mu.Lock()
+	i := sort.Search(len(st.pending), func(i int) bool { return st.pending[i].seq > p.seq })
+	st.pending = slices.Insert(st.pending, i, p)
+	e.mu.Unlock()
+	slog.Info("network down; change queued", "action", p.what, "account", acct, "messages", len(p.ms))
+	e.replayPending(acct)
+}
+
+// replayAll replays the pending pushes of every account (back online).
+func (e *Engine) replayAll() {
+	e.mu.Lock()
+	var accts []string
+	for id, st := range e.accounts {
+		if len(st.pending) > 0 {
+			accts = append(accts, id)
+		}
+	}
+	e.mu.Unlock()
+	for _, id := range accts {
+		e.replayPending(id)
+	}
+}
+
+// replayPending pushes an account's queued changes one at a time, in order,
+// while the engine is online. A network failure leaves the change at the
+// front of the queue for the next reconnect; a refusal reverts it like a
+// failed push and reports it (reportReplay).
+func (e *Engine) replayPending(acct string) {
+	st := e.state(acct)
+	e.mu.Lock()
+	if st.replaying || e.offline || len(st.pending) == 0 || e.ctx.Err() != nil {
+		e.mu.Unlock()
+		return
+	}
+	st.replaying = true
+	e.wg.Add(1)
+	e.mu.Unlock()
+	go func() {
+		defer e.wg.Done()
+		defer safe.Recover("replay queued changes")
+		for {
+			e.mu.Lock()
+			if len(st.pending) == 0 || e.offline || e.ctx.Err() != nil {
+				st.replaying = false
+				e.mu.Unlock()
+				return
+			}
+			p := st.pending[0]
+			e.mu.Unlock()
+			var err error
+			if len(p.ms) > 0 {
+				ctx, cancel := context.WithTimeout(e.ctx, 2*time.Minute)
+				err = safe.Call(p.what, func() error { return p.push(ctx, acct, p.ms) })
+				cancel()
+			}
+			if err != nil && (e.networkDown(err) || e.ctx.Err() != nil) {
+				p.ms = failedOnly(p.ms, err) // offline again: the loop stops
+				continue
+			}
+			e.mu.Lock()
+			if i := slices.Index(st.pending, p); i >= 0 {
+				st.pending = slices.Delete(st.pending, i, i+1)
+			}
+			e.mu.Unlock()
+			switch {
+			case err == nil:
+			case p.revert == nil:
+				slog.Warn("pushing a queued change failed", "action", p.what, "account", acct, "err", err)
+			default:
+				e.reportReplay(acct, e.failPush(acct, p, err))
+			}
+			if p.done != nil {
+				p.done()
+			}
+		}
+	}()
+}
+
+// reportReplay shows the UI a queued change the provider refused: with the
+// account's sync round when one is running, else as a round of its own.
+func (e *Engine) reportReplay(acct, msg string) {
+	st := e.state(acct)
+	e.mu.Lock()
+	if st.syncing {
+		st.replayErrs = append(st.replayErrs, msg)
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
+	e.cfg.Emit.Emit(models.EventSyncFinished, models.SyncEvent{AccountID: acct, Error: msg})
 }
 
 // failedOnly narrows ms to the messages a provider.PartialError names; the
@@ -522,10 +692,20 @@ func sameSet(a, b []string) bool {
 
 // PushLabel adds/removes a provider label on the server for accounts whose
 // provider knows the label. Errors are logged; local state is authoritative.
+// While the network is down the push waits with the account's other queued
+// changes (see perAccount).
 func (e *Engine) PushLabel(ids []string, labelName string, add bool) {
 	groups, err := e.group(ids)
 	if err != nil {
 		return
+	}
+	seq := e.nextSeq()
+	push := func(ctx context.Context, acct string, ms []models.MessageSummary) error {
+		p, err := e.cfg.Provider(acct)
+		if err == nil {
+			err = p.SetLabel(ctx, remoteIDs(ms), labelName, add)
+		}
+		return err
 	}
 	for acct, ms := range groups {
 		if !e.HasProviderLabel(acct, labelName) {
@@ -533,11 +713,16 @@ func (e *Engine) PushLabel(ids []string, labelName string, add bool) {
 		}
 		e.queuePush(acct, func() {
 			defer safe.Recover("push label")
+			pp := &pendingPush{seq: seq, what: "update a label", ms: ms, push: push}
+			if e.deferPush(acct, pp) {
+				return
+			}
 			ctx, cancel := context.WithTimeout(e.ctx, 2*time.Minute)
 			defer cancel()
-			p, err := e.cfg.Provider(acct)
-			if err == nil {
-				err = p.SetLabel(ctx, remoteIDs(ms), labelName, add)
+			err := push(ctx, acct, ms)
+			if err != nil && e.networkDown(err) {
+				e.enqueue(acct, pp)
+				return
 			}
 			if err != nil {
 				slog.Warn("pushing label to provider failed", "account", acct, "label", labelName, "err", err)

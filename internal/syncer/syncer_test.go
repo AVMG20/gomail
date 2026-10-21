@@ -201,10 +201,11 @@ func newTestEnv(t *testing.T) *testEnv {
 			return out
 		},
 		Interval: func(string) time.Duration { return time.Hour },
-		OnNewMessages: func(acct string, ids []string, initial bool) {
+		OnNewMessages: func(acct string, ids []string, initial bool) <-chan struct{} {
 			te.mu.Lock()
 			te.newIDs[acct] += len(ids)
 			te.mu.Unlock()
+			return nil
 		},
 		Online: func(context.Context) bool {
 			te.mu.Lock()

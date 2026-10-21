@@ -324,6 +324,9 @@ type notifyingEmitter struct{ s *Service }
 
 func (n notifyingEmitter) Emit(event string, data any) {
 	n.s.ui.Emit(event, data)
+	if ns, ok := data.(models.NetworkStatus); ok && event == models.EventNetworkStatus && ns.Online {
+		n.s.retryDrafts() // autosaves that failed while offline
+	}
 	ev, ok := data.(models.NewMailEvent)
 	if event != models.EventNewMail || !ok || !n.s.Settings().Notifications {
 		return

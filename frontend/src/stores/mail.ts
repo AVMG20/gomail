@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import type { Address, ListQuery, Message, MessageSummary } from '@/lib/types'
@@ -41,6 +41,10 @@ export async function inChunks(ids: string[], fn: (chunk: string[]) => Promise<u
 
 /** An auto-advanced message (after archive/delete) counts as read after this dwell. */
 const AUTO_ADVANCE_DWELL_MS = 2500
+/** Conversations kept in memory (least recently used go first). */
+const THREAD_CACHE_MAX = 40
+/** The next row's conversation is fetched once the reader rests on a message this long. */
+const PREFETCH_DELAY_MS = 300
 const FILTERS_KEY = 'gomail.labelFilters.v1'
 const MAILBOX_KEY = 'gomail.mailbox.v1'
 const LAST_BY_ACCOUNT_KEY = 'gomail.lastMailbox.v1'
@@ -109,6 +113,10 @@ export const useMailStore = defineStore('mail', () => {
   const selectAllQuery = ref(false)
 
   const threadCache = new Map<string, Message[]>()
+  /** Thread loads in flight: a prefetch and the reading pane share one request. */
+  const threadLoads = new Map<string, Promise<Message[]>>()
+  /** Accounts ("" = every account) whose cached threads the next list fetch checks against their rows. */
+  const threadsToVerify = new Set<string>()
   /** Bumped when a cached thread's messages are patched in place (the reading pane re-reads them). */
   const threadRev = ref(0)
   /** Conversations (thread ids) where the user chose "Load images" this session. */
@@ -226,6 +234,7 @@ export const useMailStore = defineStore('mail', () => {
 
   async function reload(opts: { keepList?: boolean } = {}) {
     const t = ++token
+    const prev = byId.value
     error.value = ''
     if (opts.keepList && messages.value.length) refreshing.value = true
     else {
@@ -243,6 +252,7 @@ export const useMailStore = defineStore('mail', () => {
       similar.value = !!page.similar
       status.value = 'ready'
       learnAddresses(page.messages)
+      verifyThreads(prev)
       void refreshViewUnread()
     } catch (e) {
       if (t !== token) return
@@ -291,6 +301,7 @@ export const useMailStore = defineStore('mail', () => {
       similar.value = !!page.similar
       status.value = 'ready'
       learnAddresses(page.messages)
+      verifyThreads(prev)
       void refreshViewUnread()
       if (selection.value.size) {
         const ids = new Set(page.messages.map((m) => m.id))
@@ -460,8 +471,27 @@ export const useMailStore = defineStore('mail', () => {
   let readTimer: ReturnType<typeof setTimeout> | null = null
   function markOpenedRead(id: string) {
     const m = byId.value.get(id)
+    if (!m) return void markUnlistedRead(id)
+    if (!m.unread) return
+    accounts.adjustUnread([m], -1)
+    patchLocal([id], { unread: false })
+    api.markRead(actionIds([id]), true).catch(() => patchLocal([id], { unread: true }))
+    accounts.refreshCounts()
+  }
+
+  /** Opened mail that isn't in the loaded list (⌘K, a notification): its own data says whether it is unread. */
+  async function markUnlistedRead(id: string) {
+    let msg: Message | undefined
+    try {
+      msg = (await loadThread(id)).find((x) => x.id === id)
+    } catch {
+      return
+    }
+    const row = byId.value.get(id) // the list may have loaded it meanwhile
+    const m = row ?? msg
     if (!m?.unread) return
     accounts.adjustUnread([m], -1)
+    mutations++ // a list fetch in flight predates this
     patchLocal([id], { unread: false })
     api.markRead(actionIds([id]), true).catch(() => patchLocal([id], { unread: true }))
     accounts.refreshCounts()
@@ -475,10 +505,43 @@ export const useMailStore = defineStore('mail', () => {
     if (readTimer) clearTimeout(readTimer)
     readTimer = null
     if (!id) return
+    prefetchNext()
     const mode = settings.settings?.markReadMode ?? 'immediate'
     if (mode === 'manual') return
     if (mode === 'immediate' && !opts.auto) markOpenedRead(id)
     else readTimer = setTimeout(() => openId.value === id && markOpenedRead(id), opts.auto ? AUTO_ADVANCE_DWELL_MS : 2000)
+  }
+
+  /** Open a message that may not be in the list yet (⌘K, a notification), switching to `mb`
+   *  first. It shows right away; marking it read (per Settings) waits for the list to load, so
+   *  it acts on the message's row and j/k continue from it. */
+  async function reveal(id: string, mb?: Mailbox) {
+    if (mb) setMailbox(mb)
+    if (readTimer) clearTimeout(readTimer)
+    readTimer = null
+    openId.value = id
+    await nextTick() // the query watcher starts loading the new list
+    if (status.value === 'loading') {
+      await new Promise<void>((done) => {
+        const stop = watch(status, (s) => {
+          if (s === 'loading') return
+          stop()
+          done()
+        })
+      })
+    }
+    if (openId.value === id) open(id)
+  }
+
+  /** Open new mail (a desktop notification, the "New mail" toast). All inboxes stays put for
+   *  inbox mail; otherwise its mailbox's Inbox (not the folder last used there). `folderIds`:
+   *  where the mail is, when known (notifications are for inbox mail). */
+  function revealNew(accountId: string, id: string, folderIds?: string[]) {
+    const mb = mailbox.value
+    const inbox = accountId ? accounts.folderOf(accountId, 'inbox')?.id : undefined
+    const inInbox = !folderIds || !inbox || folderIds.includes(inbox)
+    const unifiedInbox = !mb.accountId && !mb.folderId && mb.kind === 'inbox'
+    return reveal(id, unifiedInbox && inInbox ? mb : inboxOf(accountId))
   }
 
   function move(delta: number) {
@@ -1006,25 +1069,75 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   // ------------------------------------------------------------ threads
-  async function loadThread(id: string): Promise<Message[]> {
-    const cached = threadCache.get(id)
-    if (cached) return cached
-    let thread: Message[]
+  async function fetchThread(id: string): Promise<Message[]> {
     try {
-      thread = await api.getThread(id)
-      if (!thread.length) thread = [await api.getMessage(id)]
+      const thread = await api.getThread(id)
+      if (thread.length) return thread
     } catch {
-      thread = [await api.getMessage(id)]
+      /* fall back to the message alone */
     }
-    threadCache.set(id, thread)
-    if (threadCache.size > 40) threadCache.delete(threadCache.keys().next().value as string)
-    learnAddresses(thread)
-    return thread
+    return [await api.getMessage(id)]
+  }
+
+  /** A cache hit counts as use: the least recently used conversation is evicted first. */
+  function touchThread(id: string): Message[] | undefined {
+    const t = threadCache.get(id)
+    if (t) {
+      threadCache.delete(id)
+      threadCache.set(id, t)
+    }
+    return t
+  }
+
+  function loadThread(id: string): Promise<Message[]> {
+    const cached = touchThread(id)
+    if (cached) return Promise.resolve(cached)
+    const pending = threadLoads.get(id)
+    if (pending) return pending
+    const p: Promise<Message[]> = fetchThread(id).then((thread) => {
+      // Invalidated while loading (its entry is gone): return it, but don't cache what may be stale.
+      if (threadLoads.get(id) === p) {
+        threadCache.set(id, thread)
+        while (threadCache.size > THREAD_CACHE_MAX) threadCache.delete(threadCache.keys().next().value as string)
+      }
+      learnAddresses(thread)
+      return thread
+    }).finally(() => {
+      if (threadLoads.get(id) === p) threadLoads.delete(id)
+    })
+    threadLoads.set(id, p)
+    return p
   }
 
   /** Synchronous cache lookup (the reading pane renders cached threads without a loading frame). */
   function cachedThread(id: string): Message[] | undefined {
-    return threadCache.get(id)
+    return touchThread(id)
+  }
+
+  let prefetchTimer: ReturnType<typeof setTimeout> | null = null
+  let prefetching = false
+  /** Warm the cache with the next row's conversation (where j, e and # land) once the reader rests
+   *  on a message. One request at a time, after the open one; holding j/k only fetches where it stops. */
+  function prefetchNext() {
+    if (prefetchTimer) clearTimeout(prefetchTimer)
+    prefetchTimer = setTimeout(async () => {
+      prefetchTimer = null
+      const from = openId.value
+      if (!from || prefetching) return
+      const idx = indexById.value.get(from)
+      const next = idx === undefined ? undefined : messages.value[idx + 1]?.id
+      if (!next || threadCache.has(next) || threadLoads.has(next)) return
+      prefetching = true
+      try {
+        await threadLoads.get(from)?.catch(() => {}) // the open conversation goes first
+        if (openId.value === from) await loadThread(next)
+      } catch {
+        /* it loads when opened */
+      } finally {
+        prefetching = false
+        if (openId.value && openId.value !== from) prefetchNext() // moved on meanwhile
+      }
+    }, PREFETCH_DELAY_MS)
   }
 
   /** Swap in refetched bodies (e.g. with remote images) wherever these messages are cached. */
@@ -1039,8 +1152,49 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   function invalidateThread(id?: string) {
-    if (id) threadCache.delete(id)
-    else threadCache.clear()
+    if (id) {
+      threadCache.delete(id)
+      threadLoads.delete(id)
+    } else {
+      threadCache.clear()
+      threadLoads.clear()
+    }
+  }
+
+  /** Mail changed in the backend (messages:changed). With `ids`, the threads holding them go now.
+   *  Otherwise the next list fetch keeps cached threads whose row didn't change and drops the
+   *  account's others (accountId "" = every account); mail of an account not in view can't be
+   *  checked against the list, so its threads go now. */
+  function threadsChanged(change: { accountId?: string; ids?: string[] } = {}) {
+    const acct = change.accountId ?? ''
+    if (change.ids?.length) {
+      const set = new Set(change.ids)
+      for (const [key, t] of [...threadCache]) {
+        if (set.has(key) || t.some((m) => set.has(m.id) || (!!m.conversationId && set.has(m.conversationId)))) invalidateThread(key)
+      }
+      for (const key of [...threadLoads.keys()]) if (set.has(key)) threadLoads.delete(key)
+    } else if (acct && mailbox.value.accountId && acct !== mailbox.value.accountId) {
+      for (const [key, t] of [...threadCache]) if (t[0]?.accountId === acct) invalidateThread(key)
+      threadLoads.clear()
+    } else {
+      threadsToVerify.add(acct)
+      threadLoads.clear() // loads in flight may predate the change
+    }
+  }
+
+  /** After a list fetch: drop cached threads (of accounts that changed) whose row is gone or
+   *  differs from before (softRefresh keeps unchanged rows' objects). */
+  function verifyThreads(prev: Map<string, MessageSummary>) {
+    if (!threadsToVerify.size) return
+    const all = threadsToVerify.has('')
+    const accts = new Set(threadsToVerify)
+    threadsToVerify.clear()
+    const now = byId.value
+    for (const [key, t] of [...threadCache]) {
+      if (!all && !accts.has(t[0]?.accountId ?? '')) continue
+      const row = now.get(key)
+      if (!row || row !== prev.get(key)) invalidateThread(key)
+    }
   }
 
   function suggestAddresses(q: string, limit = 6): Address[] {
@@ -1060,9 +1214,9 @@ export const useMailStore = defineStore('mail', () => {
     mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, olderBeyondDepth, similar, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed, phishingDismissed, originalColors,
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
-    lastByAccount, switchAccount, goToKind, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
+    lastByAccount, switchAccount, goToKind, reveal, revealNew, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, snapshot, undoMove, currentTargets, actOnTargets, markTargetsRead, hoveredId, pointAt, hoveredTarget, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
-    archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, suggestAddresses,
+    archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, threadsChanged, suggestAddresses,
   }
 })

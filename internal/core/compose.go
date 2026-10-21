@@ -25,6 +25,16 @@ const maxAttachmentBytes = 25 << 20
 // draftCoalesce is the minimum time between provider draft saves.
 var draftCoalesce = 3 * time.Second
 
+// Retry delays for a coalesced autosave that failed: draftRetryBase,
+// doubling, at most draftRetryMax (and right away when the network is back).
+// A save the server keeps refusing is given up after draftRetryLimit
+// attempts; network failures are retried until the network is back.
+var (
+	draftRetryBase  = 5 * time.Second
+	draftRetryMax   = 5 * time.Minute
+	draftRetryLimit = 10
+)
+
 func stripDataURL(s string) string {
 	if strings.HasPrefix(s, "data:") {
 		if i := strings.Index(s, ","); i >= 0 {
@@ -234,6 +244,11 @@ type draftEntry struct {
 	timer   *time.Timer
 	// flushing is closed when the coalesced save in flight finishes.
 	flushing chan struct{}
+	// seq counts the saves of the draft, so a failed autosave is only kept
+	// for a retry when no newer save replaced it; failures counts the
+	// failed attempts in a row (retry backoff).
+	seq      int
+	failures int
 }
 
 // flushWait bounds how long send/discard wait for an autosave in flight.
@@ -346,19 +361,21 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 		e = &draftEntry{}
 		s.drafts.entries[key] = e
 	}
+	e.seq++
 	if wait := draftCoalesce - time.Since(e.last); wait > 0 {
 		o := out
 		e.pending = &o
 		if e.timer == nil {
-			e.timer = time.AfterFunc(wait, func() {
-				defer safe.Recover("draft autosave")
-				s.flushDraft(key)
-			})
+			e.timer = s.draftTimer(key, wait)
 		}
 		s.drafts.mu.Unlock()
 		return key, nil
 	}
-	e.last, e.pending = time.Now(), nil
+	if e.timer != nil { // a retry of older content this save replaces
+		e.timer.Stop()
+		e.timer = nil
+	}
+	e.last, e.pending, e.failures = time.Now(), nil, 0
 	flushing := e.flushing
 	s.drafts.mu.Unlock()
 	waitFlush(flushing)     // an older coalesced save must not land after this one
@@ -371,6 +388,32 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 		h = s.drafts.recreated(h, rid)
 	}
 	return h.String(), nil
+}
+
+// draftTimer flushes the draft's pending save after wait (s.drafts.mu).
+func (s *Service) draftTimer(key string, wait time.Duration) *time.Timer {
+	return time.AfterFunc(wait, func() {
+		defer safe.Recover("draft autosave")
+		if s.ctx.Err() == nil {
+			s.flushDraft(key)
+		}
+	})
+}
+
+// retryDrafts retries failed autosaves right away (the network is back).
+func (s *Service) retryDrafts() {
+	s.drafts.mu.Lock()
+	var keys []string
+	for k, e := range s.drafts.entries {
+		if e.failures > 0 && e.pending != nil && e.timer != nil && e.timer.Stop() {
+			e.timer = nil
+			keys = append(keys, k)
+		}
+	}
+	s.drafts.mu.Unlock()
+	for _, k := range keys {
+		s.goBG(func() { s.flushDraft(k) })
+	}
 }
 
 // flushPendingDrafts writes every coalesced draft save now (shutdown),
@@ -427,6 +470,7 @@ func (s *Service) flushDraft(key string) {
 	}
 	out := *e.pending
 	e.pending, e.timer, e.last = nil, nil, time.Now()
+	seq := e.seq
 	prev := e.flushing
 	done := make(chan struct{})
 	e.flushing = done
@@ -445,18 +489,34 @@ func (s *Service) flushDraft(key string) {
 	h, _ := parseDraftHandle(key)
 	h = s.drafts.resolve(h)
 	p, err := s.provider(h.accountID)
-	if err != nil {
+	if err == nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
+		var rid string
+		rid, err = p.SaveDraft(ctx, out, h.remoteID)
+		cancel()
+		if err == nil && rid != "" && rid != h.remoteID { // recreated (deleted elsewhere)
+			h = s.drafts.recreated(h, rid)
+		}
+	}
+	s.drafts.mu.Lock()
+	defer s.drafts.mu.Unlock()
+	if err == nil {
+		e.failures = 0
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
-	defer cancel()
-	rid, err := p.SaveDraft(ctx, out, h.remoteID)
-	if err != nil {
+	// Keep the content for a retry, unless a newer save replaced it or the
+	// draft was sent or discarded meanwhile (cancel dropped the entry).
+	if e.seq != seq || s.drafts.entries[h.String()] != e || s.ctx.Err() != nil ||
+		(e.failures+1 >= draftRetryLimit && !syncer.IsNetworkError(err)) {
 		slog.Warn("autosaving draft failed", "account", h.accountID, "err", err)
 		return
 	}
-	if rid != "" && rid != h.remoteID { // recreated (deleted elsewhere)
-		s.drafts.recreated(h, rid)
+	e.failures++
+	wait := min(draftRetryBase<<min(e.failures-1, 10), draftRetryMax)
+	slog.Warn("autosaving draft failed; retrying", "account", h.accountID, "in", wait, "err", err)
+	e.pending = &out
+	if e.timer == nil {
+		e.timer = s.draftTimer(h.String(), wait)
 	}
 }
 

@@ -63,6 +63,8 @@ function onSearchKey(e: KeyboardEvent) {
     searchInput.value?.blur()
   } else if (e.key === 'Enter') {
     mail.search = searchText.value
+    // On to the results: j/k, e and # work right away.
+    scroller.value?.focus({ preventScroll: true })
   } else if (e.key === 'ArrowDown') {
     e.preventDefault()
     searchInput.value?.blur()
@@ -180,15 +182,17 @@ watch(() => mail.status, async (st, prev) => {
     newCount.value = 0
     await nextTick()
     if (scroller.value) scroller.value.scrollTop = mail.savedScroll()
+    scrollToOpen() // a message opened while the list loaded (⌘K, a notification)
   }
 })
 
-// Keep the opened message visible when navigating with the keyboard.
-watch(() => mail.openId, (id) => {
-  if (!id) return
-  const idx = rowIndexById.value.get(id)
+function scrollToOpen() {
+  const idx = mail.openId ? rowIndexById.value.get(mail.openId) : undefined
   if (idx !== undefined) virtualizer.value.scrollToIndex(idx, { align: 'auto' })
-})
+}
+// Keep the opened message visible when navigating with the keyboard, and when its row arrives
+// after it was opened (new mail from a notification).
+watch(() => (mail.openId && rowIndexById.value.has(mail.openId) ? mail.openId : null), (id) => id && scrollToOpen())
 
 // New mail arrives at the top without moving what you are reading: keep the
 // first visible message anchored and offer a "N new messages" pill instead.

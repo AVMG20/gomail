@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -41,8 +42,12 @@ type Config struct {
 	ResolveLabels func(accountID string, labels []mail.Label) map[string]string
 	// Interval returns an account's periodic sync interval.
 	Interval func(accountID string) time.Duration
-	// OnNewMessages is called after a sync stored new messages.
-	OnNewMessages func(accountID string, ids []string, initial bool)
+	// OnNewMessages is called after a sync stored new messages. It may
+	// return a channel that is closed once its work on them (Jev's labels
+	// and the moves they cause) is done: new mail is announced after that
+	// (at most announceWait later), so mail moved to Junk or quieted by a
+	// label doesn't notify. nil announces right away.
+	OnNewMessages func(accountID string, ids []string, initial bool) <-chan struct{}
 	// BeforeAnnounce runs on newly stored messages before they are announced
 	// (label rules), so its labels and moves count for notifications.
 	// initial is the account's first sync (mail already on the server).
@@ -79,6 +84,13 @@ type acctState struct {
 	apply   sync.Mutex
 	pushQ   []func() // queued label pushes (see queuePush; e.mu)
 	pushing bool     // a goroutine is working through pushQ
+	// pending holds mailbox changes waiting for the network, in order
+	// (see perAccount; e.mu); replaying is set while they are pushed.
+	pending   []*pendingPush
+	replaying bool
+	// replayErrs are refused queued changes to report with the running
+	// sync round (e.mu).
+	replayErrs []string
 }
 
 // lockApply takes the apply locks of the accounts (in a fixed order).
@@ -108,6 +120,7 @@ type Engine struct {
 	mu       sync.Mutex
 	accounts map[string]*acctState
 	offline  bool
+	seq      uint64 // orders local changes (pendingPush.seq)
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -136,8 +149,17 @@ func (e *Engine) state(id string) *acctState {
 // Forget drops in-memory state for a removed account.
 func (e *Engine) Forget(accountID string) {
 	e.mu.Lock()
+	var pending []*pendingPush
+	if st, ok := e.accounts[accountID]; ok {
+		pending, st.pending = st.pending, nil
+	}
 	delete(e.accounts, accountID)
 	e.mu.Unlock()
+	for _, p := range pending {
+		if p.done != nil {
+			p.done()
+		}
+	}
 }
 
 // ResetBackoff clears failure backoff (e.g. after re-authentication).
@@ -233,6 +255,9 @@ func (e *Engine) setOnline(online bool) {
 	if changed {
 		slog.Info("network status changed", "online", online)
 		e.cfg.Emit.Emit(models.EventNetworkStatus, models.NetworkStatus{Online: online})
+		if online {
+			e.replayAll() // changes made while offline
+		}
 	}
 }
 
@@ -435,6 +460,8 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 
 	e.mu.Lock()
 	st.syncing = false
+	replayErrs := st.replayErrs
+	st.replayErrs = nil
 	e.mu.Unlock()
 	msg := HumanError(acct, err)
 	switch {
@@ -443,6 +470,7 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 		st.failures = 0
 		e.mu.Unlock()
 		e.setOnline(true)
+		e.replayPending(accountID)
 		_ = e.cfg.Store.SetSyncResult(accountID, time.Now(), "")
 		if acct.NeedsReauth {
 			_ = e.cfg.Store.SetNeedsReauth(accountID, false)
@@ -473,13 +501,16 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 		e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
 	}
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
-	e.cfg.Emit.Emit(models.EventSyncFinished, models.SyncEvent{AccountID: accountID, NewMessages: len(newIDs), Error: msg})
+	// Queued changes the server refused while this round ran go with it.
+	shown := strings.Join(slices.DeleteFunc(append([]string{msg}, replayErrs...), func(s string) bool { return s == "" }), "; ")
+	e.cfg.Emit.Emit(models.EventSyncFinished, models.SyncEvent{AccountID: accountID, NewMessages: len(newIDs), Error: shown})
 	if err == nil && len(newIDs) > 0 {
-		if !initial {
-			e.announce(accountID, newIDs)
-		}
+		var settled <-chan struct{}
 		if e.cfg.OnNewMessages != nil {
-			e.cfg.OnNewMessages(accountID, newIDs, initial)
+			settled = e.cfg.OnNewMessages(accountID, newIDs, initial)
+		}
+		if !initial {
+			e.announceAfter(accountID, newIDs, settled)
 		}
 	}
 	if err != nil {
@@ -614,7 +645,39 @@ func (e *Engine) ingest(accountID string, msgs []mail.Message, fetched time.Time
 	return len(applied.New), nil
 }
 
-// announce emits mail:new for new unread inbox messages.
+// announceWait bounds how long new mail waits for OnNewMessages before it
+// is announced anyway, so a slow or stuck classifier never loses a
+// notification.
+var announceWait = 20 * time.Second
+
+// announceAfter announces new mail once settled is closed (nil: now). It
+// waits in the background, so neither this account's next round nor other
+// accounts wait for it.
+func (e *Engine) announceAfter(accountID string, ids []string, settled <-chan struct{}) {
+	if settled == nil {
+		e.announce(accountID, ids)
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		defer safe.Recover("announce new mail")
+		t := time.NewTimer(announceWait)
+		defer t.Stop()
+		select {
+		case <-settled:
+		case <-t.C:
+			slog.Info("announcing new mail before labeling finished", "account", accountID)
+		case <-e.ctx.Done():
+			return
+		}
+		e.announce(accountID, ids)
+	}()
+}
+
+// announce emits mail:new for new unread inbox messages. It reads them
+// again, so mail moved or labeled since the sync stored it counts as it is
+// now.
 func (e *Engine) announce(accountID string, ids []string) {
 	sums, err := e.cfg.Store.Summaries(ids)
 	if err != nil {

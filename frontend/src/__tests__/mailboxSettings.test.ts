@@ -49,3 +49,25 @@ describe('sync interval per mailbox', () => {
     expect(calls).toEqual([{ syncIntervals: { a: 1 } }, { syncIntervals: {} }])
   })
 })
+
+describe('mute per mailbox', () => {
+  it('is one setting: muting adds the mailbox to mutedMailboxes, unmuting takes it out', async () => {
+    const { setActivePinia, createPinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useSettingsStore } = await import('@/stores/settings')
+    const { useMailboxSettings } = await import('@/components/settings/mailboxSettings')
+    const settings = useSettingsStore()
+    settings.settings = { mutedMailboxes: ['b'] } as never
+    settings.update = (async (p: unknown) => {
+      settings.settings = { ...settings.settings!, ...(p as object) }
+    }) as never
+    const mb = useMailboxSettings()
+    const muted = () => useSettingsStore().settings?.mutedMailboxes
+    expect(mb.isMuted('a')).toBe(false)
+    mb.setMuted('a', true)
+    expect(muted()).toEqual(['b', 'a'])
+    mb.setMuted('b', false)
+    expect(muted()).toEqual(['a'])
+    expect(mb.isMuted('a')).toBe(true)
+  })
+})

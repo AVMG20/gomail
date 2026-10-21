@@ -26,16 +26,24 @@ type draftProbe struct {
 	gate       chan struct{} // when set, SaveDraft waits for it
 	started    chan struct{} // signalled when a gated save starts
 	draftIDErr error
+	saveErr    error    // when set, SaveDraft fails with it
+	saved      []string // subjects of the saves that reached the server
 }
 
 func (p *draftProbe) SaveDraft(ctx context.Context, out mail.Outgoing, draftID string) (string, error) {
 	p.mu.Lock()
-	gate, started := p.gate, p.started
+	gate, started, saveErr := p.gate, p.started, p.saveErr
 	p.mu.Unlock()
 	if gate != nil {
 		started <- struct{}{}
 		<-gate
 	}
+	if saveErr != nil {
+		return "", saveErr
+	}
+	p.mu.Lock()
+	p.saved = append(p.saved, out.Subject)
+	p.mu.Unlock()
 	return p.Provider.SaveDraft(ctx, out, draftID)
 }
 

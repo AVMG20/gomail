@@ -11,6 +11,16 @@ import { useAiStore } from '@/stores/ai'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 
+/** Sync errors that fix themselves (offline, timeouts, rate limits, server hiccups): the account's
+ *  sync status shows them, no toast. An expired sign-in has its own banner. */
+const TRANSIENT_SYNC = /offline|took too long|try again|can.t reach|limiting requests|rate limit|having problems|cancelled/i
+const REAUTH_SYNC = /sign-in for .* (has expired|was revoked)|sign in again|rejected the credentials/i
+
+/** The parts of a sync:finished error that need the user (the backend joins several with "; "). */
+export function syncErrorsForUser(error: string): string[] {
+  return error.split('; ').map((s) => s.trim()).filter((s) => s && !TRANSIENT_SYNC.test(s) && !REAUTH_SYNC.test(s))
+}
+
 /** Subscribe to backend events and refresh the affected state (debounced). */
 export function useBackendEvents() {
   const accounts = useAccountsStore()
@@ -33,28 +43,60 @@ export function useBackendEvents() {
     if (cal.loaded) void cal.refresh()
   }, 250)
 
-  const refreshList = useDebounceFn(() => {
-    mail.invalidateThread()
-    void mail.softRefresh()
-  }, 250)
+  const refreshList = useDebounceFn(() => void mail.softRefresh(), 250)
   const reloadAccounts = useDebounceFn(async () => {
     await accounts.load()
     mail.ensureValidMailbox()
   }, 200)
 
+  // Accounts with a "Sync now" (accounts.sync) running: its outcome gets a toast, background rounds' don't.
+  const manual = new Set<string>()
+  const offSyncAction = accounts.$onAction(({ name, args, onError }) => {
+    if (name !== 'sync') return
+    const ids = args[0] ? [args[0] as string] : accounts.accounts.map((a) => a.id)
+    ids.forEach((id) => manual.add(id))
+    onError(() => ids.forEach((id) => manual.delete(id)))
+  })
+  /** Per account: the last sync error that needed the user, so a repeat of it doesn't toast again. */
+  const lastError = new Map<string, string>()
+
+  function onSyncError(accountId: string, error: string, wasManual: boolean) {
+    const acc = accounts.accountMap.get(accountId)
+    const forUser = syncErrorsForUser(error)
+    const known = lastError.get(accountId)
+    if (forUser.length) lastError.set(accountId, forUser.join('; '))
+    if (wasManual) {
+      if (REAUTH_SYNC.test(error) && !forUser.length) return // the sign-in banner says it
+      // While offline every mailbox fails the same way: one toast for all of them.
+      const offline = !forUser.length && /offline/i.test(error)
+      toast.error(offline ? 'Couldn’t sync' : `Sync failed${acc ? ` for ${acc.email}` : ''}`, {
+        id: offline ? 'sync-offline' : `sync-failed:${accountId}`,
+        description: forUser.length ? forUser.join('; ') : error,
+      })
+    } else if (forUser.length && forUser.join('; ') !== known) {
+      toast.error(`Sync failed${acc ? ` for ${acc.email}` : ''}`, { id: `sync-failed:${accountId}`, description: forUser.join('; ') })
+    }
+  }
+
   const offs = [
+    offSyncAction,
     api.on('sync:started', (p) => p?.accountId && accounts.setSyncing(p.accountId, true)),
     api.on('sync:finished', (p) => {
       if (!p) return
       accounts.setSyncing(p.accountId, false)
-      if (p.error) {
-        const acc = accounts.accountMap.get(p.accountId)
-        toast.error(`Sync failed${acc ? ` for ${acc.email}` : ''}`, { description: p.error })
-      }
+      const wasManual = manual.delete(p.accountId)
+      if (p.error) onSyncError(p.accountId, p.error, wasManual)
+      else lastError.delete(p.accountId)
       accounts.refreshCounts()
-      if (p.newMessages > 0) refreshList()
+      if (p.newMessages > 0) {
+        mail.threadsChanged({ accountId: p.accountId })
+        refreshList()
+      }
     }),
     api.on('messages:changed', (p) => {
+      // Cached conversations go only where mail changed (the event's ids, else checked against the refreshed list).
+      const ids = (p as { ids?: string[] } | undefined)?.ids
+      mail.threadsChanged({ accountId: p?.accountId, ids })
       // Only refresh the list when the change can affect the current view.
       if (!p?.accountId || !mail.mailbox.accountId || p.accountId === mail.mailbox.accountId) refreshList()
       accounts.refreshCounts()
@@ -65,7 +107,7 @@ export function useBackendEvents() {
       if (!p) return
       const was = accounts.online
       accounts.online = p.online
-      if (was && !p.online) toast('You’re offline', { description: 'Changes are saved and will sync when you reconnect.' })
+      if (was && !p.online) toast('You’re offline', { description: 'Changes to your mail sync when you reconnect, as long as gomail stays open. Mail can’t be sent until then.' })
       if (!was && p.online) accounts.refreshCounts()
     }),
     api.on('search:updated', (p) => {
@@ -82,8 +124,7 @@ export function useBackendEvents() {
       }
       if (!p?.messageId) return
       ui.mainView = 'mail'
-      if (p.accountId && p.accountId !== mail.mailbox.accountId) mail.switchAccount(p.accountId)
-      setTimeout(() => mail.open(p.messageId), 250)
+      void mail.revealNew(p.accountId, p.messageId)
     }),
     api.on('ai:budget', (p) => {
       if (!p) return
@@ -132,8 +173,7 @@ export function useBackendEvents() {
           label: 'Open',
           onClick: () => {
             ui.mainView = 'mail' // also from the calendar
-            mail.switchAccount(p.accountId)
-            setTimeout(() => mail.open(p.latest.id), 300)
+            void mail.revealNew(p.accountId, p.latest.id, p.latest.folderIds)
           },
         },
       })

@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import { CheckIcon, MonitorIcon, MoonIcon, SunIcon } from '@lucide/vue'
 import { Slider } from '@/components/ui/slider'
-import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { localeUses12h } from '@/lib/calendar'
 import { ACCENT_PRESETS, readableForeground } from '@/lib/color'
@@ -23,6 +22,12 @@ const themes = [
   { value: 'dark', label: 'Dark', icon: MoonIcon },
 ]
 const isPreset = computed(() => ACCENT_PRESETS.some((p) => p.value.toLowerCase() === s.value.primaryColor.toLowerCase()))
+/** One line per email background choice; "All mail dark" flips designed mail's colors (experimental). */
+const EMAIL_BACKGROUND_HINT: Record<string, string> = {
+  light: 'Every email is shown on a light background.',
+  auto: 'Plain mail is shown in dark colors. Designed mail stays light.',
+  dark: 'Experimental: designed mail is shown dark too, by flipping its colors. Photos and logos keep theirs. Some mail may look off; switch back if so.',
+}
 const radiusLabel = computed(() => (s.value.radius === 0 ? 'Square' : s.value.radius <= 0.375 ? 'Subtle' : s.value.radius <= 0.75 ? 'Rounded' : 'Very rounded'))
 
 /** Theme cards are a radio group: one tab stop, arrow keys pick the next theme. */
@@ -131,19 +136,12 @@ function onThemeKey(e: KeyboardEvent) {
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow title="Email background in dark mode" description="Auto shows plain mail in dark colors. Designed mail stays light.">
+      <SettingRow title="Email background in dark mode" :description="EMAIL_BACKGROUND_HINT[s.emailBackground ?? 'auto']" stacked>
         <SegmentedControl
           :model-value="s.emailBackground ?? 'auto'"
-          :options="[{ value: 'auto', label: 'Auto' }, { value: 'light', label: 'Always light' }]"
-          @update:model-value="(v) => settings.update({ emailBackground: v as 'auto' | 'light' })"
+          :options="[{ value: 'light', label: 'Always light' }, { value: 'auto', label: 'Plain mail dark' }, { value: 'dark', label: 'All mail dark' }]"
+          @update:model-value="(v) => settings.update({ emailBackground: v as 'auto' | 'light' | 'dark' })"
         />
-      </SettingRow>
-      <SettingRow
-        v-if="(s.emailBackground ?? 'auto') === 'auto'"
-        title="Dark designed mail (experimental)"
-        description="In dark mode, designed mail is shown dark too, by flipping its colors. Photos and logos keep theirs. Some mail may look off; turn it off again if so."
-      >
-        <Switch :model-value="!!s.darkenDesignedMail" aria-label="Dark designed mail" @update:model-value="(v: boolean) => settings.update({ darkenDesignedMail: v })" />
       </SettingRow>
     </SettingSection>
   </div>

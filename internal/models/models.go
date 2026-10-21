@@ -294,31 +294,32 @@ type Label struct {
 }
 
 type Settings struct {
-	Theme               string  `json:"theme"`   // "system" | "light" | "dark"
-	Density             string  `json:"density"` // "comfortable" | "compact"
-	SyncIntervalMinutes int     `json:"syncIntervalMinutes"`
+	Theme               string `json:"theme"`   // "system" | "light" | "dark"
+	Density             string `json:"density"` // "comfortable" | "compact"
+	SyncIntervalMinutes int    `json:"syncIntervalMinutes"`
 	// SyncIntervals maps an account id to how often (minutes) its mail is
 	// checked in the background; mailboxes without an entry use
 	// DefaultSyncInterval. SyncIntervalMinutes is only kept for older versions.
-	SyncIntervals map[string]int `json:"syncIntervals"`
-	ShowRemoteImages    bool    `json:"showRemoteImages"`
-	PrimaryColor        string  `json:"primaryColor"`     // hex accent color, e.g. "#2563eb"
-	Radius              float64 `json:"radius"`           // UI corner radius in rem (default 0.5)
-	Notifications       bool    `json:"notifications"`    // desktop notifications for new mail (default true)
-	ConversationView    bool    `json:"conversationView"` // group the message list by conversation (default true)
-	ShowInTray          bool    `json:"showInTray"`       // system tray icon with unread count (default true)
-	CloseToTray         bool    `json:"closeToTray"`      // closing the window hides it to the tray (default false)
-	UndoSendSeconds     int     `json:"undoSendSeconds"`  // send delay handled by the UI (default 5, 0..30)
-	MarkReadMode        string  `json:"markReadMode"`     // "immediate" | "delay" | "manual" (default "immediate")
-	ReadingPane         string  `json:"readingPane"`      // "right" | "off" (default "right")
+	SyncIntervals    map[string]int `json:"syncIntervals"`
+	ShowRemoteImages bool           `json:"showRemoteImages"`
+	PrimaryColor     string         `json:"primaryColor"`     // hex accent color, e.g. "#2563eb"
+	Radius           float64        `json:"radius"`           // UI corner radius in rem (default 0.5)
+	Notifications    bool           `json:"notifications"`    // desktop notifications for new mail (default true)
+	ConversationView bool           `json:"conversationView"` // group the message list by conversation (default true)
+	ShowInTray       bool           `json:"showInTray"`       // system tray icon with unread count (default true)
+	CloseToTray      bool           `json:"closeToTray"`      // closing the window hides it to the tray (default false)
+	UndoSendSeconds  int            `json:"undoSendSeconds"`  // send delay handled by the UI (default 5, 0..30)
+	MarkReadMode     string         `json:"markReadMode"`     // "immediate" | "delay" | "manual" (default "immediate")
+	ReadingPane      string         `json:"readingPane"`      // "right" | "off" (default "right")
 	// ReplyQuote is how replies quote the original: "header" (On … wrote: + quote),
 	// "plain" (quote only) or "none" (default "header").
 	ReplyQuote string `json:"replyQuote"`
-	// EmailBackground is "auto" (follow the theme, dark bodies in dark mode
-	// where the email allows it) or "light" (always render emails on white).
+	// EmailBackground in dark mode: "auto" (plain mail follows the theme, designed
+	// mail stays on white), "light" (always render emails on white) or "dark"
+	// (experimental: also show designed mail dark by inverting its colors, photos excepted).
 	EmailBackground string `json:"emailBackground"` // default "auto"
-	// DarkenDesignedMail (experimental): in dark mode, also show designed (white)
-	// mail dark by inverting its colors, photos excepted. Default false.
+	// DarkenDesignedMail is the older switch for EmailBackground "dark": Normalize
+	// migrates it and clears it. Kept for settings from older versions; the UI no longer uses it.
 	DarkenDesignedMail bool `json:"darkenDesignedMail"`
 	// Calendar preferences.
 	CalendarWeekStart       string  `json:"calendarWeekStart"`       // "auto" | "sunday" | "monday" | "saturday" (default "auto")

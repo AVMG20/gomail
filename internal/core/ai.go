@@ -43,6 +43,9 @@ type job struct {
 type autoRun struct {
 	cancel context.CancelFunc
 	ids    []string // the batch's messages (classified ones are skipped)
+	// settled are closed when the run (or the newer batch that took its
+	// messages over) has labeled and moved them (jobs.mu).
+	settled []chan struct{}
 }
 
 type jobManager struct {
@@ -506,20 +509,22 @@ func (s *Service) EstimateClassify(q models.ListQuery, onlyUnlabeled, includeAll
 	return est, nil
 }
 
-// onNewMessages auto-labels newly synced incoming mail.
-func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
+// onNewMessages auto-labels newly synced incoming mail. The channel it
+// returns is closed once Jev labeled the mail and its label actions moved
+// it, so the engine announces new mail after that (nil: nothing to wait for).
+func (s *Service) onNewMessages(accountID string, ids []string, initial bool) <-chan struct{} {
 	st := s.Settings()
 	if !config.AutoClassifies(st, accountID) || s.checkAIReady() != nil {
-		return
+		return nil
 	}
 	if s.budgetReached() {
 		s.announceBudget()
-		return
+		return nil
 	}
 	s.announceResume()
 	inputs, err := s.store.ClassifyInputs(ids)
 	if err != nil {
-		return
+		return nil
 	}
 	// Incoming mail only: not drafts, trash or sent; newest first.
 	var eligible []store.ClassifyInput
@@ -550,22 +555,25 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 		eligible = eligible[:limit]
 	}
 	if len(eligible) == 0 {
-		return
+		return nil
 	}
 	todo := make([]string, len(eligible))
 	for i, in := range eligible {
 		todo[i] = in.ID
 	}
+	settled := make(chan struct{})
 	s.goBG(func() {
 		ctx, cancel := context.WithCancel(s.ctx)
-		run := &autoRun{cancel: cancel, ids: todo}
+		run := &autoRun{cancel: cancel, ids: todo, settled: []chan struct{}{settled}}
 		s.jobs.mu.Lock()
 		if prev, ok := s.jobs.others[accountID]; ok {
 			// A newer batch supersedes the old one for this account and
 			// takes over what it hadn't labeled yet (already classified
-			// messages are skipped).
+			// messages are skipped), and the announcements waiting for it.
 			prev.cancel()
 			run.ids = mergeIDs(todo, prev.ids, maxAutoPerSync)
+			run.settled = append(run.settled, prev.settled...)
+			prev.settled = nil
 		}
 		s.jobs.others[accountID] = run
 		todo := run.ids
@@ -576,7 +584,12 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 			if s.jobs.others[accountID] == run {
 				delete(s.jobs.others, accountID)
 			}
+			waiting := run.settled
+			run.settled = nil
 			s.jobs.mu.Unlock()
+			for _, ch := range waiting {
+				close(ch)
+			}
 		}()
 		results, final := s.runClassification(ctx, autoJobID, todo, true)
 		// Not ctx: a newer batch cancels this one but skips what it labeled
@@ -584,6 +597,7 @@ func (s *Service) onNewMessages(accountID string, ids []string, initial bool) {
 		s.moveAILabeled(s.ctx, results, nil)
 		s.emit(models.EventClassifyFinished, final)
 	})
+	return settled
 }
 
 // moveAILabeled acts on the labels Jev just gave mail (new mail, or a

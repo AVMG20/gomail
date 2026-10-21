@@ -258,12 +258,9 @@ function openResult(r: SearchResult) {
   ui.mainView = 'mail' // also when the palette was opened from the calendar
   const m = r.message
   const folder = m.folderIds.map((id) => accounts.folderMap.get(id)).find((f) => f && f.kind !== 'custom') ?? accounts.folderOf(m.accountId, 'inbox')
-  const sameView = mail.byId.has(m.id)
-  if (!sameView) {
-    mail.setMailbox({ accountId: m.accountId, folderId: folder?.id ?? '', kind: folder?.kind ?? 'inbox' })
-    // Show it immediately; the list loads around it.
-    setTimeout(() => mail.open(m.id), 0)
-  } else mail.open(m.id)
+  if (mail.byId.has(m.id)) mail.open(m.id)
+  // Shown right away; the list loads around it (marked read, and j/k go on, from its row).
+  else void mail.reveal(m.id, { accountId: m.accountId, folderId: folder?.id ?? '', kind: folder?.kind ?? 'inbox' })
   close()
 }
 

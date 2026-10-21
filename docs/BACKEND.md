@@ -133,6 +133,9 @@ keep editing it.
 
 - Saves of the same draft within 3 s are coalesced: the latest content is
   written when the window closes.
+- A failed autosave is kept and retried (5 s, doubling up to 5 min, and
+  right away when the network returns); newer content replaces it. A save
+  the server keeps refusing is dropped after 10 attempts.
 - `SendMessage` with `draftId` sends that draft. `DeleteDraft` discards it.
 - Replies and forwards keep threading. Forwards include the original's
   attachments: Graph's `createForward` adds them, and Gmail and the demo
@@ -191,7 +194,10 @@ leaves it out of the All inboxes and tray counts. `hiddenFolders` (folder
 ids) are left out of the sidebar's other folders; their mail still shows
 in search.
 
-**Notifications.** A single message shows the sender and subject.
+**Notifications.** New mail is announced after the label rules ran and,
+in mailboxes where Jev labels new mail, after Jev labeled and moved it (at
+most 20 s later), so mail that went to Junk or got a quiet label doesn't
+notify. A single message shows the sender and subject.
 Several show "5 new messages · <account>" with the senders. Clicking one
 shows and focuses the window and emits `notification:open {messageId,
 accountId}`.
@@ -286,7 +292,11 @@ elsewhere). Its menu has Open gomail, Check mail and Quit.
 `messages:changed`, then go to the provider. Gmail uses `batchModify`
 (1000 ids per call) and Graph uses JSON `$batch` (20 per call). If the
 provider call fails, the local change is reverted and a readable error is
-returned.
+returned. While offline (a network error and the online probe fails) the
+change stays and its push is queued per account, in order, until the
+network is back; a queued push the server then refuses is reverted and
+reported in `sync:finished`. The queue is in memory: changes made offline
+are lost if gomail quits before reconnecting. Sends are never queued.
 
 **Labels.** Labels are gomail's own concept, separate from folders. A
 message can have several labels. Each assignment has a source: `manual`,

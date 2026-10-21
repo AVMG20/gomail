@@ -221,16 +221,13 @@ function labelAll() {
         </SettingSection>
 
         <SettingSection title="Notifications">
-          <SettingRow title="New mail notifications" :description="s.notifications ? 'Show a notification when mail arrives here.' : 'Desktop notifications are off for all mailboxes.'">
-            <Switch :model-value="s.notifications && mb.notifies(a.id)" :disabled="!s.notifications" @update:model-value="(v: boolean) => mb.setNotify(a!.id, v)" />
-          </SettingRow>
-          <SettingRow v-if="s.notifications && mb.notifies(a.id)" title="Arrive quietly" description="New mail with these labels doesn’t notify." stacked>
-            <QuietLabelChips :account="a" />
-          </SettingRow>
           <SettingRow title="Mute this mailbox" description="No notifications and no unread badge in the sidebar. Inside the mailbox you still see what’s unread.">
             <Switch :model-value="mb.isMuted(a.id)" @update:model-value="(v: boolean) => mb.setMuted(a!.id, v)" />
           </SettingRow>
-          <SettingRow v-if="!s.notifications" title="Turn on desktop notifications">
+          <SettingRow v-if="s.notifications && !mb.isMuted(a.id)" title="Arrive quietly" description="New mail with these labels doesn’t notify." stacked>
+            <QuietLabelChips :account="a" />
+          </SettingRow>
+          <SettingRow v-if="!s.notifications" title="Turn on desktop notifications" description="Desktop notifications are off for all mailboxes.">
             <Button size="sm" variant="outline" @click="ui.settingsTab = 'notifications'">Notification settings</Button>
           </SettingRow>
         </SettingSection>
