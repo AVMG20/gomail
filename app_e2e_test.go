@@ -403,3 +403,45 @@ func labelCount(counts []models.LabelCount, id string) int {
 	}
 	return 0
 }
+
+// Graph lists some changes (e.g. read state) by id and flags only: the
+// message keeps its sender, subject and date.
+func TestOutlookPartialDeltaKeepsHeaders(t *testing.T) {
+	e := newE2E(t)
+	m := e.m
+	now := time.Now().Truncate(time.Second)
+	id := e.graph.Deliver(fakes.GraphMessage{Folder: "inbox", Subject: "New people to discover", FromName: "Social",
+		From: "no-reply@social.example", Received: now.Add(-time.Hour)})
+	st, _ := m.GetSettings()
+	st.MicrosoftClientID = "ms-client"
+	if err := m.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	oa, err := m.AddAccount(models.ProviderOutlook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SyncNow(oa.ID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := m.ListMessages(models.ListQuery{AccountID: oa.ID, FolderKind: models.FolderInbox})
+	if err != nil || len(page.Messages) != 1 {
+		t.Fatalf("inbox %+v %v", page.Messages, err)
+	}
+	e.graph.PartialDelta = true
+	if err := m.MarkRead([]string{page.Messages[0].ID}, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "read on the server", func() bool { gm, _ := e.graph.Message(id); return gm.IsRead })
+	if err := m.SyncNow(oa.ID); err != nil {
+		t.Fatal(err)
+	}
+	page, err = m.ListMessages(models.ListQuery{AccountID: oa.ID, FolderKind: models.FolderInbox})
+	if err != nil || len(page.Messages) != 1 {
+		t.Fatalf("inbox after sync %+v %v", page.Messages, err)
+	}
+	got := page.Messages[0]
+	if got.Subject != "New people to discover" || got.From.Email != "no-reply@social.example" || got.Date.IsZero() || got.Unread {
+		t.Fatalf("message after a partial delta: subject %q from %q date %v unread %v", got.Subject, got.From.Email, got.Date, got.Unread)
+	}
+}

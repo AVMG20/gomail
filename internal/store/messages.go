@@ -148,9 +148,18 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 			reply_to_json, subject, snippet, date, unread, starred, has_attachments, message_id_hdr, in_reply_to, refs, updated_at,
 			unsub_url, unsub_mailto, unsub_one_click, folder_kinds)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-			ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id, from_name = excluded.from_name, from_email = excluded.from_email,
-				to_json = excluded.to_json, cc_json = excluded.cc_json, bcc_json = excluded.bcc_json, reply_to_json = excluded.reply_to_json,
-				subject = excluded.subject, snippet = excluded.snippet, date = excluded.date, unread = excluded.unread,
+			-- An update without a date only carries flags (a partial provider
+			-- record): it never blanks the stored sender, subject and date.
+			ON CONFLICT(id) DO UPDATE SET thread_id = CASE WHEN excluded.date = 0 THEN thread_id ELSE excluded.thread_id END,
+				from_name = CASE WHEN excluded.date = 0 THEN from_name ELSE excluded.from_name END,
+				from_email = CASE WHEN excluded.date = 0 THEN from_email ELSE excluded.from_email END,
+				to_json = CASE WHEN excluded.date = 0 THEN to_json ELSE excluded.to_json END,
+				cc_json = CASE WHEN excluded.date = 0 THEN cc_json ELSE excluded.cc_json END,
+				bcc_json = CASE WHEN excluded.date = 0 THEN bcc_json ELSE excluded.bcc_json END,
+				reply_to_json = CASE WHEN excluded.date = 0 THEN reply_to_json ELSE excluded.reply_to_json END,
+				subject = CASE WHEN excluded.date = 0 THEN subject ELSE excluded.subject END,
+				snippet = CASE WHEN excluded.date = 0 THEN snippet ELSE excluded.snippet END,
+				date = CASE WHEN excluded.date = 0 THEN date ELSE excluded.date END, unread = excluded.unread,
 				starred = excluded.starred, has_attachments = excluded.has_attachments,
 				message_id_hdr = CASE WHEN excluded.message_id_hdr != '' THEN excluded.message_id_hdr ELSE message_id_hdr END,
 				in_reply_to = CASE WHEN excluded.in_reply_to != '' THEN excluded.in_reply_to ELSE in_reply_to END,

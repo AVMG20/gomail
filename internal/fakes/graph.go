@@ -81,6 +81,10 @@ type Graph struct {
 
 	calEvents  map[string]*CalEvent
 	calRemoved []string
+
+	// PartialDelta makes delta pages list changed messages by id and flags
+	// only, as Graph does for some changes (e.g. read state).
+	PartialDelta bool
 }
 
 // Stats returns the number of $batch calls and of requests (including
@@ -488,6 +492,10 @@ func (g *Graph) delta(w http.ResponseWriter, folder string, q url.Values) {
 		}
 		for _, m := range g.inFolder(folder) {
 			if m.seq > since {
+				if g.PartialDelta {
+					out = append(out, map[string]any{"@odata.type": "#microsoft.graph.message", "id": m.ID, "isRead": m.IsRead})
+					continue
+				}
 				out = append(out, g.render(m, false))
 			}
 		}

@@ -482,6 +482,14 @@ CREATE TABLE auto_moves (
 );
 CREATE INDEX auto_moves_recent ON auto_moves(to_kind, created_at);
 `,
+	// 18: Outlook sends some changes (e.g. read state) as just the id, and
+	// those blanked the stored sender, subject and date. Forget the delta
+	// state of mailboxes with such messages, so the next sync lists their
+	// folders again and fills the messages back in.
+	`
+DELETE FROM sync_state WHERE key LIKE 'delta:%' AND account_id IN
+	(SELECT DISTINCT account_id FROM messages WHERE date = 0 AND subject = '' AND from_email = '');
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

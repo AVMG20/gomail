@@ -408,3 +408,26 @@ func TestHideImportedLabelsWhateverTheSource(t *testing.T) {
 		t.Fatalf("shown again %v", c)
 	}
 }
+
+// A provider record without a date only carries flags: it never blanks the
+// stored sender, subject and date (Outlook lists some changes by id only).
+func TestApplySyncKeepsHeadersOfPartialRecords(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	full := msg(1, "Weekly digest", "Alex Morgan", "INBOX", "ALL")
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{full}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	partial := mail.Message{RemoteID: full.RemoteID, FolderRemoteIDs: full.FolderRemoteIDs, Unread: false}
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{partial}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	sums, err := s.Summaries([]string{MessageID("a1", full.RemoteID)})
+	if err != nil || len(sums) != 1 {
+		t.Fatalf("summaries %v %v", sums, err)
+	}
+	got := sums[0]
+	if got.Subject != "Weekly digest" || got.From.Name != "Alex Morgan" || got.Date.IsZero() || got.Unread {
+		t.Fatalf("after a partial record: %q %q %v unread=%v", got.Subject, got.From.Name, got.Date, got.Unread)
+	}
+}

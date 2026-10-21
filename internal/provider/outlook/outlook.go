@@ -540,6 +540,7 @@ func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit in
 		}
 		next = "me/mailFolders/" + url.PathEscape(folderID) + "/messages/delta?" + d.Encode()
 	}
+	var partial []string // ids Graph sent without the message's headers
 	for pages := 0; next != ""; pages++ {
 		if pages > 500 {
 			return nil, nil, "", time.Time{}, errors.New("too many delta pages")
@@ -567,6 +568,13 @@ func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit in
 			if g.ParentFolderID == "" {
 				g.ParentFolderID = folderID
 			}
+			if g.ReceivedDateTime.IsZero() && g.SentDateTime.IsZero() {
+				// Graph sends some changes (e.g. read state) as just the id
+				// and the changed properties: fetch the whole message
+				// rather than store it without sender, subject and date.
+				partial = append(partial, g.ID)
+				continue
+			}
 			ups = append(ups, toMessage(g))
 		}
 		if page.DeltaLink != "" {
@@ -574,7 +582,46 @@ func (c *Client) syncFolder(ctx context.Context, folderID, link string, limit in
 		}
 		next = page.NextLink
 	}
-	return ups, removed, deltaLink, since, nil
+	full, err := c.fullMessages(ctx, partial, folderID)
+	if err != nil {
+		return nil, nil, "", time.Time{}, err
+	}
+	return append(ups, full...), removed, deltaLink, since, nil
+}
+
+// fullMessages fetches messages that a delta page only listed by id. Ones
+// that are gone are skipped (their removal arrives separately).
+func (c *Client) fullMessages(ctx context.Context, ids []string, folderID string) ([]mail.Message, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	reqs := make([]batchReq, len(ids))
+	for i, id := range ids {
+		reqs[i] = batchReq{ID: strconv.Itoa(i), Method: http.MethodGet, URL: "/" + c.msgPath(id) + "?$select=" + messageSelect}
+	}
+	resps, err := c.batch(ctx, reqs)
+	if err != nil {
+		return nil, err
+	}
+	var out []mail.Message
+	for i := range ids {
+		r, ok := resps[strconv.Itoa(i)]
+		if !ok || r.Status == http.StatusNotFound {
+			continue
+		}
+		if err := batchError(r); err != nil {
+			return nil, err
+		}
+		var g gMessage
+		if err := json.Unmarshal(r.Body, &g); err != nil || (g.ReceivedDateTime.IsZero() && g.SentDateTime.IsZero()) {
+			continue
+		}
+		if g.ParentFolderID == "" {
+			g.ParentFolderID = folderID
+		}
+		out = append(out, toMessage(g))
+	}
+	return out, nil
 }
 
 // ---- bodies ----
