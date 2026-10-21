@@ -103,9 +103,9 @@ func (f *fakeGraph) handler(t *testing.T) http.HandlerFunc {
 			write(map[string]any{"responses": resps})
 		case p == "/me/mailFolders":
 			write(map[string]any{"value": []map[string]any{
-				{"id": "id-inbox", "displayName": "Inbox", "totalItemCount": 20, "unreadItemCount": 4, "childFolderCount": 1},
+				{"id": "id-inbox", "displayName": "Postvak IN", "totalItemCount": 20, "unreadItemCount": 4, "childFolderCount": 1},
 				{"id": "id-outbox", "displayName": "Outbox"},
-				{"id": "id-junkemail", "displayName": "Junk Email", "totalItemCount": 2},
+				{"id": "id-junkemail", "displayName": "Ongewenste e-mail", "totalItemCount": 2},
 			}})
 		case p == "/me/mailFolders/id-inbox/childFolders":
 			write(map[string]any{"value": []map[string]any{{"id": "id-proj", "displayName": "Projects", "totalItemCount": 5}}})
@@ -201,6 +201,7 @@ func TestFoldersAndSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The mailbox is Dutch; its system folders are named in English.
 	var names []string
 	for _, f := range folders {
 		names = append(names, f.Name+":"+f.Kind)

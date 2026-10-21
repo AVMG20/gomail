@@ -42,6 +42,13 @@ var wellKnown = []struct{ name, kind string }{
 	{"outbox", ""}, {"conversationhistory", ""}, {"syncissues", ""},
 }
 
+// systemNames are the well-known folders' names: Graph returns them in the
+// mailbox's language ("Postvak IN"), which needn't be the app's.
+var systemNames = map[string]string{
+	models.FolderInbox: "Inbox", models.FolderSent: "Sent Items", models.FolderDrafts: "Drafts",
+	models.FolderArchive: "Archive", models.FolderSpam: "Junk Email", models.FolderTrash: "Deleted Items",
+}
+
 // Client talks to one Microsoft mailbox.
 type Client struct {
 	api  *httpx.Client
@@ -295,6 +302,9 @@ func (c *Client) listFolders(ctx context.Context, path, prefix string, depth int
 				kind = models.FolderCustom
 			}
 			name := f.DisplayName
+			if en := systemNames[kind]; known && en != "" {
+				name = en
+			}
 			if prefix != "" {
 				name = prefix + "/" + name
 			}
