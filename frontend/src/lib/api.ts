@@ -125,7 +125,7 @@ export const USED_METHODS = [
 ]
 /** Backend pass 2 methods: features hide gracefully while these are missing. */
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
-export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'SetEventReminders', 'MoveEventCheck', 'SyncCalendars']
+export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarMuted', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'SetEventReminders', 'MoveEventCheck', 'SyncCalendars']
 
 export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'RestoreLabel', 'ApplyLabelAction', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
 
@@ -437,6 +437,7 @@ export const api = {
   // ---- calendar
   listCalendars: async () => ((await call<Calendar[] | null>('ListCalendars')) ?? []).map((c) => ({ ...c, color: safeColor(c.color, '#64748b') })),
   setCalendarVisible: (id: string, visible: boolean) => call<void>('SetCalendarVisible', id, visible),
+  setCalendarMuted: (id: string, muted: boolean) => call<void>('SetCalendarMuted', id, muted),
   /** "" goes back to the provider's color. */
   setCalendarColor: (id: string, color: string) => call<void>('SetCalendarColor', id, color),
   /** Disable/enable a mailbox's calendar entirely (no sync, no events, no reminders). */

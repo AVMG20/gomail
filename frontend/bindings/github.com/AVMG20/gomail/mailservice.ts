@@ -536,6 +536,13 @@ export function SetCalendarColor(calendarID: string, color: string): $Cancellabl
 }
 
 /**
+ * SetCalendarMuted keeps a calendar shown without reminders for its events.
+ */
+export function SetCalendarMuted(calendarID: string, muted: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1404864275, calendarID, muted);
+}
+
+/**
  * SetCalendarVisible shows or hides one calendar in the unified view.
  */
 export function SetCalendarVisible(calendarID: string, visible: boolean): $CancellablePromise<void> {

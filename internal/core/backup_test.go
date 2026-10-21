@@ -136,6 +136,9 @@ func seedBackupData(t *testing.T, s *Service) seeded {
 	if err := s.store.SetCalendarColor(store.CalendarID(demo.GmailAccountID, "cal-home"), "#ff0000"); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.store.SetCalendarRemindersMuted(store.CalendarID(demo.GmailAccountID, "cal-home"), true); err != nil {
+		t.Fatal(err)
+	}
 	return out
 }
 
@@ -231,7 +234,7 @@ func TestBackupRoundTrip(t *testing.T) {
 	}
 	team, _ := b.store.Calendar(store.CalendarID(demo.GmailAccountID, "cal-team"))
 	home, _ := b.store.Calendar(store.CalendarID(demo.GmailAccountID, "cal-home"))
-	if team.Visible || !home.Visible || home.Color != "#ff0000" || team.Color != "#00ff00" {
+	if team.Visible || !home.Visible || home.Color != "#ff0000" || team.Color != "#00ff00" || !home.Muted || team.Muted {
 		t.Fatalf("calendars team=%+v home=%+v", team.Calendar, home.Calendar)
 	}
 

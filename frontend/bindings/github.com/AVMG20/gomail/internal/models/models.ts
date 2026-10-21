@@ -240,6 +240,12 @@ export interface Calendar {
     "visible": boolean;
 
     /**
+     * Muted: shown, but its events never remind (SetCalendarMuted). Hidden
+     * calendars don't remind either.
+     */
+    "muted": boolean;
+
+    /**
      * VideoCallProvider is what EventInput.addVideoCall creates here:
      * "meet" (Google Meet), "teams" (Microsoft Teams), "skype" (personal
      * Microsoft accounts that only allow Skype) or "" (not supported).

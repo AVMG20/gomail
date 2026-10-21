@@ -625,6 +625,14 @@ class MockBackend {
     this.cal.setVisible(id, visible)
   }
 
+  async SetCalendarMuted(id: string, muted: boolean): Promise<void> {
+    await latency(20, 60)
+    const c = this.cal.calendars.find((x) => x.id === id)
+    if (!c) throw new Error('calendar not found')
+    c.muted = muted
+    this.emit('calendar:changed', { accountId: c.accountId })
+  }
+
   async SetCalendarColor(id: string, color: string): Promise<void> {
     await latency(20, 60)
     const c = this.cal.calendars.find((x) => x.id === id)

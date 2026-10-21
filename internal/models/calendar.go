@@ -13,6 +13,9 @@ type Calendar struct {
 	Primary   bool   `json:"primary"`
 	CanEdit   bool   `json:"canEdit"` // owner/writer: events can be created and changed
 	Visible   bool   `json:"visible"` // shown in the unified view (SetCalendarVisible)
+	// Muted: shown, but its events never remind (SetCalendarMuted). Hidden
+	// calendars don't remind either.
+	Muted bool `json:"muted"`
 	// VideoCallProvider is what EventInput.addVideoCall creates here:
 	// "meet" (Google Meet), "teams" (Microsoft Teams), "skype" (personal
 	// Microsoft accounts that only allow Skype) or "" (not supported).

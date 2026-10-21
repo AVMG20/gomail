@@ -28,12 +28,13 @@ type LabelMark struct {
 	Confidence float64 `json:"confidence,omitempty"`
 }
 
-// CalendarPref is the user's visibility and color choice for a calendar,
-// keyed by the provider's remote calendar id.
+// CalendarPref is the user's visibility, color and reminder choice for a
+// calendar, keyed by the provider's remote calendar id.
 type CalendarPref struct {
 	RemoteID string `json:"remoteId"`
 	Visible  bool   `json:"visible"`
 	Color    string `json:"color,omitempty"` // "" = the provider's color
+	Muted    bool   `json:"muted,omitempty"` // no reminders
 }
 
 func validMark(kind string) bool {
@@ -205,8 +206,8 @@ func (s *Store) ExportCalendarPrefs(accountID string) ([]CalendarPref, error) {
 		return nil, err
 	}
 	rows, err := s.db.Query(`
-		SELECT remote_id, visible, color_override FROM calendars WHERE account_id = ?1 AND (visible = 0 OR color_override != '')
-		UNION SELECT remote_id, visible, color FROM pending_calendars WHERE provider = ?2 AND email = ?3
+		SELECT remote_id, visible, color_override, muted FROM calendars WHERE account_id = ?1 AND (visible = 0 OR color_override != '' OR muted = 1)
+		UNION SELECT remote_id, visible, color, muted FROM pending_calendars WHERE provider = ?2 AND email = ?3
 			AND remote_id NOT IN (SELECT remote_id FROM calendars WHERE account_id = ?1)
 		ORDER BY 1`, accountID, provider, email)
 	if err != nil {
@@ -216,11 +217,11 @@ func (s *Store) ExportCalendarPrefs(accountID string) ([]CalendarPref, error) {
 	out := []CalendarPref{}
 	for rows.Next() {
 		var p CalendarPref
-		var vis int
-		if err := rows.Scan(&p.RemoteID, &vis, &p.Color); err != nil {
+		var vis, muted int
+		if err := rows.Scan(&p.RemoteID, &vis, &p.Color, &muted); err != nil {
 			return nil, err
 		}
-		p.Visible = vis == 1
+		p.Visible, p.Muted = vis == 1, muted == 1
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -236,8 +237,8 @@ func (s *Store) AddPendingCalendars(provider, email string, prefs []CalendarPref
 			if p.RemoteID == "" {
 				continue
 			}
-			if _, err := tx.Exec(`INSERT OR REPLACE INTO pending_calendars(provider, email, remote_id, visible, color) VALUES(?,?,?,?,?)`,
-				provider, email, p.RemoteID, boolInt(p.Visible), p.Color); err != nil {
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO pending_calendars(provider, email, remote_id, visible, color, muted) VALUES(?,?,?,?,?,?)`,
+				provider, email, p.RemoteID, boolInt(p.Visible), p.Color, boolInt(p.Muted)); err != nil {
 				return err
 			}
 			n++
@@ -263,7 +264,8 @@ func applyPendingCalendars(tx *sql.Tx, accountID string) error {
 		return nil // account gone: nothing to apply
 	}
 	const pick = `FROM pending_calendars p WHERE p.provider = ?2 AND p.email = ?3 AND p.remote_id = calendars.remote_id`
-	if _, err := tx.Exec(`UPDATE calendars SET visible = (SELECT p.visible `+pick+`), color_override = (SELECT p.color `+pick+`)
+	if _, err := tx.Exec(`UPDATE calendars SET visible = (SELECT p.visible `+pick+`), color_override = (SELECT p.color `+pick+`),
+		muted = (SELECT p.muted `+pick+`)
 		WHERE account_id = ?1 AND remote_id IN (SELECT remote_id FROM pending_calendars WHERE provider = ?2 AND email = ?3)`,
 		accountID, provider, email); err != nil {
 		return err
