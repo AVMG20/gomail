@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"time"
 )
 
 // A synced document is a map of keys to entries, merged per key: the
 // entry written last wins (last-writer-wins). A deleted key keeps a
-// tombstone so the deletion spreads; tombstones are forgotten after
-// tombstoneTTL. Timestamps are the writing device's clock in Unix ms; 0
-// marks a value a device had before it first synced, so the synced value
-// wins over it.
+// tombstone, for good, so the deletion spreads to a device that was away
+// for a long time too. Timestamps are Unix ms from a hybrid clock: the
+// writing device's clock, but never below a timestamp the device has
+// already seen (see stamp), so a device whose clock is behind still wins
+// with a later change. 0 marks a value a joining device had before it
+// first synced, so the synced value wins over it.
 type Entry struct {
 	V json.RawMessage `json:"v,omitempty"`
 	T int64           `json:"t"`
@@ -29,8 +30,6 @@ type docBody struct {
 	Version int     `json:"version"`
 	Entries Entries `json:"entries"`
 }
-
-var tombstoneTTL = 180 * 24 * time.Hour
 
 func (e Entry) equal(o Entry) bool {
 	return e.T == o.T && e.D == o.D && bytes.Equal(e.V, o.V)
@@ -60,9 +59,8 @@ func (es Entries) clone() Entries {
 // when merging), so every device settles on the same value.
 func newer(a, b Entry) bool { return a.T > b.T }
 
-// merge combines this device's entries with the server's, dropping
-// tombstones older than tombstoneTTL.
-func merge(mine, theirs Entries, now time.Time) Entries {
+// merge combines this device's entries with the server's.
+func merge(mine, theirs Entries) Entries {
 	out := make(Entries, len(mine)+len(theirs))
 	for k, e := range theirs {
 		out[k] = e
@@ -72,13 +70,20 @@ func merge(mine, theirs Entries, now time.Time) Entries {
 			out[k] = e
 		}
 	}
-	cutoff := now.Add(-tombstoneTTL).UnixMilli()
-	for k, e := range out {
-		if e.D && e.T < cutoff {
-			delete(out, k)
+	return out
+}
+
+// stamp is the timestamp of a change made now: the clock, or just after
+// the latest timestamp in the given entries when the clock is behind it.
+func stamp(now int64, seen ...Entries) int64 {
+	for _, es := range seen {
+		for _, e := range es {
+			if e.T >= now {
+				now = e.T + 1
+			}
 		}
 	}
-	return out
+	return now
 }
 
 func encodeDoc(es Entries) ([]byte, error) {
@@ -99,8 +104,12 @@ func decodeDoc(data []byte) (Entries, error) {
 	return b.Entries, nil
 }
 
-// compact returns v as compact JSON, so equal values compare equal.
+// compact returns v as compact JSON, so equal values compare equal. No
+// value is null (never a deletion).
 func compact(v json.RawMessage) json.RawMessage {
+	if len(bytes.TrimSpace(v)) == 0 {
+		return json.RawMessage("null")
+	}
 	var b bytes.Buffer
 	if json.Compact(&b, v) != nil {
 		return v

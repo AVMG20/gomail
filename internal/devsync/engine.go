@@ -8,19 +8,25 @@
 // or two.
 //
 // Each document keeps a local shadow: the entries as last merged. A
-// round compares the app's current values with the shadow to find local
-// changes, merges them with the server's copy, applies what other devices
-// changed, and uploads when the server lacks something. Applying a value
-// makes the app's state equal the shadow, so it is never sent back (no
-// echo).
+// round fetches the server's copy when it changed, compares the app's
+// current values with the shadow to find local changes, merges them with
+// the server's copy, applies what other devices changed, and uploads when
+// the server lacks something. Applying a value makes the app's state equal
+// the shadow, so it is never sent back (no echo). The shadow is saved
+// before applying, with the keys being applied marked pending: a round
+// that stops halfway re-applies them next time instead of taking them for
+// local changes.
 package devsync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -44,10 +50,13 @@ type Source interface {
 	// this device (true), or is just unknown here (false: e.g. it belongs
 	// to a mailbox this device doesn't have, so it is kept).
 	Owns(doc, key string) bool
-	// Apply sets keys to values another device wrote (nil = deleted). It
+	// Apply sets keys to values another device wrote (nil = deleted).
+	// synced looks up any key of the document as merged this round. It
 	// returns the keys it can't apply yet; they are retried each round
-	// and never count as changed here meanwhile.
-	Apply(doc string, changes map[string]json.RawMessage) (notApplied []string, err error)
+	// and never count as changed here meanwhile. A deletion it doesn't
+	// carry out (the value stays here) isn't sent back either, unless the
+	// value changes here later.
+	Apply(doc string, changes map[string]json.RawMessage, synced func(key string) (json.RawMessage, bool)) (notApplied []string, err error)
 }
 
 // StateStore persists the engine's (non-secret) state.
@@ -98,6 +107,11 @@ type config struct {
 	Server   string    `json:"server"`
 	Secrets  bool      `json:"secrets"`
 	LastSync time.Time `json:"lastSync"`
+	// Joining: this device joined with another device's code and hasn't
+	// finished a round yet. Its values then give way to the synced ones,
+	// and its sign-ins and API keys wait until it knows whether the
+	// account syncs them.
+	Joining bool `json:"joining,omitempty"`
 }
 
 type docState struct {
@@ -105,6 +119,10 @@ type docState struct {
 	Entries Entries  `json:"entries"`           // the shadow
 	Pending []string `json:"pending,omitempty"` // keys not applied yet
 	Dirty   bool     `json:"dirty,omitempty"`   // the shadow has changes the server lacks
+	// Kept: deleted keys whose value stayed here when the deletion was
+	// applied (key -> hash of that value). They aren't local changes
+	// until the value changes.
+	Kept map[string]string `json:"kept,omitempty"`
 }
 
 // Engine runs device sync.
@@ -121,9 +139,10 @@ type Engine struct {
 	lastErr string
 	last    time.Time // last round attempt (wall clock)
 
-	now    chan struct{} // a round right away (Kick)
-	cancel context.CancelFunc
-	done   chan struct{}
+	now     chan struct{} // a round right away (Kick)
+	cancel  context.CancelFunc
+	done    chan struct{}
+	stopped bool
 }
 
 // New creates an engine; Start runs it.
@@ -164,36 +183,42 @@ func (e *Engine) load() {
 	e.cl = newClient(cfg.Server, keys, e.opts.HTTP)
 }
 
-// Start runs the background loop until ctx ends or Stop.
+// Start runs the background loop until ctx ends or Stop (once: it is
+// running already otherwise).
 func (e *Engine) Start(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
 	e.mu.Lock()
-	e.cancel, e.done = cancel, make(chan struct{})
-	e.mu.Unlock()
-	go e.loop(ctx)
+	defer e.mu.Unlock()
+	if e.cancel != nil || e.stopped {
+		return
+	}
+	ctx, e.cancel = context.WithCancel(ctx)
+	e.done = make(chan struct{})
+	go e.loop(ctx, e.done)
 }
 
-// Stop ends the loop (waiting up to a few seconds for a running round).
+// Stop ends the loop and waits for a running round (its requests end
+// with the loop's context; the app's state store stays usable until it
+// returns). No round runs afterwards.
 func (e *Engine) Stop() {
 	e.mu.Lock()
 	cancel, done := e.cancel, e.done
+	e.stopped = true
 	e.mu.Unlock()
-	if cancel == nil {
-		return
+	if cancel != nil {
+		cancel()
+		<-done
 	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-	}
+	// A round started by SyncNow.
+	e.round.Lock()
+	defer e.round.Unlock()
 }
 
 // tickEvery is how often the loop checks whether a pull is due. A wall
 // clock jump of several ticks means the computer slept: it syncs then.
 const tickEvery = 15 * time.Second
 
-func (e *Engine) loop(ctx context.Context) {
-	defer close(e.done)
+func (e *Engine) loop(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	defer safe.Recover("device sync")
 	first := time.NewTimer(e.opts.Delay)
 	defer first.Stop()
@@ -261,7 +286,8 @@ func (e *Engine) Connected() bool {
 	return e.cfg != nil
 }
 
-// SecretsEnabled reports whether sign-ins and API keys sync.
+// SecretsEnabled reports whether sign-ins and API keys sync (false while
+// a joining device doesn't know yet).
 func (e *Engine) SecretsEnabled() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -329,7 +355,8 @@ func (e *Engine) Connect(ctx context.Context, p ConnectParams) error {
 	if err := e.opts.State.DeletePrefix(docKeyPrefix); err != nil {
 		return err
 	}
-	cfg := &config{Server: server, Secrets: p.Secrets || !p.Create}
+	// A joining device learns from the account whether sign-ins sync.
+	cfg := &config{Server: server, Secrets: p.Create && p.Secrets, Joining: !p.Create}
 	if err := e.opts.State.Save(configKey, cfg); err != nil {
 		return err
 	}
@@ -396,20 +423,28 @@ func (e *Engine) setSecrets(on bool) error {
 	return e.opts.State.Save(configKey, &cfg)
 }
 
+// errStopped is returned by SyncNow after Stop.
+var errStopped = errors.New("device sync has stopped")
+
 // SyncNow runs a sync round and waits for it.
 func (e *Engine) SyncNow(ctx context.Context) error {
 	e.round.Lock()
 	defer e.round.Unlock()
 	e.mu.Lock()
 	cl, keys := e.cl, e.keys
+	if e.stopped {
+		e.mu.Unlock()
+		return errStopped
+	}
 	if e.cfg == nil {
 		e.mu.Unlock()
 		return ErrNotConnected
 	}
+	joining := e.cfg.Joining
 	e.syncing, e.last = true, e.opts.Now().Round(0)
 	e.mu.Unlock()
 	e.emit()
-	err := e.syncAll(ctx, cl, keys.Enc)
+	err := e.syncAll(ctx, cl, keys.Enc, joining)
 	e.mu.Lock()
 	e.syncing = false
 	if err != nil {
@@ -418,6 +453,7 @@ func (e *Engine) SyncNow(ctx context.Context) error {
 		e.lastErr = ""
 		cfg := *e.cfg
 		cfg.LastSync = e.opts.Now().UTC().Truncate(time.Second)
+		cfg.Joining = false
 		e.cfg = &cfg
 		_ = e.opts.State.Save(configKey, &cfg)
 	}
@@ -429,7 +465,7 @@ func (e *Engine) SyncNow(ctx context.Context) error {
 	return err
 }
 
-func (e *Engine) syncAll(ctx context.Context, cl *client, encKey []byte) error {
+func (e *Engine) syncAll(ctx context.Context, cl *client, encKey []byte, joining bool) error {
 	list, err := cl.list(ctx)
 	if err != nil {
 		return err
@@ -448,7 +484,7 @@ func (e *Engine) syncAll(ctx context.Context, cl *client, encKey []byte) error {
 				continue
 			}
 			done[name] = true
-			if err := e.syncDoc(ctx, cl, encKey, name, remote[name]); err != nil {
+			if err := e.syncDoc(ctx, cl, encKey, name, remote[name], joining); err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -459,25 +495,15 @@ func (e *Engine) syncAll(ctx context.Context, cl *client, encKey []byte) error {
 	return errors.Join(errs...)
 }
 
-// syncDoc runs one document through a round: local changes into the
-// shadow, merge with the server's copy, apply other devices' changes,
-// upload when the server lacks something.
-func (e *Engine) syncDoc(ctx context.Context, cl *client, encKey []byte, name string, remoteRev int64) error {
+// syncDoc runs one document through a round: fetch the server's copy when
+// it changed, local changes into the shadow, merge, apply other devices'
+// changes, upload when the server lacks something.
+func (e *Engine) syncDoc(ctx context.Context, cl *client, encKey []byte, name string, remoteRev int64, joining bool) error {
 	for attempt := 0; ; attempt++ {
 		st, err := e.loadDoc(encKey, name)
 		if err != nil {
 			return err
 		}
-		local, err := e.opts.Source.Snapshot(name, func(k string) (json.RawMessage, bool) {
-			en, ok := st.Entries[k]
-			return en.V, ok && !en.D
-		})
-		if err != nil {
-			return err
-		}
-		now := e.opts.Now()
-		mine := localChanges(st, local, func(k string) bool { return e.opts.Source.Owns(name, k) }, now.UnixMilli())
-
 		theirs, rev := st.Entries, st.Rev
 		if remoteRev != st.Rev {
 			theirs, rev = Entries{}, 0
@@ -496,27 +522,87 @@ func (e *Engine) syncDoc(ctx context.Context, cl *client, encKey []byte, name st
 				rev = doc.Rev
 			}
 		}
-		merged := merge(mine, theirs, now)
+		// The app's values are read after the download, so a change made
+		// meanwhile is in them (and isn't overwritten by an older one).
+		local, err := e.opts.Source.Snapshot(name, func(k string) (json.RawMessage, bool) {
+			en, ok := st.Entries[k]
+			return en.V, ok && !en.D
+		})
+		if err != nil {
+			return err
+		}
+		now := stamp(e.opts.Now().UnixMilli(), st.Entries, theirs)
+		mine := localChanges(st, local, theirs, func(k string) bool { return e.opts.Source.Owns(name, k) }, now, joining)
+		merged := merge(mine, theirs)
 
 		pending := map[string]bool{}
 		for _, k := range st.Pending {
 			pending[k] = true
 		}
 		changes := map[string]json.RawMessage{}
+		kept := map[string]string{}
 		for k, m := range merged {
 			if old, ok := mine[k]; pending[k] || !ok || !m.equal(old) {
-				if m.D {
+				switch {
+				case m.D:
 					changes[k] = nil
-				} else {
+				case len(m.V) == 0:
+					changes[k] = json.RawMessage("null")
+				default:
 					changes[k] = m.V
 				}
 			}
 		}
+		for k, h := range st.Kept {
+			_, here := local[k]
+			_, applying := changes[k]
+			if merged[k].D && here && !applying {
+				kept[k] = h
+			}
+		}
+		dirty := st.Dirty || !merged.equal(theirs)
 		var notApplied []string
 		if len(changes) > 0 {
-			if notApplied, err = e.opts.Source.Apply(name, changes); err != nil {
+			// Saved first, with the keys being applied pending: if this
+			// round stops before the end, the next one applies them again
+			// rather than taking them for changes made here.
+			applying := slices.Collect(maps.Keys(changes))
+			for _, k := range st.Pending {
+				if !slices.Contains(applying, k) {
+					applying = append(applying, k)
+				}
+			}
+			slices.Sort(applying)
+			before := docState{Rev: rev, Entries: merged, Pending: applying, Dirty: dirty, Kept: kept}
+			if err := e.saveDoc(encKey, name, before); err != nil {
 				return err
 			}
+			if notApplied, err = e.opts.Source.Apply(name, changes, func(k string) (json.RawMessage, bool) {
+				en, ok := merged[k]
+				return en.V, ok && !en.D
+			}); err != nil {
+				return err
+			}
+			st.Pending = applying // what is saved now
+			if slices.ContainsFunc(slices.Collect(maps.Values(changes)), func(v json.RawMessage) bool { return v == nil }) {
+				// Deletions the app didn't carry out: those values stay
+				// here, and aren't changes to send back.
+				after, err := e.opts.Source.Snapshot(name, func(k string) (json.RawMessage, bool) {
+					en, ok := merged[k]
+					return en.V, ok && !en.D
+				})
+				if err != nil {
+					return err
+				}
+				for k, v := range changes {
+					if w, ok := after[k]; ok && v == nil {
+						kept[k] = valueHash(w)
+					}
+				}
+			}
+		}
+		if len(kept) == 0 {
+			kept = nil
 		}
 		var nextPending []string
 		for _, k := range notApplied {
@@ -525,9 +611,8 @@ func (e *Engine) syncDoc(ctx context.Context, cl *client, encKey []byte, name st
 			}
 		}
 		slices.Sort(nextPending)
-		dirty := st.Dirty || !merged.equal(theirs)
-		if dirty != st.Dirty || rev != st.Rev || !slices.Equal(nextPending, st.Pending) || !merged.equal(st.Entries) {
-			st.Entries, st.Rev, st.Pending, st.Dirty = merged, rev, nextPending, dirty
+		if dirty != st.Dirty || rev != st.Rev || !slices.Equal(nextPending, st.Pending) || !merged.equal(st.Entries) || !maps.Equal(kept, st.Kept) {
+			st.Entries, st.Rev, st.Pending, st.Dirty, st.Kept = merged, rev, nextPending, dirty, kept
 			if err := e.saveDoc(encKey, name, st); err != nil {
 				return err
 			}
@@ -558,10 +643,11 @@ func (e *Engine) syncDoc(ctx context.Context, cl *client, encKey []byte, name st
 }
 
 // localChanges returns the shadow updated with this device's changes: new
-// or changed values, and tombstones for owned keys that are gone. A value
-// the shadow never had gets timestamp 0, so a value another device synced
-// wins over it (a device joining takes the synced settings).
-func localChanges(st docState, local map[string]json.RawMessage, owns func(string) bool, now int64) Entries {
+// or changed values, and tombstones for owned keys that are gone, stamped
+// now. While joining, a value the shadow never had gets timestamp 0, so
+// the value another device synced wins over it, unless the synced key is
+// deleted: what this device has is kept (it adds what only it has).
+func localChanges(st docState, local map[string]json.RawMessage, theirs Entries, owns func(string) bool, now int64, joining bool) Entries {
 	mine := st.Entries.clone()
 	pending := map[string]bool{}
 	for _, k := range st.Pending {
@@ -576,8 +662,11 @@ func localChanges(st docState, local map[string]json.RawMessage, owns func(strin
 		if ok && !old.D && string(old.V) == string(v) {
 			continue
 		}
+		if ok && old.D && st.Kept[k] != "" && st.Kept[k] == valueHash(v) {
+			continue // a deletion this device didn't carry out
+		}
 		t := now
-		if !ok {
+		if !ok && joining && !theirs[k].D {
 			t = 0
 		}
 		mine[k] = Entry{V: v, T: t}
@@ -591,6 +680,12 @@ func localChanges(st docState, local map[string]json.RawMessage, owns func(strin
 		}
 	}
 	return mine
+}
+
+// valueHash identifies a value in Kept (the shadow needn't hold it).
+func valueHash(v json.RawMessage) string {
+	h := sha256.Sum256(compact(v))
+	return hex.EncodeToString(h[:12])
 }
 
 // Shadows hold synced sign-ins and API keys, so they are stored encrypted

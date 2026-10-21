@@ -308,7 +308,7 @@ func (src syncSource) Owns(doc, key string) bool {
 	return false
 }
 
-func (src syncSource) Apply(doc string, changes map[string]json.RawMessage) ([]string, error) {
+func (src syncSource) Apply(doc string, changes map[string]json.RawMessage, _ func(string) (json.RawMessage, bool)) ([]string, error) {
 	s := src.s
 	var apply func(map[string]json.RawMessage) ([]string, error)
 	switch {

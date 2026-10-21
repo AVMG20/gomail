@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,7 +165,7 @@ func TestMergeLastWriterWins(t *testing.T) {
 		"c": {V: v("mine"), T: 0},          // known here before syncing
 		"d": {T: now.UnixMilli(), D: true}, // a recent deletion
 		"e": {V: v("only mine"), T: 5},
-		"f": {T: now.Add(-tombstoneTTL - time.Hour).UnixMilli(), D: true},
+		"f": {T: 1, D: true}, // deletions are kept, however old
 	}
 	theirs := Entries{
 		"a": {V: v("theirs"), T: 10},
@@ -172,17 +174,27 @@ func TestMergeLastWriterWins(t *testing.T) {
 		"d": {V: v("theirs"), T: now.UnixMilli() - 1},
 		"g": {V: v("only theirs"), T: 1},
 	}
-	got := merge(mine, theirs, now)
+	got := merge(mine, theirs)
 	want := Entries{
 		"a": {V: v("mine"), T: 20},
 		"b": {V: v("theirs"), T: 20},
 		"c": {V: v("theirs"), T: 0}, // ties go to the server's copy
 		"d": {T: now.UnixMilli(), D: true},
 		"e": {V: v("only mine"), T: 5},
+		"f": {T: 1, D: true},
 		"g": {V: v("only theirs"), T: 1},
 	}
 	if !got.equal(want) {
 		t.Fatalf("merge:\n%v\nwant\n%v", got, want)
+	}
+
+	// A change is stamped after everything this device has seen, however
+	// far behind its clock is.
+	if got := stamp(500, Entries{"x": {T: 400}}, Entries{"y": {T: 900}}); got != 901 {
+		t.Fatalf("stamp %d", got)
+	}
+	if got := stamp(500, Entries{"x": {T: 400}}); got != 500 {
+		t.Fatalf("stamp %d", got)
 	}
 }
 
@@ -201,9 +213,10 @@ func TestLocalChanges(t *testing.T) {
 		"new":     json.RawMessage(`3`),
 		"waiting": json.RawMessage(`9`),
 		"dead":    json.RawMessage(`4`),
+		"nil":     nil,
 	}
 	owns := func(k string) bool { return k != "foreign" }
-	got := localChanges(st, local, owns, 100)
+	got := localChanges(st, local, Entries{}, owns, 100, false)
 	want := Entries{
 		"same":    {V: json.RawMessage(`1`), T: 5},
 		"changed": {V: json.RawMessage(`2`), T: 100},
@@ -211,10 +224,19 @@ func TestLocalChanges(t *testing.T) {
 		"foreign": {V: json.RawMessage(`1`), T: 5},
 		"waiting": {V: json.RawMessage(`1`), T: 5}, // not applied yet: not a local change
 		"dead":    {V: json.RawMessage(`4`), T: 100},
-		"new":     {V: json.RawMessage(`3`), T: 0},
+		"new":     {V: json.RawMessage(`3`), T: 100},
+		"nil":     {V: json.RawMessage(`null`), T: 100}, // a value, not a deletion
 	}
 	if !got.equal(want) {
 		t.Fatalf("local changes:\n%v\nwant\n%v", got, want)
+	}
+
+	// A joining device's values give way to the synced ones, but not to
+	// deletions: what it has stays.
+	got = localChanges(docState{Entries: Entries{}}, map[string]json.RawMessage{"a": json.RawMessage(`1`), "b": json.RawMessage(`2`)},
+		Entries{"b": {T: 50, D: true}}, owns, 100, true)
+	if want := (Entries{"a": {V: json.RawMessage(`1`), T: 0}, "b": {V: json.RawMessage(`2`), T: 100}}); !got.equal(want) {
+		t.Fatalf("joining:\n%v\nwant\n%v", got, want)
 	}
 }
 
@@ -229,6 +251,8 @@ type memSource struct {
 	snapshot int
 	// onSnapshot runs once, after the next snapshot (to race another device).
 	onSnapshot func()
+	// keep: deletions of these keys aren't carried out (Apply leaves them).
+	keep map[string]bool
 }
 
 func (m *memSource) Docs() []string { return []string{"prefs"} }
@@ -255,7 +279,7 @@ func (m *memSource) Owns(_, key string) bool {
 	return !m.foreign[key]
 }
 
-func (m *memSource) Apply(_ string, changes map[string]json.RawMessage) ([]string, error) {
+func (m *memSource) Apply(_ string, changes map[string]json.RawMessage, _ func(string) (json.RawMessage, bool)) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var later []string
@@ -266,7 +290,9 @@ func (m *memSource) Apply(_ string, changes map[string]json.RawMessage) ([]strin
 		}
 		m.applied++
 		if v == nil {
-			delete(m.vals, k)
+			if !m.keep[k] {
+				delete(m.vals, k)
+			}
 			continue
 		}
 		var s string
@@ -546,11 +572,12 @@ func TestReconnectAfterRestart(t *testing.T) {
 	}
 	a.tick(time.Minute)
 	a.src.set("k", "w")
+	before := docRevs(t, url, a)
 	if err := again.SyncNow(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if revs := docRevs(t, url, a); revs["prefs"] != 2 {
-		t.Fatalf("revisions %v", revs)
+	if revs := docRevs(t, url, a); revs["prefs"] <= before["prefs"] {
+		t.Fatalf("revisions %v -> %v", before, revs)
 	}
 }
 
@@ -575,7 +602,20 @@ func TestConnectErrors(t *testing.T) {
 }
 
 func TestConflictRetry(t *testing.T) {
-	_, url := newSyncServer(t)
+	srv, _ := newSyncServer(t)
+	var puts atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, r)
+		if r.Method == http.MethodPut && rec.Code == http.StatusOK {
+			puts.Add(1)
+		}
+		maps.Copy(w.Header(), rec.Header())
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+	}))
+	t.Cleanup(ts.Close)
+	url := ts.URL
 	a := newDevice(t, map[string]string{"x": "1", "y": "1"})
 	b := newDevice(t, map[string]string{})
 	for i, d := range []*device{a, b} {
@@ -600,8 +640,8 @@ func TestConflictRetry(t *testing.T) {
 			t.Fatalf("%s: %v", name, got)
 		}
 	}
-	if revs := docRevs(t, url, a); revs["prefs"] != 3 {
-		t.Fatalf("revisions %v (want a's upload, then b's merged one)", revs)
+	if n := puts.Load(); n != 3 {
+		t.Fatalf("%d uploads (want the first, a's, then b's merged one)", n)
 	}
 }
 
