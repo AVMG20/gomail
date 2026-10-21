@@ -127,7 +127,7 @@ export const USED_METHODS = [
 /** Calendar (backend calendar pass). The UI hides the calendar when ListCalendars is missing. */
 export const CALENDAR_METHODS = ['ListCalendars', 'SetCalendarVisible', 'SetCalendarColor', 'SetAccountCalendarEnabled', 'SetAccountCalendarMuted', 'EnableCalendar', 'ListEvents', 'GetEvent', 'CreateEvent', 'UpdateEvent', 'DeleteEvent', 'RespondToEvent', 'MoveEventCheck', 'SyncCalendars']
 
-export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'RestoreLabel', 'ApplyLabelAction', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
+export const OPTIONAL_METHODS = ['GetAIUsage', 'UpdateAccountSignature', 'ImportAccountSignature', 'ReorderAccounts', 'AutoMoves', 'SearchContacts', 'EmptyFolder', 'DeleteFolder', 'RestoreLabel', 'ApplyLabelAction', 'MarkFolderRead', 'GetMessageWithRemoteContent', 'LoadOlder', 'ReauthAccount', 'Unsubscribe', 'GetAttachmentData', 'SaveDraft', 'DeleteDraft', 'RefreshAIModels', 'CheckForUpdate', 'GetPendingCompose', 'ParseEventText', 'ApplyLabelRules', 'JunkSender', 'LabelSender', 'NotJunk', 'RemoveRules', 'TopSenders', 'SenderMessageIDs', 'ExportBackup', 'ImportBackup', ...CALENDAR_METHODS]
 
 export function missingMethods(): string[] {
   return isWails() ? USED_METHODS.filter((m) => !boundFn(m)) : []
@@ -463,6 +463,8 @@ export const api = {
   /** A mailto: link that launched the app before the UI was ready (returned once), or null. */
   getPendingCompose: () => call<EventPayloads['compose:open'] | null>('GetPendingCompose'),
   updateAccountSignature: (id: string, html: string) => call<void>('UpdateAccountSignature', id, html),
+  /** Copies the signature set in Gmail into the account; returns the stored HTML. */
+  importAccountSignature: (id: string) => call<string>('ImportAccountSignature', id),
   /** Frequency-ranked contacts from all mail (backend pass 3). */
   searchContacts: async (query: string, limit = 8): Promise<Contact[]> => (await call<Contact[] | null>('SearchContacts', query, limit)) ?? [],
   emptyFolder: (folderId: string) => call<void>('EmptyFolder', folderId),

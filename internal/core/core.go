@@ -581,6 +581,8 @@ func (s *Service) AddAccount(kind string) (models.Account, error) {
 		}
 		slog.Info("account added", "provider", kind, "account", acct.ID)
 		s.labelsGainAccount(acct.ID)
+		id := acct.ID
+		s.goBG(func() { s.importSignatureIfEmpty(id) })
 	} else if err := auth.SaveToken(s.secrets, acct.ID, tok); err != nil {
 		return models.Account{}, fmt.Errorf("could not store the sign-in securely: %w", err)
 	} else {
@@ -697,6 +699,47 @@ func (s *Service) ReorderAccounts(ids []string) error {
 // SyncNow syncs an account ("" = all) and waits for it.
 func (s *Service) SyncNow(accountID string) error {
 	return s.engine.SyncNow(s.ctx, accountID)
+}
+
+// ImportAccountSignature copies the signature set in the provider's web mail
+// (Gmail) into the account and returns it.
+func (s *Service) ImportAccountSignature(accountID string) (string, error) {
+	acct, err := s.store.Account(accountID)
+	if err != nil {
+		return "", errors.New("account not found")
+	}
+	p, err := s.provider(accountID)
+	if err != nil {
+		return "", err
+	}
+	src, ok := p.(provider.SignatureSource)
+	if !ok {
+		return "", errors.New("this mailbox doesn't share its signature with other apps; copy it from your web mail and paste it here")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+	html, err := src.Signature(ctx, acct.Email)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(mailmime.HTMLToText(html)) == "" && !strings.Contains(strings.ToLower(html), "<img") {
+		return "", errors.New("no signature is set for " + acct.Email + " in Gmail")
+	}
+	if err := s.UpdateAccountSignature(accountID, html); err != nil {
+		return "", err
+	}
+	acct, err = s.store.Account(accountID)
+	return acct.Signature, err
+}
+
+// importSignatureIfEmpty fills a new account's signature from its web mail.
+func (s *Service) importSignatureIfEmpty(accountID string) {
+	if a, err := s.store.Account(accountID); err != nil || a.Signature != "" {
+		return
+	}
+	if _, err := s.ImportAccountSignature(accountID); err != nil {
+		slog.Info("signature not imported", "account", accountID, "err", err)
+	}
 }
 
 // UpdateAccountSignature stores a sanitized HTML signature.

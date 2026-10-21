@@ -87,7 +87,7 @@ func quotaCost(method, path string) float64 {
 	}
 	path, _, _ = strings.Cut(path, "?")
 	switch {
-	case path == "profile" || (strings.HasPrefix(path, "labels") && method == http.MethodGet):
+	case path == "profile" || path == "settings/sendAs" || (strings.HasPrefix(path, "labels") && method == http.MethodGet):
 		return 1
 	case path == "history":
 		return 2
@@ -1161,4 +1161,39 @@ func (c *Client) DeleteFolder(ctx context.Context, folder mail.Folder) error {
 	return provider.ErrUnsupported
 }
 
-var _ provider.Provider = (*Client)(nil)
+type gSendAs struct {
+	SendAsEmail string `json:"sendAsEmail"`
+	Signature   string `json:"signature"`
+	IsPrimary   bool   `json:"isPrimary"`
+	IsDefault   bool   `json:"isDefault"`
+}
+
+// Signature returns the signature Gmail uses for email: the send-as address
+// itself, else the default address. Gmail keeps one per address: the one
+// picked under "Signature defaults" for new email.
+func (c *Client) Signature(ctx context.Context, email string) (string, error) {
+	var resp struct {
+		SendAs []gSendAs `json:"sendAs"`
+	}
+	if err := c.api.JSON(ctx, http.MethodGet, "settings/sendAs", nil, &resp); err != nil {
+		return "", err
+	}
+	var pick *gSendAs
+	for i, sa := range resp.SendAs {
+		switch {
+		case strings.EqualFold(sa.SendAsEmail, email):
+			return sa.Signature, nil
+		case sa.IsDefault, pick == nil && sa.IsPrimary:
+			pick = &resp.SendAs[i]
+		}
+	}
+	if pick == nil {
+		return "", nil
+	}
+	return pick.Signature, nil
+}
+
+var (
+	_ provider.Provider        = (*Client)(nil)
+	_ provider.SignatureSource = (*Client)(nil)
+)

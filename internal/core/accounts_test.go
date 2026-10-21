@@ -318,3 +318,43 @@ func TestCloseFlushesCoalescedDraft(t *testing.T) {
 	}
 	t.Fatal("draft not found")
 }
+
+func TestImportAccountSignature(t *testing.T) {
+	e := newRealEnv(t)
+	sig := `<table style="border-collapse:collapse"><tr><td><img src="https://example.com/logo.png" height="85"></td>` +
+		`<td><p style="margin:1px">Carol</p><script>x()</script></td></tr></table>`
+	e.gmail.SetSignature(sig)
+	g, err := e.s.AddAccount(models.ProviderGmail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A new mailbox picks up its Gmail signature by itself.
+	waitFor(t, "signature imported", func() bool {
+		a, _ := e.s.store.Account(g.ID)
+		return strings.Contains(a.Signature, "logo.png")
+	})
+	a, _ := e.s.store.Account(g.ID)
+	if strings.Contains(a.Signature, "script") || strings.Contains(a.Signature, "alias") || !strings.Contains(a.Signature, "border-collapse") {
+		t.Fatalf("signature %q", a.Signature)
+	}
+
+	e.gmail.SetSignature("<p>New</p>")
+	if got, err := e.s.ImportAccountSignature(g.ID); err != nil || got != "<p>New</p>" {
+		t.Fatalf("import %q %v", got, err)
+	}
+	e.gmail.SetSignature("<div><br></div>")
+	if _, err := e.s.ImportAccountSignature(g.ID); err == nil || !strings.Contains(err.Error(), "no signature") {
+		t.Fatalf("empty import err %v", err)
+	}
+	if a, _ := e.s.store.Account(g.ID); a.Signature != "<p>New</p>" {
+		t.Fatalf("empty import replaced the signature: %q", a.Signature)
+	}
+
+	o, err := e.s.AddAccount(models.ProviderOutlook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.ImportAccountSignature(o.ID); err == nil || !strings.Contains(err.Error(), "paste it") {
+		t.Fatalf("outlook import err %v", err)
+	}
+}

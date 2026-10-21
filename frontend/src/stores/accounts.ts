@@ -118,6 +118,14 @@ export const useAccountsStore = defineStore('accounts', () => {
     else writeLocal(`sig:${id}`, html)
   }
 
+  /** Copies the signature set in the provider's web mail (Gmail); returns it. */
+  async function importSignature(id: string): Promise<string> {
+    const html = await api.importAccountSignature(id)
+    const a = accounts.value.find((x) => x.id === id)
+    if (a) a.signature = html
+    return html
+  }
+
   async function load() {
     accounts.value = withSignatures(await api.getAccounts())
     await Promise.all([loadFolders(), loadLabelCounts()])
@@ -206,6 +214,6 @@ export const useAccountsStore = defineStore('accounts', () => {
   return {
     setAccountColor, moveAccount,
     accounts, folders, labelCounts, labelTotals, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
-    load, saveSignature, loadFolders, deleteFolder, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
+    load, saveSignature, importSignature, loadFolders, deleteFolder, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })

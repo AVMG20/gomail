@@ -431,6 +431,16 @@ class MockBackend {
     return { ...this.usage, dailyBudgetUsd: daily, budgetReached: daily > 0 && this.usage.todayUsd >= daily }
   }
 
+  async ImportAccountSignature(id: string): Promise<string> {
+    await latency(200, 400)
+    const a = this.accounts.find((x) => x.id === id)
+    if (!a) throw new Error('account not found')
+    if (a.provider !== 'gmail') throw new Error("this mailbox doesn't share its signature with other apps; copy it from your web mail and paste it here")
+    a.signature = `<table style="border-collapse:collapse"><tr><td style="padding:0 10px 0 0"><img src="https://placehold.co/85x85/png" height="85" style="display:block"></td><td><p style="margin:1px"><b>${a.displayName}</b></p><p style="margin:1px">${a.email}</p></td></tr></table>`
+    this.emit('accounts:changed', { accountId: id })
+    return a.signature
+  }
+
   async UpdateAccountSignature(id: string, html: string): Promise<void> {
     await latency(40, 100)
     const a = this.accounts.find((x) => x.id === id)

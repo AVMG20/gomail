@@ -796,6 +796,17 @@ func (m *MailService) UpdateAccountSignature(accountID, html string) error {
 	return uiError(s.UpdateAccountSignature(accountID, html))
 }
 
+// ImportAccountSignature copies the account's signature from its web mail
+// (Gmail) and returns the stored HTML.
+func (m *MailService) ImportAccountSignature(accountID string) (string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return "", err
+	}
+	sig, err := s.ImportAccountSignature(accountID)
+	return sig, uiError(err)
+}
+
 // SearchContacts suggests recipients ranked by frequency and recency.
 func (m *MailService) SearchContacts(query string, limit int) ([]models.Contact, error) {
 	s, err := m.ready()

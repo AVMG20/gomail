@@ -268,6 +268,14 @@ export function GetViewLabelCounts(q: models$0.ListQuery): $CancellablePromise<m
 }
 
 /**
+ * ImportAccountSignature copies the account's signature from its web mail
+ * (Gmail) and returns the stored HTML.
+ */
+export function ImportAccountSignature(accountID: string): $CancellablePromise<string> {
+    return $Call.ByID(1248414920, accountID);
+}
+
+/**
  * ImportBackup asks for a backup file and merges it into this install.
  * Restored accounts need a sign-in (ReauthAccount).
  */

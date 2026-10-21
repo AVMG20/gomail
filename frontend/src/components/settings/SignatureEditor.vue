@@ -4,19 +4,23 @@ import { EditorContent, useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { Placeholder } from '@tiptap/extensions'
 import { BoldIcon, CodeIcon, ItalicIcon, LinkIcon } from '@lucide/vue'
-import { cleanSignature } from '@/components/compose/signature'
+import { cleanSignature, pastedSignature, RICH_ONLY } from '@/components/compose/signature'
 
 const props = defineProps<{ modelValue: string; autofocus?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [html: string] }>()
 
-/** Markup the rich editor can't hold (it would flatten it): such signatures open in HTML mode. */
-const RICH_ONLY = /<(table|img|span|font|div|style|hr|h\d)\b|\sstyle=/i
+// Signatures with markup the rich editor can't hold open in HTML mode.
 const mode = ref<'rich' | 'html'>(RICH_ONLY.test(props.modelValue) ? 'html' : 'rich')
 const source = ref(props.modelValue)
 const preview = computed(() => cleanSignature(source.value))
 function onSource(v: string) {
   source.value = v
   emit('update:modelValue', v.trim() ? v : '')
+}
+/** A signature copied from web mail (tables, images) switches to HTML mode instead of being flattened. */
+function keepPasted(html: string) {
+  mode.value = 'html'
+  onSource(html)
 }
 function setMode(m: 'rich' | 'html') {
   if (m === mode.value) return
@@ -33,7 +37,18 @@ const editor = useEditor({
     StarterKit.configure({ heading: false, codeBlock: false, code: false, horizontalRule: false, blockquote: false, link: { openOnClick: false, autolink: true } }),
     Placeholder.configure({ placeholder: 'Add a signature…' }),
   ],
-  editorProps: { attributes: { class: 'compose-editor-content', 'aria-label': 'Signature' } },
+  editorProps: {
+    attributes: { class: 'compose-editor-content', 'aria-label': 'Signature' },
+    handlePaste: (_view, event) => {
+      const html = pastedSignature(event.clipboardData?.getData('text/html') ?? '')
+      const ed = editor.value
+      if (!html || !ed) return false
+      const { from, to } = ed.state.selection
+      const replaceAll = ed.isEmpty || (from <= 1 && to >= ed.state.doc.content.size - 1)
+      keepPasted(replaceAll ? html : ed.getHTML() + html)
+      return true
+    },
+  },
   onUpdate: ({ editor: ed }) => emit('update:modelValue', ed.isEmpty ? '' : ed.getHTML()),
 })
 
@@ -42,6 +57,15 @@ watch(() => props.modelValue, (v) => {
   if (editor.value && v !== editor.value.getHTML() && !(v === '' && editor.value.isEmpty)) editor.value.commands.setContent(v, { emitUpdate: false })
 })
 onBeforeUnmount(() => editor.value?.destroy())
+
+/** Pasting a copied (rendered) signature into the HTML box inserts its markup, not its plain text. */
+function onSourcePaste(e: ClipboardEvent) {
+  const html = pastedSignature(e.clipboardData?.getData('text/html') ?? '')
+  if (!html || /^\s*</.test(e.clipboardData?.getData('text/plain') ?? '')) return
+  e.preventDefault()
+  const ta = e.target as HTMLTextAreaElement
+  keepPasted(ta.value.slice(0, ta.selectionStart) + html + ta.value.slice(ta.selectionEnd))
+}
 
 function toggleLink() {
   const ed = editor.value
@@ -64,7 +88,7 @@ function toggleLink() {
         <button type="button" :class="['tb', editor.isActive('italic') && 'tb-on']" aria-label="Italic" @click="editor.chain().focus().toggleItalic().run()"><ItalicIcon class="size-3.5" /></button>
         <button type="button" :class="['tb', editor.isActive('link') && 'tb-on']" aria-label="Link selected text" title="Select text, then click to link it" @click="toggleLink"><LinkIcon class="size-3.5" /></button>
       </template>
-      <span v-else class="text-muted-foreground px-1 text-[11px]">Paste or write HTML: images, tables and inline styles are kept.</span>
+      <span v-else class="text-muted-foreground px-1 text-[11px]">Paste a copied signature or HTML: images, tables and inline styles are kept.</span>
       <span class="flex-1" />
       <div class="bg-muted inline-flex rounded p-0.5" role="radiogroup" aria-label="Signature editor">
         <button v-for="o in [{ v: 'rich', l: 'Editor' }, { v: 'html', l: 'HTML' }] as const" :key="o.v" type="button" role="radio" :aria-checked="mode === o.v"
@@ -81,6 +105,7 @@ function toggleLink() {
         placeholder="<p>Alex Morgan<br><img src=&quot;https://…/logo.png&quot; width=&quot;120&quot;></p>"
         class="bg-transparent block min-h-24 w-full resize-y px-3 py-2 font-mono text-[12px] outline-none"
         @input="onSource(($event.target as HTMLTextAreaElement).value)"
+        @paste="onSourcePaste"
       />
       <div v-if="source.trim()" class="border-border border-t px-3 py-2">
         <div class="text-muted-foreground mb-1 text-[10.5px] font-medium tracking-wide uppercase">Preview</div>

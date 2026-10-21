@@ -3,7 +3,7 @@
 // (General, Notifications, Labels & rules, Jev, Calendar). App-wide settings stay on the App
 // pages; the overviews there (Notifications, AI, Calendar) edit the same per-mailbox values.
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
-import { BellOffIcon, KeyRoundIcon, LoaderIcon, RefreshCwIcon, SparklesIcon, Trash2Icon } from '@lucide/vue'
+import { BellOffIcon, DownloadIcon, KeyRoundIcon, LoaderIcon, RefreshCwIcon, SparklesIcon, Trash2Icon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -98,6 +98,34 @@ function saveSig(id: string, html: string) {
   sigTimer = setTimeout(() => {
     accounts.saveSignature(id, html).catch((e) => toast.error('Could not save signature', { description: errorMessage(e) }))
   }, 700)
+}
+
+const sigKey = ref(0)
+const canImportSig = computed(() => hasMethod('ImportAccountSignature') && a.value?.provider === 'gmail')
+const sigDescription = computed(() => {
+  if (a.value?.signature) return 'Added below new messages and replies from this mailbox.'
+  if (canImportSig.value) return 'No signature yet. Import the one you use in Gmail, or paste a copied one.'
+  return 'No signature yet. Copy yours from Outlook on the web and paste it here: images and layout are kept.'
+})
+const importingSig = ref(false)
+async function importSig() {
+  const acc = a.value
+  if (!acc || importingSig.value) return
+  if (sigTimer) clearTimeout(sigTimer)
+  const prev = acc.signature ?? ''
+  importingSig.value = true
+  try {
+    const html = await accounts.importSignature(acc.id)
+    sigKey.value++
+    editingSig.value = true
+    toast.success('Signature imported from Gmail', {
+      action: prev && prev !== html ? { label: 'Undo', onClick: () => { accounts.saveSignature(acc.id, prev).then(() => sigKey.value++).catch((e) => toast.error('Could not restore the signature', { description: errorMessage(e) })) } } : undefined,
+    })
+  } catch (e) {
+    toast.error('Couldn’t import the signature', { description: errorMessage(e) })
+  } finally {
+    importingSig.value = false
+  }
 }
 
 // ---- sign-in
@@ -211,11 +239,17 @@ function labelAll() {
               </PopoverContent>
             </Popover>
           </SettingRow>
-          <SettingRow title="Signature" :description="a.signature ? 'Added below new messages and replies from this mailbox.' : 'No signature yet.'" :stacked="editingSig">
-            <Button v-if="!editingSig" size="sm" variant="outline" @click="editingSig = true">{{ a.signature ? 'Edit' : 'Add signature' }}</Button>
+          <SettingRow title="Signature" :description="sigDescription" :stacked="editingSig">
+            <div v-if="!editingSig" class="flex items-center gap-2">
+              <Button v-if="canImportSig" size="sm" variant="ghost" :disabled="importingSig" @click="importSig"><LoaderIcon v-if="importingSig" class="animate-spin" /><DownloadIcon v-else /> Import from Gmail</Button>
+              <Button size="sm" variant="outline" @click="editingSig = true">{{ a.signature ? 'Edit' : 'Add signature' }}</Button>
+            </div>
             <template v-else>
-              <SignatureEditor autofocus :model-value="a.signature ?? ''" @update:model-value="(v: string) => saveSig(a!.id, v)" />
-              <Button size="sm" variant="ghost" class="mt-2" @click="editingSig = false">Done</Button>
+              <SignatureEditor :key="sigKey" autofocus :model-value="a.signature ?? ''" @update:model-value="(v: string) => saveSig(a!.id, v)" />
+              <div class="mt-2 flex items-center gap-2">
+                <Button size="sm" variant="ghost" @click="editingSig = false">Done</Button>
+                <Button v-if="canImportSig" size="sm" variant="ghost" :disabled="importingSig" @click="importSig"><LoaderIcon v-if="importingSig" class="animate-spin" /><DownloadIcon v-else /> Import from Gmail</Button>
+              </div>
             </template>
           </SettingRow>
         </SettingSection>

@@ -13,6 +13,22 @@ export function cleanSignature(html: string): string {
   return DOMPurify.sanitize(html, { FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe'], FORBID_ATTR: ['id'] })
 }
 
+/** Markup the rich editor can't hold (it would flatten it): such signatures are kept as HTML. */
+export const RICH_ONLY = /<(table|img|span|font|div|style|hr|h\d|pre)\b|\sstyle=/i
+
+/** Pasted markup the rich editor would drop outright (styled text alone just loses its styling). */
+const PASTE_KEEP = /<(table|img|font|hr)\b/i
+
+/**
+ * The signature in a copied page fragment (text/html on the clipboard), or "" when it has no
+ * markup the rich editor would drop. The browser's <meta> wrapper and StartFragment comments
+ * don't survive sanitizing.
+ */
+export function pastedSignature(clipboardHtml: string): string {
+  const html = PASTE_KEEP.test(clipboardHtml) ? cleanSignature(clipboardHtml).trim() : ''
+  return PASTE_KEEP.test(html) ? html : ''
+}
+
 function signatureDom(html: string): HTMLElement {
   const el = document.createElement('div')
   el.setAttribute('data-signature', '')

@@ -122,6 +122,14 @@ func OlderBound(before time.Time) time.Time { return before.Truncate(time.Second
 // MaxFolderOp caps how many messages a folder-wide operation touches.
 const MaxFolderOp = 20000
 
+// SignatureSource is implemented by providers that expose the user's
+// signature as set in their web mail.
+type SignatureSource interface {
+	// Signature returns the HTML signature used when sending as email
+	// ("" when none is set).
+	Signature(ctx context.Context, email string) (string, error)
+}
+
 // ErrUnsupported is returned for operations a provider can't do.
 var ErrUnsupported = errors.New("not supported by this account")
 

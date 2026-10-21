@@ -70,6 +70,14 @@ type Gmail struct {
 	sent      []*GmailMessage
 	seq       int
 	uploads   int
+	signature string
+}
+
+// SetSignature sets the signature of the mailbox's send-as address.
+func (g *Gmail) SetSignature(html string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.signature = html
 }
 
 // Uploads counts calls to the multipart upload endpoint.
@@ -283,6 +291,11 @@ func (g *Gmail) route(w http.ResponseWriter, r *http.Request, p string, body map
 	switch {
 	case p == "profile":
 		writeJSON(w, 200, map[string]any{"emailAddress": g.email, "messagesTotal": len(g.msgs), "historyId": strconv.Itoa(g.historyID)})
+	case p == "settings/sendAs":
+		writeJSON(w, 200, map[string]any{"sendAs": []map[string]any{
+			{"sendAsEmail": "alias@gmail.example", "signature": "<p>alias</p>"},
+			{"sendAsEmail": g.email, "signature": g.signature, "isPrimary": true, "isDefault": true},
+		}})
 	case p == "labels" && r.Method == http.MethodGet:
 		var out []map[string]any
 		for _, l := range g.labels {
