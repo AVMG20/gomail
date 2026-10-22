@@ -218,7 +218,7 @@ async function onImportFile(e: Event) {
               >
                 {{ thenOf(l).chip || 'Move mail…' }}
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper" align="start">
                 <div class="text-muted-foreground px-2 py-1.5 text-xs">{{ whenHeader }}</div>
                 <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
               </SelectContent>
@@ -286,7 +286,7 @@ async function onImportFile(e: Event) {
                 >
                   {{ thenOf(l).chip || 'Move mail…' }}
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper" align="start">
                   <div class="text-muted-foreground px-2 py-1.5 text-xs">{{ whenHeaderImported }}</div>
                   <SelectItem v-for="t in THEN" :key="t.value" :value="t.value">{{ t.label }}</SelectItem>
                 </SelectContent>
