@@ -116,6 +116,33 @@ type FilterOptions struct {
 // is gone or comes back.
 func visible(alias string) string { return alias + `.folder_kinds != 0` }
 
+// allMailCond is Outlook's All Mail: Outlook has no such folder (its
+// "All Mail" is the Archive folder), so gomail shows every message of the
+// mailbox except Junk and Trash, like Gmail's.
+const allMailCond = `(m.folder_kinds != 0 AND (m.folder_kinds & 48) = 0)`
+
+// outlookAccounts are the ids of the Outlook mailboxes.
+func (s *Store) outlookAccounts() []string {
+	rows, err := s.db.Query(`SELECT id FROM accounts WHERE provider = ?`, models.ProviderOutlook)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// isAllMail reports whether f is an Outlook mailbox's All Mail.
+func (s *Store) isAllMail(f models.Folder) bool {
+	return f.Kind == models.FolderArchive && slices.Contains(s.outlookAccounts(), f.AccountID)
+}
+
 // buildFilter translates a ListQuery (+ options) into SQL conditions.
 func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, error) {
 	w := &where{}
@@ -138,13 +165,20 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 			inFolder = true
 			w.add(`m.account_id = ? AND (m.folder_kinds & 64) != 0`, f.AccountID)
 			w.add(`EXISTS (SELECT 1 FROM message_folders mf WHERE mf.message_id = m.id AND mf.folder_id = ?)`, f.ID)
+		case models.FolderArchive:
+			inFolder = true
+			if s.isAllMail(f) {
+				w.add(`m.account_id = ? AND `+allMailCond, f.AccountID)
+			} else {
+				w.add(`m.account_id = ? AND (m.folder_kinds & ?) != 0`, f.AccountID, kindBits[f.Kind])
+			}
 		default:
 			// One system folder per kind and account: the bitmask is exact.
 			inFolder = true
 			w.add(`m.account_id = ? AND (m.folder_kinds & ?) != 0`, f.AccountID, kindBits[f.Kind])
 		}
 	} else if q.FolderKind != "" {
-		addKindFilter(w, []string{q.FolderKind})
+		s.addKindFilter(w, []string{q.FolderKind})
 	}
 	if !inFolder {
 		w.add(visible("m"))
@@ -191,20 +225,25 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 	return w, nil
 }
 
-func addKindFilter(w *where, kinds []string) {
+func (s *Store) addKindFilter(w *where, kinds []string) {
 	var real []string
-	starred := false
+	starred, archive := false, false
 	for _, k := range kinds {
 		if k == models.FolderStarred {
 			starred = true
 		} else {
 			real = append(real, k)
+			archive = archive || k == models.FolderArchive
 		}
 	}
 	var parts []string
 	var args []any
 	if starred {
 		parts = append(parts, `m.starred = 1`)
+	}
+	if outlook := s.outlookAccounts(); archive && len(outlook) > 0 {
+		parts = append(parts, `(m.account_id IN (`+placeholders(len(outlook))+`) AND `+allMailCond+`)`)
+		args = append(args, anySlice(outlook)...)
 	}
 	if len(real) > 0 {
 		parts = append(parts, `(m.folder_kinds & ?) != 0`)
@@ -226,7 +265,7 @@ func (s *Store) addSearchFilters(w *where, ps ParsedSearch) {
 		w.add(`m.has_attachments = 1`)
 	}
 	if len(ps.In) > 0 {
-		addKindFilter(w, ps.In)
+		s.addKindFilter(w, ps.In)
 	}
 	if len(ps.Labels) > 0 {
 		// Each label: operator must match (AND semantics, like Gmail); a

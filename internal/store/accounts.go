@@ -337,7 +337,17 @@ func (s *Store) Folders(accountID string) ([]models.Folder, error) {
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Outlook's All Mail spans the whole mailbox, so its unread badge is
+	// counted locally; Total stays the Archive folder's (older-mail paging).
+	for i, f := range out {
+		if s.isAllMail(f) {
+			s.db.QueryRow(`SELECT count(*) FROM messages m WHERE m.unread = 1 AND m.account_id = ? AND `+allMailCond, f.AccountID).Scan(&out[i].Unread)
+		}
+	}
+	return out, nil
 }
 
 // Folder returns one folder by local id.

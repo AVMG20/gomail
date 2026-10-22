@@ -431,3 +431,65 @@ func TestApplySyncKeepsHeadersOfPartialRecords(t *testing.T) {
 		t.Fatalf("after a partial record: %q %q %v unread=%v", got.Subject, got.From.Name, got.Date, got.Unread)
 	}
 }
+
+// Outlook has no All Mail folder: gomail's All Mail (its Archive folder)
+// shows everything in the mailbox except Junk and Trash, like Gmail's.
+func TestOutlookAllMail(t *testing.T) {
+	s := openTest(t)
+	if err := s.InsertAccount(models.Account{ID: "o1", Provider: models.ProviderOutlook, Email: "o1@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceFolders("o1", []mail.Folder{
+		{RemoteID: "inbox", Name: "Inbox", Kind: models.FolderInbox},
+		{RemoteID: "sent", Name: "Sent Items", Kind: models.FolderSent},
+		{RemoteID: "archive", Name: "Archive", Kind: models.FolderArchive},
+		{RemoteID: "junk", Name: "Junk Email", Kind: models.FolderSpam},
+		{RemoteID: "trash", Name: "Deleted Items", Kind: models.FolderTrash},
+		{RemoteID: "work", Name: "Work", Kind: models.FolderCustom},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedAccount(t, s, "g1")
+	ups := []mail.Message{
+		msg(1, "In inbox", "Dana Park", "inbox"),
+		msg(2, "Sent one", "Me", "sent"),
+		msg(3, "Archived", "Dana Park", "archive"),
+		msg(4, "Junk", "Spammer", "junk"),
+		msg(5, "Deleted", "Dana Park", "trash"),
+		msg(6, "Filed", "Dana Park", "work"),
+	}
+	for i := range ups {
+		ups[i].ThreadID = ups[i].RemoteID
+	}
+	if _, err := s.ApplySync("o1", mail.SyncResult{Upserts: ups}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplySync("g1", mail.SyncResult{Upserts: []mail.Message{msg(7, "Gmail archived", "Dana Park", "ALL")}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := "Archived|Filed|In inbox|Sent one"
+	check := func(name string, q models.ListQuery, want string) {
+		t.Helper()
+		for _, conv := range []bool{false, true} {
+			p, err := s.ListMessages(q, ListOptions{Conversations: conv})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, m := range p.Messages {
+				got = append(got, m.Subject)
+			}
+			if g := sortedJoinStr(strings.Join(got, "|")); g != want || p.Total != len(got) {
+				t.Errorf("%s (conversations %v): %q total %d, want %q", name, conv, g, p.Total, want)
+			}
+		}
+		if n, err := s.slowConversationCount(q); err != nil || n != len(strings.Split(want, "|")) {
+			t.Errorf("%s: slow count %d %v", name, n, err)
+		}
+	}
+	check("folder", models.ListQuery{FolderID: FolderID("o1", "archive")}, want)
+	check("unified", models.ListQuery{FolderKind: models.FolderArchive}, sortedJoinStr(want+"|Gmail archived"))
+	check("account kind", models.ListQuery{AccountID: "o1", FolderKind: models.FolderArchive}, want)
+	check("in:all", models.ListQuery{AccountID: "o1", Search: "in:all"}, want)
+	check("gmail untouched", models.ListQuery{FolderID: FolderID("g1", "ALL")}, "Gmail archived")
+}

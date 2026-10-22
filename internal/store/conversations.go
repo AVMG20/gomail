@@ -512,10 +512,13 @@ func (s *Store) fastConversationCount(q models.ListQuery, opt ListOptions) (int,
 	switch {
 	case q.FolderID != "":
 		f, err := s.Folder(q.FolderID)
-		if err != nil || f.Kind == models.FolderStarred {
+		if err != nil || f.Kind == models.FolderStarred || s.isAllMail(f) {
 			return 0, false, nil
 		}
 		folders = []string{f.ID}
+	case q.FolderKind == models.FolderArchive && len(s.outlookAccounts()) > 0:
+		// Outlook's All Mail spans every folder: count it from messages.
+		return 0, false, nil
 	case q.FolderKind != "" && q.FolderKind != models.FolderStarred && q.FolderKind != models.FolderCustom:
 		all, err := s.Folders(q.AccountID)
 		if err != nil {
