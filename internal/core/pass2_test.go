@@ -441,6 +441,24 @@ func TestRemoteContentBlocking(t *testing.T) {
 	}
 }
 
+// Mail sent from one of your own mailboxes loads its images.
+func TestRemoteContentFromOwnMailbox(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	res, _ := s.SearchMessages(models.SearchQuery{Query: "morning brew"})
+	id := res[0].Message.ID
+	if m, _ := s.Message(id); !m.RemoteContentBlocked {
+		t.Fatal("expected blocked remote content")
+	}
+	acct, _ := s.store.Account(demo.GmailAccountID)
+	if _, err := s.store.DB().Exec(`UPDATE messages SET from_email = ? WHERE id = ?`, strings.ToUpper(acct.Email), id); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := s.Message(id); m.RemoteContentBlocked || !strings.Contains(m.BodyHTML, "open-pixel") {
+		t.Fatal("your own mail is still blocked")
+	}
+}
+
 func TestRemoteContentTrustedSender(t *testing.T) {
 	e := newEnv(t, "")
 	s := e.s
