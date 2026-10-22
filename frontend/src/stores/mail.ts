@@ -344,7 +344,7 @@ export const useMailStore = defineStore('mail', () => {
     loadingOlder.value = true
     const key = JSON.stringify(query.value)
     try {
-      const added = await api.loadOlder({ ...query.value, cursor: '' })
+      const added = await api.loadOlder({ ...query.value, cursor: '', beyondDepth })
       if (key !== JSON.stringify(query.value)) return // the view changed meanwhile
       if (!added) hasMoreRemote.value = olderBeyondDepth.value = false
       await softRefresh()

@@ -400,6 +400,7 @@ function normQuery(q: Partial<ListQuery>): ListQuery {
     unreadOnly: q.unreadOnly ?? false,
     limit: q.limit ?? 50,
     cursor: q.cursor ?? '',
+    beyondDepth: q.beyondDepth ?? false,
   }
 }
 

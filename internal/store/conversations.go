@@ -485,7 +485,7 @@ func (s *Store) hasMoreRemote(q models.ListQuery, cutoff time.Time) (more, beyon
 			continue
 		}
 		if !cutoff.IsZero() {
-			if oldest, err := s.OlderCursor(f.AccountID, f.ID); err == nil && !oldest.IsZero() && oldest.Before(cutoff) {
+			if oldest, err := s.OlderCursor(f.AccountID, f.ID); err == nil && !oldest.IsZero() && !oldest.After(cutoff) {
 				beyond = true
 				continue
 			}

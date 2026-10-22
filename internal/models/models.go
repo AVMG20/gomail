@@ -195,6 +195,9 @@ type ListQuery struct {
 	UnreadOnly    bool     `json:"unreadOnly"`
 	Limit         int      `json:"limit"`
 	Cursor        string   `json:"cursor"`
+	// BeyondDepth (LoadOlder only) also fetches mail older than the sync
+	// depth; without it LoadOlder stops at the depth.
+	BeyondDepth bool `json:"beyondDepth"`
 }
 
 // SearchQuery drives the command palette search across all mail. Query

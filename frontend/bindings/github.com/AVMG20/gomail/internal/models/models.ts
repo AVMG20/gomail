@@ -839,6 +839,12 @@ export interface ListQuery {
     "unreadOnly": boolean;
     "limit": number;
     "cursor": string;
+
+    /**
+     * BeyondDepth (LoadOlder only) also fetches mail older than the sync
+     * depth; without it LoadOlder stops at the depth.
+     */
+    "beyondDepth": boolean;
 }
 
 export interface Message {

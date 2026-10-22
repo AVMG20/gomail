@@ -292,6 +292,8 @@ export interface ListQuery {
   unreadOnly: boolean
   limit: number
   cursor: string
+  /** LoadOlder only: also fetch mail older than the sync depth. */
+  beyondDepth?: boolean
 }
 
 export interface MessagePage {

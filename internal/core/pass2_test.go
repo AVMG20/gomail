@@ -544,3 +544,57 @@ func TestNotificationText(t *testing.T) {
 		t.Fatal(ti, b)
 	}
 }
+
+// An emptied inbox must not pull in mail past the sync depth: with only the
+// newest mail cached, LoadOlder stops at the depth and older mail is offered
+// instead ("Load older mail"), fetched only when asked.
+func TestLoadOlderStopsAtSyncDepth(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	st := s.GetSettings()
+	st.SyncDepthDays = 30
+	s.SaveSettings(st)
+	cutoff := time.Now().AddDate(0, 0, -30)
+	q := models.ListQuery{AccountID: demo.OutlookAccountID, FolderKind: models.FolderInbox, Limit: 500}
+	p, _ := s.ListMessages(q)
+	if len(p.Messages) < 2 {
+		t.Fatalf("seed has %d inbox messages", len(p.Messages))
+	}
+	var gone []string
+	for _, m := range p.Messages[1:] { // archived elsewhere: only the newest stays
+		gone = append(gone, m.RemoteID)
+	}
+	s.store.ApplySync(demo.OutlookAccountID, mail.SyncResult{Deleted: gone}, nil)
+
+	for i := 0; ; i++ {
+		n, err := s.LoadOlder(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+		if i > 20 {
+			t.Fatal("LoadOlder never stops")
+		}
+	}
+	p, _ = s.ListMessages(q)
+	for _, m := range p.Messages {
+		if m.Date.Before(cutoff) {
+			t.Fatalf("fetched %q from %v, past the sync depth", m.Subject, m.Date)
+		}
+	}
+	if p.HasMoreRemote || !p.OlderBeyondDepth {
+		t.Fatalf("after reaching the depth: more=%v beyond=%v", p.HasMoreRemote, p.OlderBeyondDepth)
+	}
+
+	q.BeyondDepth = true
+	if n, err := s.LoadOlder(q); err != nil || n == 0 {
+		t.Fatalf("asked for older mail: %d, %v", n, err)
+	}
+	q.BeyondDepth = false
+	p, _ = s.ListMessages(q)
+	if oldest := p.Messages[len(p.Messages)-1].Date; !oldest.Before(cutoff) {
+		t.Fatalf("oldest after asking %v", oldest)
+	}
+}

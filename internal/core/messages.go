@@ -455,7 +455,8 @@ const (
 
 // LoadOlder fetches the next page of older mail from the server for the
 // folders of a view (FolderID, or FolderKind across accounts). It returns
-// how many messages were added; messages:changed follows.
+// how many messages were added; messages:changed follows. Mail older than
+// the sync depth only comes with q.BeyondDepth.
 func (s *Service) LoadOlder(q models.ListQuery) (int, error) {
 	folders, err := s.store.QueryFolders(q)
 	if err != nil {
@@ -464,11 +465,15 @@ func (s *Service) LoadOlder(q models.ListQuery) (int, error) {
 	if len(folders) == 0 {
 		return 0, nil
 	}
+	var cutoff time.Time
+	if d := s.Settings().SyncDepthDays; d > 0 && !q.BeyondDepth {
+		cutoff = time.Now().AddDate(0, 0, -d)
+	}
 	var mu sync.Mutex
 	added := 0
 	var errs []string
 	_ = provider.Parallel(s.ctx, 4, folders, func(ctx context.Context, f models.Folder) error {
-		n, err := s.loadOlderFolder(ctx, f)
+		n, err := s.loadOlderFolder(ctx, f, cutoff)
 		mu.Lock()
 		defer mu.Unlock()
 		added += n
@@ -484,7 +489,8 @@ func (s *Service) LoadOlder(q models.ListQuery) (int, error) {
 	return added, nil
 }
 
-func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder) (int, error) {
+// loadOlderFolder fetches older mail of one folder down to cutoff (zero = no limit).
+func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder, cutoff time.Time) (int, error) {
 	p, err := s.provider(f.AccountID)
 	if err != nil {
 		return 0, err
@@ -498,6 +504,9 @@ func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder) (int, er
 		if err != nil {
 			return 0, err
 		}
+		if !cutoff.IsZero() && !before.After(cutoff) {
+			return 0, nil // the rest is past the sync depth
+		}
 		fetched := time.Now()
 		msgs, err := p.ListOlder(ctx, mail.Folder{RemoteID: f.RemoteID, Name: f.Name, Kind: f.Kind}, before, olderPageSize)
 		if err != nil {
@@ -507,16 +516,33 @@ func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder) (int, er
 			_ = s.store.SetOlderDone(f.AccountID, f.ID, true) // nothing older on the server
 			return 0, nil
 		}
+		// Keep what is within the sync depth; the cursor stops at the cutoff
+		// so a later "Load older mail" starts there.
+		reached := false
+		if !cutoff.IsZero() {
+			kept := msgs[:0:0]
+			for _, m := range msgs {
+				if m.Date.Before(cutoff) {
+					reached = true
+				} else {
+					kept = append(kept, m)
+				}
+			}
+			msgs = kept
+		}
 		n, err := s.engine.Ingest(f.AccountID, msgs, fetched)
 		if err != nil {
 			return 0, err
 		}
-		dates := make([]time.Time, len(msgs))
-		for i, m := range msgs {
-			dates[i] = m.Date
+		dates := make([]time.Time, 0, len(msgs)+1)
+		for _, m := range msgs {
+			dates = append(dates, m.Date)
+		}
+		if reached {
+			dates = append(dates, cutoff)
 		}
 		_ = s.store.AdvanceOlderCursor(f.AccountID, f.ID, dates)
-		if n > 0 {
+		if n > 0 || reached {
 			return n, nil
 		}
 	}
