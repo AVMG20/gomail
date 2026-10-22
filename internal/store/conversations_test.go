@@ -137,6 +137,8 @@ func TestHasMoreRemote(t *testing.T) {
 	}
 }
 
+func cutoffAt(t time.Time) func(string) time.Time { return func(string) time.Time { return t } }
+
 // Clearing the inbox must not pull in mail past the sync depth: once the
 // cached mail reaches below the cutoff, older mail is offered, not fetched.
 func TestHasMoreRemoteRespectsSyncDepth(t *testing.T) {
@@ -147,16 +149,16 @@ func TestHasMoreRemoteRespectsSyncDepth(t *testing.T) {
 	oldest, _ := s.OldestInFolder(inbox.ID)
 	q := models.ListQuery{FolderID: inbox.ID}
 
-	p, _ := s.ListMessages(q, ListOptions{OlderCutoff: oldest.Add(-time.Hour)})
+	p, _ := s.ListMessages(q, ListOptions{OlderCutoff: cutoffAt(oldest.Add(-time.Hour))})
 	if !p.HasMoreRemote || p.OlderBeyondDepth {
 		t.Fatalf("within the sync depth: %+v", p)
 	}
-	p, _ = s.ListMessages(q, ListOptions{OlderCutoff: oldest.Add(time.Hour)})
+	p, _ = s.ListMessages(q, ListOptions{OlderCutoff: cutoffAt(oldest.Add(time.Hour))})
 	if p.HasMoreRemote || !p.OlderBeyondDepth {
 		t.Fatalf("past the sync depth: %+v", p)
 	}
 	s.SetOlderDone("a1", inbox.ID, true)
-	p, _ = s.ListMessages(q, ListOptions{OlderCutoff: oldest.Add(time.Hour)})
+	p, _ = s.ListMessages(q, ListOptions{OlderCutoff: cutoffAt(oldest.Add(time.Hour))})
 	if p.HasMoreRemote || p.OlderBeyondDepth {
 		t.Fatalf("nothing older on the server: %+v", p)
 	}

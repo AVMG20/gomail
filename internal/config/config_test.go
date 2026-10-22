@@ -424,3 +424,29 @@ func TestAIReasoningSettings(t *testing.T) {
 		t.Fatalf("normalized %q %q %q", s.TextAIReasoning, s.EventAIReasoning, s.EventAIModel)
 	}
 }
+
+// The old global download period carries over to every mailbox once; new
+// mailboxes get the default.
+func TestMigrateSyncDepth(t *testing.T) {
+	s := DefaultSettings()
+	s.SyncDepthDays = 365
+	if !MigrateSyncDepth(&s, []string{"a", "b"}) || SyncDepth(s, "a") != 365 || SyncDepth(s, "b") != 365 {
+		t.Fatalf("migrated %v", s.SyncDepths)
+	}
+	if SyncDepth(s, "new") != DefaultSyncDepth {
+		t.Fatal("a new mailbox doesn't get the default")
+	}
+	s.SyncDepths["a"] = 30
+	if MigrateSyncDepth(&s, []string{"a"}) || SyncDepth(s, "a") != 30 {
+		t.Fatal("migrated twice")
+	}
+	d := DefaultSettings()
+	if !MigrateSyncDepth(&d, []string{"a"}) || len(d.SyncDepths) != 0 {
+		t.Fatalf("default period copied: %v", d.SyncDepths)
+	}
+	s.SyncDepths["a"] = 7
+	Normalize(&s)
+	if _, ok := s.SyncDepths["a"]; ok {
+		t.Fatal("kept an unknown period")
+	}
+}

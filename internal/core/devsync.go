@@ -76,7 +76,7 @@ var syncedSettings = []string{
 // battery or desktop, or on where it is (notifications: a work laptop and
 // a home computer often want different ones).
 var deviceSettings = []string{
-	"zoom", "launchAtLogin", "showInTray", "closeToTray", "syncDepthDays", "backfillPaused",
+	"zoom", "launchAtLogin", "showInTray", "closeToTray", "syncDepthDays", "syncDepths", "backfillPaused",
 	"syncIntervalMinutes", "syncIntervals", "deviceSyncInterval",
 	"notifications", "calendarNotifications", "readingPane",
 }

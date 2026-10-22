@@ -839,12 +839,6 @@ export interface ListQuery {
     "unreadOnly": boolean;
     "limit": number;
     "cursor": string;
-
-    /**
-     * BeyondDepth (LoadOlder only) also fetches mail older than the sync
-     * depth; without it LoadOlder stops at the depth.
-     */
-    "beyondDepth": boolean;
 }
 
 export interface Message {
@@ -1209,15 +1203,6 @@ export interface SearchResult {
 }
 
 /**
- * SearchUpdated is emitted when a server-side search added messages.
- */
-export interface SearchUpdated {
-    "query": string;
-    "accountId": string;
-    "added": number;
-}
-
-/**
  * SenderSummary is one sender of a mailbox's folder for "Clean up by
  * sender": an address, or every address at a domain.
  */
@@ -1397,9 +1382,16 @@ export interface Settings {
     "zoom": number;
 
     /**
-     * background backfill depth: 30, 90 (default), 365 or 0 = all mail
+     * older versions' global download period; each mailbox now has its own (SyncDepths)
      */
     "syncDepthDays": number;
+
+    /**
+     * SyncDepths maps an account id to how far back (days: 30, 90, 365 or
+     * 0 = all mail) its mail is downloaded; mailboxes without an entry use
+     * config.DefaultSyncDepth. Nil only in settings from before it existed.
+     */
+    "syncDepths": { [_ in string]?: number } | null;
 
     /**
      * pause the background backfill

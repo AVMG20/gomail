@@ -19,6 +19,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { dateGroup } from '@/lib/dateGroups'
 import { hasMethod } from '@/lib/api'
+import { DEFAULT_SYNC_DEPTH, depthLabel } from '@/components/settings/mailboxSettings'
 import ReauthBanner from './ReauthBanner.vue'
 import { defineAsyncComponent, h } from 'vue'
 const BulkBar = defineAsyncComponent(() => import('./BulkBar.vue'))
@@ -121,10 +122,20 @@ const rows = computed<Row[]>(() => {
   }
   if (mail.hasMore) out.push({ kind: 'loader', key: 'loader' })
   else if (mail.hasMoreRemote && list.length && hasMethod('LoadOlder')) out.push({ kind: 'older', key: 'older' })
-  // Past the sync depth: older mail only on request, so clearing the inbox doesn't pull in years of it.
+  // Past the download period: older mail isn't fetched, so clearing the inbox doesn't pull in years of it.
   else if (mail.olderBeyondDepth && list.length && hasMethod('LoadOlder')) out.push({ kind: 'beyond', key: 'beyond' })
   return out
 })
+// The end of what's downloaded: older mail comes with a longer download period (mailbox settings → Sync).
+const beyondText = computed(() => {
+  const id = mail.mailbox.accountId
+  return id ? `Showing ${depthLabel(settings.settings?.syncDepths?.[id] ?? DEFAULT_SYNC_DEPTH).replace(/^The/, 'the')}.` : 'Older mail isn’t downloaded.'
+})
+function openDownloadPeriod() {
+  const id = mail.mailbox.accountId
+  ui.openSettings(id ? `mailbox:${id}` : 'accounts', id ? 'general' : undefined)
+}
+
 const rowIndexById = computed(() => {
   const m = new Map<string, number>()
   rows.value.forEach((r, i) => r.kind === 'msg' && m.set(r.key, i))
@@ -508,11 +519,8 @@ const emptyState = computed(() => {
                 <button v-else type="button" class="hover:text-foreground rounded px-2 py-1 font-medium" @click="mail.loadOlder()">Load older mail</button>
               </div>
               <div v-else-if="rows[it.index]?.kind === 'beyond'" class="text-muted-foreground flex h-full items-center justify-center gap-1 text-xs">
-                <template v-if="mail.loadingOlder"><RefreshCwIcon class="size-3.5 animate-spin" /> Fetching older mail from the server…</template>
-                <template v-else>
-                  <span>Showing the last {{ (settings.settings?.syncDepthDays ?? 90) === 365 ? 'year' : `${settings.settings?.syncDepthDays ?? 90} days` }}.</span>
-                  <button type="button" class="hover:text-foreground rounded px-1.5 py-1 font-medium" @click="mail.loadOlder(true)">Load older mail</button>
-                </template>
+                <span>{{ beyondText }}</span>
+                <button type="button" class="hover:text-foreground rounded px-1.5 py-1 font-medium" @click="openDownloadPeriod">Download more…</button>
               </div>
               <div v-else class="text-muted-foreground flex h-full items-center justify-center gap-2 text-xs">
                 <RefreshCwIcon class="size-3.5 animate-spin" /> Loading more…

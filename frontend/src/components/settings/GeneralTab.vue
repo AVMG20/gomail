@@ -4,7 +4,6 @@ import { ExternalLinkIcon, LoaderIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, hasMethod } from '@/lib/api'
 import { useSettingsStore } from '@/stores/settings'
 import BackupSection from './BackupSection.vue'
@@ -37,22 +36,6 @@ async function checkNow() {
       </SettingRow>
       <SettingRow v-if="settings.settings.showInTray ?? true" title="Keep running when the window is closed" description="Closing the window hides gomail, so new mail still arrives.">
         <Switch :model-value="settings.settings.closeToTray ?? false" @update:model-value="(v: boolean) => settings.update({ closeToTray: v })" />
-      </SettingRow>
-    </SettingSection>
-
-    <SettingSection title="Sync & storage" all-mailboxes>
-      <SettingRow title="How far back to download" stacked>
-        <template #description>
-          gomail downloads mail from this period in the background, so it opens instantly and works offline. It never removes mail from
-          this computer. Older mail stays in your Gmail or Outlook account: scroll to the bottom of a folder and click “Load older mail”,
-          or search for it.
-        </template>
-        <Select :model-value="String(settings.settings.syncDepthDays ?? 90)" @update:model-value="(v) => settings.update({ syncDepthDays: Number(v) })">
-          <SelectTrigger class="w-56"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem v-for="d in [30, 90, 365, 0]" :key="d" :value="String(d)">{{ d === 0 ? 'All mail' : d === 365 ? 'The last year' : `The last ${d} days` }}</SelectItem>
-          </SelectContent>
-        </Select>
       </SettingRow>
     </SettingSection>
 

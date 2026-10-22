@@ -26,7 +26,7 @@ import { useCalendarStore } from '@/stores/calendar'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore, type MailboxTab } from '@/stores/ui'
-import { intervalLabel, SYNC_INTERVALS, useMailboxSettings } from './mailboxSettings'
+import { depthLabel, intervalLabel, SYNC_DEPTHS, SYNC_INTERVALS, useMailboxSettings } from './mailboxSettings'
 import MailboxLabels from './MailboxLabels.vue'
 import QuietLabelChips from './QuietLabelChips.vue'
 import SettingRow from './SettingRow.vue'
@@ -278,6 +278,17 @@ function labelAll() {
               <SelectTrigger class="w-44" aria-label="Check for new mail"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="i in SYNC_INTERVALS" :key="i" :value="String(i)">{{ intervalLabel(i) }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+          <SettingRow
+            title="How far back to download"
+            description="gomail downloads mail from this period in the background, so it opens instantly, works offline and search finds it. Older mail stays in your account until you pick a longer period. Nothing is ever removed from this computer."
+          >
+            <Select :model-value="String(mb.syncDepth(a.id))" @update:model-value="(v) => mb.setSyncDepth(a!.id, Number(v))">
+              <SelectTrigger class="w-44" aria-label="How far back to download"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="d in SYNC_DEPTHS" :key="d" :value="String(d)">{{ depthLabel(d) }}</SelectItem>
               </SelectContent>
             </Select>
           </SettingRow>

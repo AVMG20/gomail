@@ -25,7 +25,6 @@ declare module "@wailsio/runtime" {
             "messages:changed": models$0.AccountEvent;
             "network:status": models$0.NetworkStatus;
             "notification:open": models$0.NotificationOpen;
-            "search:updated": models$0.SearchUpdated;
             "sync:finished": models$0.SyncEvent;
             "sync:progress": models$0.SyncProgress;
             "sync:started": models$0.SyncEvent;

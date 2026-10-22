@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, watch, type Component } from 'vue'
+import { computed, ref, shallowRef, watch, type Component } from 'vue'
 import DOMPurify from 'dompurify'
 import {
   ArchiveIcon, CheckIcon, ClockIcon, CornerUpLeftIcon, KeyboardIcon, LayersIcon, MoonIcon, PencilIcon, PlusIcon,
@@ -77,14 +77,10 @@ watch(() => ui.paletteOpen, (open) => {
 const scopeAccount = computed(() => (scopeAll.value ? '' : mail.mailbox.accountId))
 const currentAccount = computed(() => mail.mailboxAccount)
 
-// ---- live server search (debounced, stale responses dropped)
+// ---- live search (debounced, stale responses dropped)
 let token = 0
 let timer: ReturnType<typeof setTimeout> | null = null
-const searchTick = ref(0)
-const onSearchUpdated = () => searchTick.value++
-window.addEventListener('gomail:search-updated', onSearchUpdated)
-onBeforeUnmount(() => window.removeEventListener('gomail:search-updated', onSearchUpdated))
-watch([query, scopeAccount, searchTick], () => {
+watch([query, scopeAccount], () => {
   if (timer) clearTimeout(timer)
   const q = query.value.trim()
   if (!q || /^\S+:$/.test(q)) {

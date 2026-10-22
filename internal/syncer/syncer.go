@@ -56,9 +56,9 @@ type Config struct {
 	Quiet func(accountID string, m models.MessageSummary) bool
 	// Online probes connectivity; nil means "assume online".
 	Online func(ctx context.Context) bool
-	// Backfill returns the backfill depth in days (0 = all) and whether it
-	// is paused; nil disables background backfill.
-	Backfill func() (depthDays int, paused bool)
+	// Backfill returns a mailbox's backfill depth in days (0 = all) and
+	// whether backfill is paused; nil disables background backfill.
+	Backfill func(accountID string) (depthDays int, paused bool)
 	Limits   provider.Limits
 	// Calendar, if set, syncs the account's calendars after each successful
 	// mail sync (same interval; it reports its own errors).

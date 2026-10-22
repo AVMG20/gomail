@@ -111,11 +111,6 @@ export function useBackendEvents() {
       if (was && !p.online) toast('You’re offline', { description: 'Changes to your mail sync when you reconnect, as long as gomail stays open. Mail can’t be sent until then.' })
       if (!was && p.online) accounts.refreshCounts()
     }),
-    api.on('search:updated', (p) => {
-      // Server-side results arrived: refresh the list search and any open palette query.
-      if (mail.search && (!p?.query || p.query.trim() === mail.search.trim())) void mail.softRefresh()
-      window.dispatchEvent(new CustomEvent('gomail:search-updated', { detail: p }))
-    }),
     api.on('notification:open', async (p) => {
       if (p?.eventId) {
         const { useCalendarStore } = await import('@/stores/calendar')

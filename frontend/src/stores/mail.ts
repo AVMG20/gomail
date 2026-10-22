@@ -337,14 +337,14 @@ export const useMailStore = defineStore('mail', () => {
     }
   }
 
-  /** Past the local cache: ask the backend to fetch older mail from the server. Mail older than
-   *  the sync depth (Settings → sync) only comes on an explicit request (`beyondDepth`). */
-  async function loadOlder(beyondDepth = false) {
-    if (loadingOlder.value || !(hasMoreRemote.value || (beyondDepth && olderBeyondDepth.value)) || !hasMethod('LoadOlder')) return
+  /** Past the local cache: ask the backend to fetch older mail from the server, down to each
+   *  mailbox's download period (its settings → Sync). */
+  async function loadOlder() {
+    if (loadingOlder.value || !hasMoreRemote.value || !hasMethod('LoadOlder')) return
     loadingOlder.value = true
     const key = JSON.stringify(query.value)
     try {
-      const added = await api.loadOlder({ ...query.value, cursor: '', beyondDepth })
+      const added = await api.loadOlder({ ...query.value, cursor: '' })
       if (key !== JSON.stringify(query.value)) return // the view changed meanwhile
       if (!added) hasMoreRemote.value = olderBeyondDepth.value = false
       await softRefresh()

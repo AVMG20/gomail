@@ -74,11 +74,6 @@ export const NetworkStatus = "network:status";
 export const NotificationOpen = "notification:open";
 
 /**
- * Name of the custom event "search:updated".
- */
-export const SearchUpdated = "search:updated";
-
-/**
  * Name of the custom event "sync:finished".
  */
 export const SyncFinished = "sync:finished";

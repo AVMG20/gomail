@@ -37,7 +37,6 @@ func init() {
 	application.RegisterEvent[models.NewMailEvent](models.EventNewMail)
 	application.RegisterEvent[models.SyncProgress](models.EventSyncProgress)
 	application.RegisterEvent[models.NetworkStatus](models.EventNetworkStatus)
-	application.RegisterEvent[models.SearchUpdated](models.EventSearchUpdated)
 	application.RegisterEvent[models.AIBudgetEvent](models.EventAIBudget)
 	application.RegisterEvent[models.NotificationOpen](models.EventNotificationOpen)
 	application.RegisterEvent[models.DatabaseStatus](models.EventDatabaseStatus)

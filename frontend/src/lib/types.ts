@@ -292,8 +292,6 @@ export interface ListQuery {
   unreadOnly: boolean
   limit: number
   cursor: string
-  /** LoadOlder only: also fetch mail older than the sync depth. */
-  beyondDepth?: boolean
 }
 
 export interface MessagePage {
@@ -302,7 +300,7 @@ export interface MessagePage {
   total: number
   /** More (older) mail exists on the server beyond the local cache: call LoadOlder. */
   hasMoreRemote?: boolean
-  /** The server only has mail older than the sync depth: fetched on request, never on scroll. */
+  /** The server only has mail older than the mailbox's download period, which isn't downloaded. */
   olderBeyondDepth?: boolean
   /** The search as typed matched nothing; these are close matches (spelling corrected). */
   similar?: boolean
@@ -450,8 +448,10 @@ export interface Settings {
   zoom?: number
   /** Daily AI spend cap in USD (0 = unlimited). Next backend pass. */
   aiDailyBudgetUsd?: number
-  /** How far back to sync (days; 0 = everything). Next backend pass. */
+  /** Older versions' global download period; each mailbox now has its own (syncDepths). */
   syncDepthDays?: number
+  /** Per mailbox (account id): how far back mail is downloaded (days; 0 = all mail). Missing = 90 days. */
+  syncDepths?: Record<string, number>
   /** Pause the background download of older mail. */
   backfillPaused?: boolean
   /** Start gomail when you log in (minimized to the tray). */
@@ -660,7 +660,6 @@ export const Events = {
   LabelsChanged: 'labels:changed',
   SyncProgress: 'sync:progress',
   NetworkStatus: 'network:status',
-  SearchUpdated: 'search:updated',
   NotificationOpen: 'notification:open',
   AiBudget: 'ai:budget',
   DatabaseStatus: 'database:status',
@@ -680,7 +679,6 @@ export interface EventPayloads {
   'labels:changed': { accountId?: string } | undefined
   'sync:progress': SyncProgress
   'network:status': { online: boolean }
-  'search:updated': { query: string; accountId: string; added: number }
   /** A desktop notification was clicked: a new mail (messageId) or an event reminder (eventId). */
   'notification:open': { messageId: string; accountId: string; eventId?: string }
   /** Auto-labeling paused (daily AI budget reached) or resumed. */

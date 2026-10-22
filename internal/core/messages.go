@@ -45,26 +45,15 @@ func (s *Service) Folders(accountID string) ([]models.Folder, error) {
 func (s *Service) ListMessages(q models.ListQuery) (models.MessagePage, error) {
 	defer s.markFirstQuery()
 	st := s.Settings()
-	opt := store.ListOptions{Conversations: st.ConversationView}
-	if st.SyncDepthDays > 0 {
-		opt.OlderCutoff = time.Now().AddDate(0, 0, -st.SyncDepthDays)
-	}
-	page, err := s.store.ListMessages(q, opt)
-	if err == nil && strings.TrimSpace(q.Search) != "" && len(page.Messages) < remoteSearchBelow {
-		s.remoteSearch(q.Search, q.AccountID)
-	}
-	return page, err
+	opt := store.ListOptions{Conversations: st.ConversationView,
+		OlderCutoff: func(accountID string) time.Time { return config.SyncDepthCutoff(st, accountID) }}
+	return s.store.ListMessages(q, opt)
 }
 
-// SearchMessages powers the command palette. When few local results match,
-// a server-side search runs in the background; when it caches new mail a
-// search:updated event asks the UI to search again.
+// SearchMessages powers the command palette. It searches downloaded mail
+// only: older mail is searchable once the download period covers it.
 func (s *Service) SearchMessages(q models.SearchQuery) ([]models.SearchResult, error) {
-	res, err := s.store.Search(q)
-	if err == nil && len(res) < remoteSearchBelow {
-		s.remoteSearch(q.Query, q.AccountID)
-	}
-	return res, err
+	return s.store.Search(q)
 }
 
 // MaxResolveIDs caps ResolveQueryIDs. "Select all N" resolves every id once;
@@ -444,19 +433,14 @@ func (s *Service) messagesChanged(ids []string) {
 	s.emit(models.EventLabelsChanged, models.AccountEvent{})
 }
 
-// ---- older mail & server search ----
+// ---- older mail ----
 
-const (
-	olderPageSize     = 50
-	remoteSearchBelow = 5 // run a server search when fewer local results
-	remoteSearchLimit = 50
-	remoteSearchTTL   = 2 * time.Minute
-)
+const olderPageSize = 50
 
 // LoadOlder fetches the next page of older mail from the server for the
 // folders of a view (FolderID, or FolderKind across accounts). It returns
-// how many messages were added; messages:changed follows. Mail older than
-// the sync depth only comes with q.BeyondDepth.
+// how many messages were added; messages:changed follows. It stops at
+// each mailbox's download period.
 func (s *Service) LoadOlder(q models.ListQuery) (int, error) {
 	folders, err := s.store.QueryFolders(q)
 	if err != nil {
@@ -465,15 +449,12 @@ func (s *Service) LoadOlder(q models.ListQuery) (int, error) {
 	if len(folders) == 0 {
 		return 0, nil
 	}
-	var cutoff time.Time
-	if d := s.Settings().SyncDepthDays; d > 0 && !q.BeyondDepth {
-		cutoff = time.Now().AddDate(0, 0, -d)
-	}
+	st := s.Settings()
 	var mu sync.Mutex
 	added := 0
 	var errs []string
 	_ = provider.Parallel(s.ctx, 4, folders, func(ctx context.Context, f models.Folder) error {
-		n, err := s.loadOlderFolder(ctx, f, cutoff)
+		n, err := s.loadOlderFolder(ctx, f, config.SyncDepthCutoff(st, f.AccountID))
 		mu.Lock()
 		defer mu.Unlock()
 		added += n
@@ -517,7 +498,7 @@ func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder, cutoff t
 			return 0, nil
 		}
 		// Keep what is within the sync depth; the cursor stops at the cutoff
-		// so a later "Load older mail" starts there.
+		// so a longer download period later starts there.
 		reached := false
 		if !cutoff.IsZero() {
 			kept := msgs[:0:0]
@@ -547,82 +528,6 @@ func (s *Service) loadOlderFolder(ctx context.Context, f models.Folder, cutoff t
 		}
 	}
 	return 0, nil
-}
-
-type remoteSearches struct {
-	mu     sync.Mutex
-	recent map[string]time.Time
-	busy   map[string]bool
-}
-
-func toProviderQuery(ps store.ParsedSearch) mail.SearchQuery {
-	q := mail.SearchQuery{From: ps.From, To: ps.To, Subject: ps.Subject, Unread: ps.Unread, Starred: ps.Starred,
-		HasAttachment: ps.HasAttachment, Before: ps.Before, After: ps.After}
-	for _, t := range ps.Terms {
-		q.Terms = append(q.Terms, t.Text)
-	}
-	return q
-}
-
-// remoteSearch runs a throttled background server search per account.
-func (s *Service) remoteSearch(raw, accountID string) {
-	ps := store.ParseSearch(raw)
-	text := 0
-	for _, t := range ps.Terms {
-		text += len([]rune(t.Text))
-	}
-	if text < 3 && len(ps.From)+len(ps.To)+len(ps.Subject) == 0 {
-		return
-	}
-	pq := toProviderQuery(ps)
-	norm := strings.ToLower(strings.Join(strings.Fields(raw), " "))
-	var accts []string
-	if accountID != "" {
-		accts = []string{accountID}
-	} else if all, err := s.store.Accounts(); err == nil {
-		for _, a := range all {
-			if !a.NeedsReauth {
-				accts = append(accts, a.ID)
-			}
-		}
-	}
-	if s.engine.Offline() {
-		return
-	}
-	for _, a := range accts {
-		key := a + "\x00" + norm
-		rs := &s.searches
-		rs.mu.Lock()
-		if t, ok := rs.recent[key]; (ok && time.Since(t) < remoteSearchTTL) || rs.busy[a] {
-			rs.mu.Unlock()
-			continue
-		}
-		rs.recent[key], rs.busy[a] = time.Now(), true
-		if len(rs.recent) > 500 {
-			rs.recent = map[string]time.Time{key: time.Now()}
-		}
-		rs.mu.Unlock()
-		acct := a
-		s.goBG(func() {
-			defer func() { rs.mu.Lock(); delete(rs.busy, acct); rs.mu.Unlock() }()
-			p, err := s.provider(acct)
-			if err != nil {
-				return
-			}
-			ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
-			defer cancel()
-			fetched := time.Now()
-			msgs, err := p.Search(ctx, pq, remoteSearchLimit)
-			if err != nil {
-				slog.Debug("server search failed", "account", acct, "err", err)
-				return
-			}
-			n, err := s.engine.Ingest(acct, msgs, fetched)
-			if err == nil && n > 0 {
-				s.emit(models.EventSearchUpdated, models.SearchUpdated{Query: raw, AccountID: acct, Added: n})
-			}
-		})
-	}
 }
 
 // ---- attachments ----

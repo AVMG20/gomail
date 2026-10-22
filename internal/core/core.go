@@ -108,7 +108,6 @@ type Service struct {
 
 	jobs     jobManager
 	drafts   draftSaver
-	searches remoteSearches
 	attCache *attCache
 	dsync    devSync
 
@@ -153,7 +152,6 @@ func New(opts Options) (*Service, error) {
 	s.jobs.init()
 	s.repaired, s.firstQuery = repaired, make(chan struct{})
 	s.drafts.entries = map[string]*draftEntry{}
-	s.searches.recent, s.searches.busy = map[string]time.Time{}, map[string]bool{}
 	s.attCache = newAttCache(filepath.Join(opts.DataDir, "attachments"), defaultAttCacheLimit)
 	if err := s.loadSettings(); err != nil {
 		st.Close()
@@ -174,9 +172,9 @@ func New(opts Options) (*Service, error) {
 		BeforeAnnounce: s.applyRules,
 		Quiet:          s.quietMessage,
 		Online:         online,
-		Backfill: func() (int, bool) {
+		Backfill: func(accountID string) (int, bool) {
 			st := s.Settings()
-			return st.SyncDepthDays, st.BackfillPaused
+			return config.SyncDepth(st, accountID), st.BackfillPaused
 		},
 		Calendar: func(ctx context.Context, accountID string) { s.syncCalendarsQuiet(ctx, accountID) },
 	})

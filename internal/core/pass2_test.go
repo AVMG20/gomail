@@ -329,7 +329,7 @@ func TestReauthBackoffOffline(t *testing.T) {
 	}
 }
 
-func TestServerSearchAndLoadOlder(t *testing.T) {
+func TestLoadOlder(t *testing.T) {
 	e := newEnv(t, "")
 	s := e.s
 	res, _ := s.SearchMessages(models.SearchQuery{Query: "lasagna", AccountID: demo.OutlookAccountID})
@@ -338,21 +338,9 @@ func TestServerSearchAndLoadOlder(t *testing.T) {
 	}
 	// Drop it locally, as if it were older than the cache window.
 	s.store.ApplySync(demo.OutlookAccountID, mail.SyncResult{Deleted: []string{res[0].Message.RemoteID}}, nil)
-	res, _ = s.SearchMessages(models.SearchQuery{Query: "sunday dinner", AccountID: demo.OutlookAccountID})
-	_ = res
-	deadline := time.Now().Add(5 * time.Second)
-	for ui := e.ui; ; {
-		if ev, ok := ui.last(models.EventSearchUpdated).(models.SearchUpdated); ok && ev.Added > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no search:updated")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	res, _ = s.SearchMessages(models.SearchQuery{Query: "sunday dinner", AccountID: demo.OutlookAccountID})
-	if len(res) == 0 {
-		t.Fatal("server result not cached")
+	// Search only covers downloaded mail: the server isn't asked.
+	if res, _ = s.SearchMessages(models.SearchQuery{Query: "lasagna", AccountID: demo.OutlookAccountID}); len(res) != 0 {
+		t.Fatal("found mail that isn't downloaded")
 	}
 	q := models.ListQuery{AccountID: demo.OutlookAccountID, FolderKind: models.FolderInbox, Limit: 200}
 	if p, _ := s.ListMessages(q); !p.HasMoreRemote {
@@ -493,7 +481,7 @@ func TestProgressiveBackfill(t *testing.T) {
 	inbox, _ := s.store.FolderByKind(demo.OutlookAccountID, models.FolderInbox)
 	before, _ := s.store.LocalFolderCount(inbox.ID)
 	st := s.GetSettings()
-	st.SyncDepthDays = 30
+	st.SyncDepths = map[string]int{demo.OutlookAccountID: 30}
 	s.SaveSettings(st)
 	steps := 0
 	for s.engine.BackfillStep(context.Background()) {
@@ -503,7 +491,7 @@ func TestProgressiveBackfill(t *testing.T) {
 		}
 	}
 	mid, _ := s.store.LocalFolderCount(inbox.ID)
-	st.SyncDepthDays = 0 // all mail
+	st.SyncDepths = map[string]int{demo.OutlookAccountID: 0} // all mail
 	s.SaveSettings(st)
 	for s.engine.BackfillStep(context.Background()) {
 		steps++
@@ -545,14 +533,14 @@ func TestNotificationText(t *testing.T) {
 	}
 }
 
-// An emptied inbox must not pull in mail past the sync depth: with only the
-// newest mail cached, LoadOlder stops at the depth and older mail is offered
-// instead ("Load older mail"), fetched only when asked.
+// An emptied inbox must not pull in mail past the mailbox's download period:
+// with only the newest mail cached, LoadOlder stops at the period. A longer
+// period lets it continue.
 func TestLoadOlderStopsAtSyncDepth(t *testing.T) {
 	e := newEnv(t, "")
 	s := e.s
 	st := s.GetSettings()
-	st.SyncDepthDays = 30
+	st.SyncDepths = map[string]int{demo.OutlookAccountID: 30}
 	s.SaveSettings(st)
 	cutoff := time.Now().AddDate(0, 0, -30)
 	q := models.ListQuery{AccountID: demo.OutlookAccountID, FolderKind: models.FolderInbox, Limit: 500}
@@ -588,13 +576,14 @@ func TestLoadOlderStopsAtSyncDepth(t *testing.T) {
 		t.Fatalf("after reaching the depth: more=%v beyond=%v", p.HasMoreRemote, p.OlderBeyondDepth)
 	}
 
-	q.BeyondDepth = true
+	st = s.GetSettings()
+	st.SyncDepths = map[string]int{demo.OutlookAccountID: 0} // all mail
+	s.SaveSettings(st)
 	if n, err := s.LoadOlder(q); err != nil || n == 0 {
-		t.Fatalf("asked for older mail: %d, %v", n, err)
+		t.Fatalf("with all mail: %d, %v", n, err)
 	}
-	q.BeyondDepth = false
 	p, _ = s.ListMessages(q)
 	if oldest := p.Messages[len(p.Messages)-1].Date; !oldest.Before(cutoff) {
-		t.Fatalf("oldest after asking %v", oldest)
+		t.Fatalf("oldest with all mail %v", oldest)
 	}
 }

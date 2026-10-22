@@ -18,9 +18,9 @@ type ListOptions struct {
 	// Conversations returns one row per thread (its latest message
 	// matching the query) with thread-level aggregates.
 	Conversations bool
-	// OlderCutoff is the sync depth (Settings.syncDepthDays): older mail is
-	// only fetched on request, so it doesn't set HasMoreRemote. Zero = all.
-	OlderCutoff time.Time
+	// OlderCutoff gives a mailbox's download period: older mail isn't
+	// fetched, so it doesn't set HasMoreRemote. Nil or zero = all mail.
+	OlderCutoff func(accountID string) time.Time
 }
 
 // ConversationPrefix marks conversation ids ("c:<anchor message id>").
@@ -469,8 +469,8 @@ func (s *Store) SetOlderDone(accountID, folderID string, done bool) error {
 }
 
 // hasMoreRemote reports whether the server has older mail for the view
-// within the sync depth (more), and whether it has some only past it (beyond).
-func (s *Store) hasMoreRemote(q models.ListQuery, cutoff time.Time) (more, beyond bool) {
+// within the download period (more), and whether it has some only past it (beyond).
+func (s *Store) hasMoreRemote(q models.ListQuery, cutoffOf func(accountID string) time.Time) (more, beyond bool) {
 	folders, err := s.QueryFolders(q)
 	if err != nil {
 		return false, false
@@ -484,7 +484,7 @@ func (s *Store) hasMoreRemote(q models.ListQuery, cutoff time.Time) (more, beyon
 		if err != nil || f.Total <= local {
 			continue
 		}
-		if !cutoff.IsZero() {
+		if cutoff := cutoffFor(cutoffOf, f.AccountID); !cutoff.IsZero() {
 			if oldest, err := s.OlderCursor(f.AccountID, f.ID); err == nil && !oldest.IsZero() && !oldest.After(cutoff) {
 				beyond = true
 				continue
@@ -493,6 +493,13 @@ func (s *Store) hasMoreRemote(q models.ListQuery, cutoff time.Time) (more, beyon
 		return true, false
 	}
 	return false, beyond
+}
+
+func cutoffFor(cutoffOf func(accountID string) time.Time, accountID string) time.Time {
+	if cutoffOf == nil {
+		return time.Time{}
+	}
+	return cutoffOf(accountID)
 }
 
 // fastConversationCount answers the conversation total of plain folder

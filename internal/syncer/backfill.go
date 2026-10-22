@@ -106,27 +106,28 @@ func (e *Engine) startBackfill() {
 // backfillStep fetches one page of older mail for the next folder that
 // hasn't reached the configured depth. It reports whether it did work.
 func (e *Engine) backfillStep(ctx context.Context) bool {
-	depth, paused := e.cfg.Backfill()
-	if paused || e.Offline() {
+	if _, paused := e.cfg.Backfill(""); paused || e.Offline() {
 		return false
 	}
 	accts, err := e.cfg.Store.Accounts()
 	if err != nil {
 		return false
 	}
-	cutoff := time.Time{}
-	if depth > 0 {
-		cutoff = time.Now().AddDate(0, 0, -depth)
-	}
 	type cand struct {
 		acct   models.Account
 		folder models.Folder
 		oldest time.Time
+		depth  int
 	}
 	var cands []cand
 	for _, a := range accts {
 		if a.NeedsReauth || a.LastSyncAt == nil || e.Syncing(a.ID) {
 			continue
+		}
+		depth, _ := e.cfg.Backfill(a.ID)
+		cutoff := time.Time{}
+		if depth > 0 {
+			cutoff = time.Now().AddDate(0, 0, -depth)
 		}
 		folders, err := e.cfg.Store.Folders(a.ID)
 		if err != nil {
@@ -144,7 +145,7 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 			if n, err := e.cfg.Store.LocalFolderCount(f.ID); err == nil && n >= f.Total {
 				continue
 			}
-			cands = append(cands, cand{a, f, oldest})
+			cands = append(cands, cand{a, f, oldest, depth})
 		}
 	}
 	if len(cands) == 0 {
@@ -190,7 +191,7 @@ func (e *Engine) backfillStep(ctx context.Context) bool {
 		}
 	}
 	days := int(time.Since(oldest).Hours() / 24)
-	e.cfg.Emit.Emit(models.EventSyncProgress, models.SyncProgress{AccountID: c.acct.ID, Phase: "backfill", Done: min(days, max(depth, days)), Total: depth})
+	e.cfg.Emit.Emit(models.EventSyncProgress, models.SyncProgress{AccountID: c.acct.ID, Phase: "backfill", Done: min(days, max(c.depth, days)), Total: c.depth})
 	e.backfill.mu.Lock()
 	if e.backfill.lastNotify == nil {
 		e.backfill.lastNotify = map[string]time.Time{}

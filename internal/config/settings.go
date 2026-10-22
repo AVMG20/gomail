@@ -3,6 +3,7 @@ package config
 import (
 	"regexp"
 	"slices"
+	"time"
 	"strconv"
 	"strings"
 	"unicode"
@@ -15,6 +16,7 @@ const (
 	DefaultTheme             = "system"
 	DefaultDensity           = "comfortable"
 	DefaultSyncInterval      = 5
+	DefaultSyncDepth         = 90 // days
 	DefaultTenant            = "common"
 	DefaultChatModel         = "openai/gpt-4o-mini"
 	DefaultClassifierModel   = "typesafe/jev-1.13"
@@ -288,6 +290,7 @@ func Normalize(s *models.Settings) {
 	s.JunkStaysPut = uniqueTrimmed(s.JunkStaysPut)
 	s.NotJunkSenders = normalizeSenderLists(s.NotJunkSenders)
 	s.SyncIntervals = normalizeIntervals(s.SyncIntervals)
+	s.SyncDepths = normalizeDepths(s.SyncDepths)
 	if !slices.Contains(DeviceSyncIntervals, s.DeviceSyncInterval) {
 		s.DeviceSyncInterval = DefaultDeviceSyncInterval
 	}
@@ -314,6 +317,53 @@ func normalizeIntervals(in map[string]int) map[string]int {
 		}
 	}
 	return out
+}
+
+// SyncDepthChoices are the download periods offered (days, 0 = all mail).
+var SyncDepthChoices = []int{30, 90, 365, 0}
+
+func normalizeDepths(in map[string]int) map[string]int {
+	out := map[string]int{}
+	for acct, d := range in {
+		if acct = strings.TrimSpace(acct); acct != "" && slices.Contains(SyncDepthChoices, d) {
+			out[acct] = d
+		}
+	}
+	return out
+}
+
+// SyncDepth is how far back (days, 0 = all mail) a mailbox's mail is
+// downloaded.
+func SyncDepth(s models.Settings, accountID string) int {
+	if d, ok := s.SyncDepths[accountID]; ok {
+		return d
+	}
+	return DefaultSyncDepth
+}
+
+// SyncDepthCutoff is the date before which a mailbox's mail isn't
+// downloaded (zero = all mail).
+func SyncDepthCutoff(s models.Settings, accountID string) time.Time {
+	if d := SyncDepth(s, accountID); d > 0 {
+		return time.Now().AddDate(0, 0, -d)
+	}
+	return time.Time{}
+}
+
+// MigrateSyncDepth gives every mailbox the old global download period,
+// once (SyncDepths is nil only in settings from before it existed). It
+// must run before Normalize and reports whether it changed s.
+func MigrateSyncDepth(s *models.Settings, accountIDs []string) bool {
+	if s.SyncDepths != nil {
+		return false
+	}
+	s.SyncDepths = map[string]int{}
+	if s.SyncDepthDays != DefaultSyncDepth {
+		for _, id := range accountIDs {
+			s.SyncDepths[id] = s.SyncDepthDays
+		}
+	}
+	return true
 }
 
 // SyncInterval is how often (minutes) a mailbox's mail is checked.

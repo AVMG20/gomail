@@ -16,6 +16,11 @@ const JUNK = 'junk'
 export const DEFAULT_SYNC_INTERVAL = 5
 /** The background check intervals offered (minutes; Go: config.SyncIntervalChoices). */
 export const SYNC_INTERVALS = [1, 5, 15, 30, 60]
+/** How far back a mailbox downloads mail when it has no period of its own (Go: config.DefaultSyncDepth). */
+export const DEFAULT_SYNC_DEPTH = 90
+/** The download periods offered (days, 0 = all mail; Go: config.SyncDepthChoices). */
+export const SYNC_DEPTHS = [30, 90, 365, 0]
+export const depthLabel = (d: number) => (d === 0 ? 'All mail' : d === 365 ? 'The last year' : `The last ${d} days`)
 export const intervalLabel = (m: number) => `Every ${m === 1 ? 'minute' : m === 60 ? 'hour' : `${m} minutes`}`
 const THEN_PLACE: Record<string, string> = { archive: 'the archive', junk: 'Junk', trash: 'Trash' }
 /** Labels whose "When added" is being applied to existing mail right now. */
@@ -46,6 +51,11 @@ export function useMailboxSettings() {
     if (minutes === DEFAULT_SYNC_INTERVAL) delete next[accountId]
     else next[accountId] = minutes
     void settings.update({ syncIntervals: next }, 0)
+  }
+
+  const syncDepth = (accountId: string) => settings.settings?.syncDepths?.[accountId] ?? DEFAULT_SYNC_DEPTH
+  function setSyncDepth(accountId: string, days: number) {
+    void settings.update({ syncDepths: { ...(settings.settings?.syncDepths ?? {}), [accountId]: days } }, 0)
   }
 
   // ---- other folders (Gmail labels-as-folders aside: Outlook folders like an old "GitHub")
@@ -148,7 +158,7 @@ export function useMailboxSettings() {
   }
 
   return {
-    isMuted, setMuted, syncInterval, setSyncInterval, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel,
+    isMuted, setMuted, syncInterval, setSyncInterval, syncDepth, setSyncDepth, folderShown, setFolderShown, quietOptions, quietList, setQuiet, junkLabel,
     autoLabels, setAutoLabel, corrects, setCorrects, setThen, applyThen, isApplying, placeOf, junkOptions, junkList, setGoesToJunk,
   }
 }

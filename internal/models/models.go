@@ -195,9 +195,6 @@ type ListQuery struct {
 	UnreadOnly    bool     `json:"unreadOnly"`
 	Limit         int      `json:"limit"`
 	Cursor        string   `json:"cursor"`
-	// BeyondDepth (LoadOlder only) also fetches mail older than the sync
-	// depth; without it LoadOlder stops at the depth.
-	BeyondDepth bool `json:"beyondDepth"`
 }
 
 // SearchQuery drives the command palette search across all mail. Query
@@ -333,7 +330,11 @@ type Settings struct {
 	CalendarDefaultReminder int     `json:"calendarDefaultReminder"` // minutes; used when an event has no reminders (default 10)
 	CalendarNotifications   bool    `json:"calendarNotifications"`   // desktop reminders for upcoming events (default true)
 	Zoom                    float64 `json:"zoom"`                    // UI zoom factor (default 1.0, 0.5..2)
-	SyncDepthDays           int     `json:"syncDepthDays"`           // background backfill depth: 30, 90 (default), 365 or 0 = all mail
+	SyncDepthDays           int     `json:"syncDepthDays"`           // older versions' global download period; each mailbox now has its own (SyncDepths)
+	// SyncDepths maps an account id to how far back (days: 30, 90, 365 or
+	// 0 = all mail) its mail is downloaded; mailboxes without an entry use
+	// config.DefaultSyncDepth. Nil only in settings from before it existed.
+	SyncDepths              map[string]int `json:"syncDepths"`
 	BackfillPaused          bool    `json:"backfillPaused"`          // pause the background backfill
 	AIDailyBudgetUSD        float64 `json:"aiDailyBudgetUsd"`        // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
 	LaunchAtLogin           bool    `json:"launchAtLogin"`           // start gomail at login, minimized to the tray when enabled (default false)
@@ -508,7 +509,6 @@ const (
 	EventNewMail          = "mail:new"          // NewMailEvent
 	EventSyncProgress     = "sync:progress"     // SyncProgress (first sync of an account)
 	EventNetworkStatus    = "network:status"    // NetworkStatus
-	EventSearchUpdated    = "search:updated"    // SearchUpdated: server search cached more results; re-run the query
 	EventAIBudget         = "ai:budget"         // AIBudgetEvent: automatic labeling paused (budget reached) or resumed
 	EventNotificationOpen = "notification:open" // NotificationOpen: the user clicked a new-mail notification
 	EventDatabaseStatus   = "database:status"   // DatabaseStatus: integrity problems / repair
@@ -567,13 +567,6 @@ type SyncProgress struct {
 // NetworkStatus is emitted when connectivity changes.
 type NetworkStatus struct {
 	Online bool `json:"online"`
-}
-
-// SearchUpdated is emitted when a server-side search added messages.
-type SearchUpdated struct {
-	Query     string `json:"query"`
-	AccountID string `json:"accountId"`
-	Added     int    `json:"added"`
 }
 
 // AccountEvent is the payload of account-scoped change events.

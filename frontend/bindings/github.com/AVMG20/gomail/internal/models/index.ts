@@ -50,7 +50,6 @@ export type {
     RestoreSummary,
     SearchQuery,
     SearchResult,
-    SearchUpdated,
     SenderSummary,
     Settings,
     SyncEvent,

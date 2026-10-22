@@ -36,8 +36,7 @@ uses per-folder delta links. Expired state falls back to a full resync.
 Events: `sync:started`, `sync:finished`, `sync:progress` (first sync only:
 phases `folders`, `listing`, `fetching`, `saving`), `messages:changed`,
 `accounts:changed`, `labels:changed`, `mail:new` (plus a desktop
-notification), `classify:progress`, `classify:finished`, `network:status`
-and `search:updated`.
+notification), `classify:progress`, `classify:finished` and `network:status`.
 
 **Reliability.**
 
@@ -90,15 +89,9 @@ then fetches the next 50 messages per folder in the view and emits
 `messages:changed`. Gmail uses `before:<epoch>` and Graph uses
 `receivedDateTime lt`. Once a folder has nothing older, it is marked done.
 
-**Server search.** When `SearchMessages` (or `ListMessages` with `search`)
-finds fewer than 5 local results, a background server search runs:
-
-- Gmail uses `q=`. Graph uses `$search` with KQL (from:, to:, subject:,
-  hasattachments:, received). Unread and starred are filtered locally.
-- It is throttled per account and query (2 min), with at most one request in
-  flight per account.
-- Results are cached locally. If anything new arrived, `search:updated
-  {query, accountId, added}` tells the UI to search again.
+**Search.** `SearchMessages` and `ListMessages` with `search` only search
+downloaded mail. Older mail becomes searchable by raising the mailbox's
+download period, which backfills it.
 
 **Conversations.** When `conversationView` is on (the default),
 `ListMessages` returns one row per thread: Gmail `threadId` or Graph

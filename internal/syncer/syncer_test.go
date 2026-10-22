@@ -212,7 +212,7 @@ func newTestEnv(t *testing.T) *testEnv {
 			defer te.mu.Unlock()
 			return te.online
 		},
-		Backfill: func() (int, bool) { return 0, false },
+		Backfill: func(string) (int, bool) { return 0, false },
 	})
 	t.Cleanup(func() { te.e.Stop(); st.Close() })
 	return te

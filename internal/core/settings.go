@@ -44,6 +44,7 @@ func (s *Service) loadSettings() error {
 		st = s.salvageSettings()
 	}
 	migrated := config.MigrateAutoLabel(&st, s.accountIDs())
+	migrated = config.MigrateSyncDepth(&st, s.accountIDs()) || migrated
 	config.Normalize(&st)
 	// Labels shared by mailboxes (older versions), or the old auto-label switch.
 	if s.migrateLabels(&st) || migrated {
@@ -472,6 +473,7 @@ func (s *Service) updateLabelsLocked(fn func(st *models.Settings) bool) {
 	st.QuietLabels = maps.Clone(st.QuietLabels)
 	st.NotJunkSenders = maps.Clone(st.NotJunkSenders)
 	st.SyncIntervals = maps.Clone(st.SyncIntervals)
+	st.SyncDepths = maps.Clone(st.SyncDepths)
 	if !fn(&st) {
 		s.settingsMu.Unlock()
 		return

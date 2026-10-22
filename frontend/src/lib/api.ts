@@ -326,6 +326,7 @@ export function normSettings(s: Settings): Settings {
     deviceSyncInterval: DEVICE_SYNC_INTERVALS.some((o) => o.value === s.deviceSyncInterval) ? s.deviceSyncInterval : 1,
     aiDailyBudgetUsd: s.aiDailyBudgetUsd ?? 1,
     syncDepthDays: s.syncDepthDays ?? 90,
+    syncDepths: s.syncDepths ?? {},
     undoSendSeconds: s.undoSendSeconds ?? readLocal('undoSendSeconds', 5),
     // Calendar preferences: backend values win; older backends keep a local copy.
     calendarWeekStart: s.calendarWeekStart || 'auto',
@@ -400,7 +401,6 @@ function normQuery(q: Partial<ListQuery>): ListQuery {
     unreadOnly: q.unreadOnly ?? false,
     limit: q.limit ?? 50,
     cursor: q.cursor ?? '',
-    beyondDepth: q.beyondDepth ?? false,
   }
 }
 

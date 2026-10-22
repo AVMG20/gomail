@@ -79,6 +79,7 @@ export const SEED_SETTINGS: Settings = {
   checkUpdates: true,
   backfillPaused: false,
   syncDepthDays: 90,
+  syncDepths: {},
   primaryColor: '#2563eb',
   radius: 0.625,
   grammarSystemPrompt: DEFAULT_GRAMMAR_PROMPT,
