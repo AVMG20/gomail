@@ -15,23 +15,28 @@ import (
 	"github.com/AVMG20/gomail/internal/models"
 )
 
-// labelIndex lets search resolve "label:<name>" to label ids. Every
-// mailbox has its own labels, so a name can stand for several ids.
+// labelIndex lets search resolve "label:<name>" and "#<prefix>" to label
+// ids. Every mailbox has its own labels, so a name can stand for several ids.
 type labelIndex struct {
 	mu     sync.RWMutex
 	byName map[string][]string
+	names  []labelName // for "#<prefix>"
 	// imported is a SQL condition on the "ml" alias leaving out the
 	// imported labels (Gmail labels, Outlook categories), whatever put
 	// them on the mail.
 	imported string
 }
 
+type labelName struct{ name, id string }
+
 // SetLabels tells the store the current label definitions (used to resolve
-// "label:" search operators by name or id).
+// "label:" and "#" search operators by name or id).
 func (s *Store) SetLabels(labels []models.Label) {
 	m := map[string][]string{}
+	names := make([]labelName, 0, len(labels))
 	var imported []string
 	for _, l := range labels {
+		names = append(names, labelName{strings.ToLower(l.Name), l.ID})
 		if l.Source == config.LabelSourceProvider {
 			imported = append(imported, "'"+strings.ReplaceAll(l.ID, "'", "''")+"'")
 		}
@@ -43,6 +48,7 @@ func (s *Store) SetLabels(labels []models.Label) {
 	}
 	s.labels.mu.Lock()
 	s.labels.byName = m
+	s.labels.names = names
 	s.labels.imported = ""
 	if len(imported) > 0 {
 		s.labels.imported = ` AND ml.label_id NOT IN (` + strings.Join(imported, ",") + `)`
@@ -59,6 +65,21 @@ func (s *Store) resolveLabels(name string) []string {
 		return ids
 	}
 	return []string{strings.ToLower(name)}
+}
+
+// resolveLabelPrefix returns the ids of the labels whose name starts with
+// prefix, in any mailbox.
+func (s *Store) resolveLabelPrefix(prefix string) []string {
+	prefix = strings.ToLower(prefix)
+	s.labels.mu.RLock()
+	defer s.labels.mu.RUnlock()
+	var ids []string
+	for _, l := range s.labels.names {
+		if strings.HasPrefix(l.name, prefix) {
+			ids = append(ids, l.id)
+		}
+	}
+	return ids
 }
 
 // where accumulates SQL conditions over the "m" (messages) alias.
@@ -193,7 +214,7 @@ func addKindFilter(w *where, kinds []string) {
 }
 
 // addSearchFilters adds the non-FTS operators (is:, has:, in:, label:,
-// before:, after:).
+// #label, before:, after:).
 func (s *Store) addSearchFilters(w *where, ps ParsedSearch) {
 	if ps.Unread != nil {
 		w.add(`m.unread = ?`, boolInt(*ps.Unread))
@@ -214,6 +235,15 @@ func (s *Store) addSearchFilters(w *where, ps ParsedSearch) {
 			ids := s.resolveLabels(l)
 			w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (`+placeholders(len(ids))+`)`+s.labelCond()+`)`, anySlice(ids)...)
 		}
+	}
+	// Each #prefix: a label whose name starts with it (no such label: no mail).
+	for _, p := range ps.LabelPrefixes {
+		ids := s.resolveLabelPrefix(p)
+		if len(ids) == 0 {
+			w.add(`0`)
+			continue
+		}
+		w.add(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (`+placeholders(len(ids))+`)`+s.labelCond()+`)`, anySlice(ids)...)
 	}
 	if !ps.After.IsZero() {
 		w.add(`m.date >= ?`, ps.After.UnixMilli())

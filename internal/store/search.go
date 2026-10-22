@@ -22,6 +22,7 @@ type ParsedSearch struct {
 	From, To      []string
 	Subject       []string
 	Labels        []string
+	LabelPrefixes []string // "#se": a label whose name starts with "se"
 	In            []string // folder kinds
 	Unread        *bool
 	Starred       *bool
@@ -96,6 +97,12 @@ func ParseSearch(q string) ParsedSearch {
 	toks := splitQuery(q)
 	lastFree := -1
 	for _, tok := range toks {
+		if p, ok := strings.CutPrefix(tok, "#"); ok && !strings.HasPrefix(p, "#") {
+			if p, _ = unquote(p); hasWordChar(p) {
+				ps.LabelPrefixes = append(ps.LabelPrefixes, p)
+			}
+			continue
+		}
 		key, val, hasKey := strings.Cut(tok, ":")
 		if hasKey && !strings.HasPrefix(tok, `"`) && val != "" {
 			v, _ := unquote(val)

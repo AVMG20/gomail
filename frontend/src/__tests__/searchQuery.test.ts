@@ -23,6 +23,12 @@ describe('parseSearch', () => {
     expect(p.before).toBe(Date.parse('2026-02-01'))
   })
 
+  it('reads #label prefixes (quoted with spaces) next to free text', () => {
+    const p = parseSearch('#Serp testing #"big cl" # x')
+    expect(p.labelPrefixes).toEqual(['serp', 'big cl'])
+    expect(p.terms).toEqual(['testing', 'x'])
+  })
+
   it('keeps unknown operators as plain terms and ignores empty phrases', () => {
     const p = parseSearch('foo:bar "" hello')
     expect(p.terms).toEqual(['foo:bar', 'hello'])
@@ -74,5 +80,13 @@ describe('operator completions', () => {
   it('applies a completion to the last token', () => {
     expect(applyCompletion('invoice fr', 'from:')).toBe('invoice from:')
     expect(applyCompletion('label:fi', 'label:Finance')).toBe('label:Finance ')
+  })
+
+  it('completes #labels by name prefix, quoting names with spaces', () => {
+    expect(operatorCompletions('invoice #f', sources).map((c) => c.value)).toEqual(['#Finance', '#Family'])
+    expect(operatorCompletions('#bi', sources).map((c) => c.value)).toEqual(['#"Big Clients"'])
+    expect(operatorCompletions('#', sources)).toHaveLength(3)
+    expect(operatorCompletions('#zz', sources)).toEqual([])
+    expect(applyCompletion('#bi', '#"Big Clients"')).toBe('#"Big Clients" ')
   })
 })

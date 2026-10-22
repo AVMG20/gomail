@@ -176,6 +176,9 @@ class MockBackend {
       const ids = p.labels.map((l) => this.labelNameToId(l))
       if (!ids.some((id) => id && m.labels.includes(id))) return { ok: false, score: 0, matchedIn: '', fuzzy: false }
     }
+    for (const pre of p.labelPrefixes) {
+      if (!this.allLabels().some((l) => l.name.toLowerCase().startsWith(pre) && m.labels.includes(l.id))) return { ok: false, score: 0, matchedIn: '', fuzzy: false }
+    }
     let score = 0
     let matchedIn = ''
     let fuzzy = false

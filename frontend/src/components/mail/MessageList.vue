@@ -19,6 +19,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { dateGroup } from '@/lib/dateGroups'
 import { hasMethod } from '@/lib/api'
+import { applyCompletion, labelCompletions, type Completion } from '@/lib/searchQuery'
 import { DEFAULT_SYNC_DEPTH, depthLabel } from '@/components/settings/mailboxSettings'
 import ReauthBanner from './ReauthBanner.vue'
 import { defineAsyncComponent, h } from 'vue'
@@ -57,7 +58,38 @@ watch(() => ui.focusSearchTick, async () => {
   searchInput.value?.focus()
   searchInput.value?.select()
 })
+// "#se": labels of this mailbox whose name starts with "se". Tab completes one, like the palette;
+// Enter searches, or picks the label the arrow keys moved to.
+const searchFocused = ref(false)
+const suggestDismissed = ref(false)
+const suggestIndex = ref(0)
+let suggestNavigated = false
+const labelSuggestions = computed(() => (searchFocused.value && !suggestDismissed.value ? labelCompletions(searchText.value, settings.labelsForAccount(mail.mailbox.accountId)) : []))
+watch(searchText, () => {
+  suggestDismissed.value = false
+  suggestIndex.value = 0
+  suggestNavigated = false
+})
+function pickSuggestion(c: Completion) {
+  searchText.value = applyCompletion(searchText.value, c.value)
+  mail.search = searchText.value
+}
+function onSuggestKey(e: KeyboardEvent): boolean {
+  const list = labelSuggestions.value
+  if (!list.length) return false
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (suggestNavigated) suggestIndex.value = (suggestIndex.value + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length
+    else if (e.key === 'ArrowUp') suggestIndex.value = list.length - 1
+    suggestNavigated = true
+  } else if (e.key === 'Tab' || (e.key === 'Enter' && suggestNavigated)) pickSuggestion(list[suggestIndex.value] ?? list[0])
+  else if (e.key === 'Escape') suggestDismissed.value = true
+  else return false
+  e.preventDefault()
+  return true
+}
+
 function onSearchKey(e: KeyboardEvent) {
+  if (onSuggestKey(e)) return
   if (e.key === 'Escape') {
     searchText.value = ''
     mail.search = ''
@@ -353,8 +385,25 @@ const emptyState = computed(() => {
             class="placeholder:text-muted-foreground h-full w-full min-w-0 bg-transparent pr-14 pl-8 text-[13px] outline-none [&::-webkit-search-cancel-button]:hidden"
             aria-label="Search mail"
             spellcheck="false"
+            :aria-expanded="labelSuggestions.length > 0"
             @keydown="onSearchKey"
+            @focus="searchFocused = true"
+            @blur="searchFocused = false"
           />
+          <div v-if="labelSuggestions.length" role="listbox" aria-label="Labels" class="bg-popover text-popover-foreground ring-foreground/10 absolute top-full left-0 z-50 mt-1 w-64 rounded-md p-1 shadow-md ring-1">
+            <div
+              v-for="(c, i) in labelSuggestions"
+              :key="c.value"
+              role="option"
+              :aria-selected="i === suggestIndex"
+              :class="['flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-[13px]', i === suggestIndex && 'bg-accent text-accent-foreground']"
+              @mousedown.prevent="pickSuggestion(c)"
+              @mouseenter="suggestIndex = i"
+            >
+              <span class="size-2.5 shrink-0 rounded-full" :style="{ background: c.color }" />
+              <span class="truncate">{{ c.label }}</span>
+            </div>
+          </div>
           <button v-if="searchText" type="button" class="text-muted-foreground hover:text-foreground absolute right-2 rounded p-0.5" aria-label="Clear search" @click="searchText = ''; mail.search = ''">
             <XIcon class="size-3.5" />
           </button>

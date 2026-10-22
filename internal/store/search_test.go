@@ -124,6 +124,23 @@ func TestSearchOperators(t *testing.T) {
 	if subjects(rs) != "Your invoice for October" {
 		t.Fatalf("label filter %s", subjects(rs))
 	}
+	// #prefix: any label whose name starts with it, combined with text.
+	for _, q := range []string{"#money", "#MO", "#mo invoice", `#"money stuff"`} {
+		if rs, _ = s.Search(models.SearchQuery{Query: q}); subjects(rs) != "Your invoice for October" {
+			t.Fatalf("%q: %s", q, subjects(rs))
+		}
+	}
+	for _, q := range []string{"#mo offsite", "#nolabel", "#money #other"} {
+		if rs, _ = s.Search(models.SearchQuery{Query: q}); len(rs) != 0 {
+			t.Fatalf("%q matched %s", q, subjects(rs))
+		}
+	}
+	if p, _ := s.ListMessages(models.ListQuery{Search: "#mon"}, ListOptions{}); p.Total != 1 {
+		t.Fatalf("list #prefix total %d", p.Total)
+	}
+	if ps := ParseSearch("# #"); len(ps.LabelPrefixes) != 0 || len(ps.Terms) != 0 {
+		t.Fatalf("a bare # is not a label: %+v", ps)
+	}
 	// ListMessages shares the parser.
 	p, err := s.ListMessages(models.ListQuery{Search: "from:acme is:unread"}, ListOptions{})
 	if err != nil || p.Total != 0 {

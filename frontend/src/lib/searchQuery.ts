@@ -1,5 +1,6 @@
-// Search query language shared by the palette (completions) and the browser mock (parsing):
-// free terms, "quoted phrases" and operators from: to: subject: label: in: is: has: before: after:.
+// Search query language shared by the search boxes (completions) and the browser mock (parsing):
+// free terms, "quoted phrases", #label (a label whose name starts with it) and operators
+// from: to: subject: label: in: is: has: before: after:.
 import { fuzzyFilter } from './fuzzy'
 
 export interface ParsedSearch {
@@ -9,6 +10,8 @@ export interface ParsedSearch {
   to: string[]
   subject: string[]
   labels: string[]
+  /** "#se": a label whose name starts with "se". */
+  labelPrefixes: string[]
   inKind: string
   unread?: boolean
   starred?: boolean
@@ -18,13 +21,16 @@ export interface ParsedSearch {
 }
 
 export function parseSearch(q: string): ParsedSearch {
-  const out: ParsedSearch = { terms: [], phrases: [], from: [], to: [], subject: [], labels: [], inKind: '' }
-  const re = /(\w+):("([^"]*)"|\S+)|"([^"]*)"|(\S+)/g
+  const out: ParsedSearch = { terms: [], phrases: [], from: [], to: [], subject: [], labels: [], labelPrefixes: [], inKind: '' }
+  const re = /#("([^"]*)"|\S*)|(\w+):("([^"]*)"|\S+)|"([^"]*)"|(\S+)/g
   let m: RegExpExecArray | null
   while ((m = re.exec(q))) {
-    if (m[1]) {
-      const key = m[1].toLowerCase()
-      const val = (m[3] ?? m[2]).toLowerCase()
+    if (m[1] !== undefined) {
+      const name = (m[2] ?? m[1]).toLowerCase()
+      if (/[\p{L}\p{N}]/u.test(name)) out.labelPrefixes.push(name)
+    } else if (m[3]) {
+      const key = m[3].toLowerCase()
+      const val = (m[5] ?? m[4]).toLowerCase()
       if (key === 'from') out.from.push(val)
       else if (key === 'to') out.to.push(val)
       else if (key === 'subject') out.subject.push(val)
@@ -37,18 +43,33 @@ export function parseSearch(q: string): ParsedSearch {
       else if (key === 'before') out.before = Date.parse(val)
       else if (key === 'after') out.after = Date.parse(val)
       else out.terms.push(`${key}:${val}`)
-    } else if (m[4] !== undefined) {
-      if (m[4]) out.phrases.push(m[4].toLowerCase())
-    } else if (m[5]) {
-      out.terms.push(m[5].toLowerCase())
+    } else if (m[6] !== undefined) {
+      if (m[6]) out.phrases.push(m[6].toLowerCase())
+    } else if (m[7]) {
+      out.terms.push(m[7].toLowerCase())
     }
   }
   return out
 }
 
-/** The query uses an operator with a value ("from:asana", "is:unread"): a search for the mail list. */
+/** The query uses an operator with a value ("from:asana", "is:unread", "#work"): a search for the mail list. */
 export function hasOperator(query: string): boolean {
-  return /(^|\s)(from|to|subject|label|in|is|has|before|after):\S/i.test(query)
+  return /(^|\s)((from|to|subject|label|in|is|has|before|after):\S|#[^\s#])/i.test(query)
+}
+
+/** "#name" for a label (quoted when the name has spaces). */
+export const labelToken = (name: string) => `#${/\s/.test(name) ? `"${name}"` : name}`
+
+/** Label completions for a "#..." token being typed: labels whose name starts with it. */
+export function labelCompletions(query: string, labels: { name: string; color?: string }[]): Completion[] {
+  const m = lastToken(query).match(/^#"?([^"]*)$/)
+  if (!m) return []
+  const typed = m[1].toLowerCase()
+  const seen = new Set<string>()
+  return labels
+    .filter((l) => l.name.toLowerCase().startsWith(typed) && !seen.has(l.name.toLowerCase()) && seen.add(l.name.toLowerCase()))
+    .slice(0, 8)
+    .map((l) => ({ value: labelToken(l.name), label: l.name, color: l.color }))
 }
 
 export interface Completion { value: string; label: string; hint?: string; color?: string }
@@ -72,6 +93,7 @@ export function operatorCompletions(
   sources: { labels: { name: string; color?: string }[]; contacts: { name: string; email: string }[] },
 ): Completion[] {
   const tok = lastToken(query).toLowerCase()
+  if (tok.startsWith('#')) return labelCompletions(query, sources.labels)
   const m = tok.match(/^(label|from|is|has|in):(.*)$/)
   if (!m) {
     if (tok.length < 2) return []
