@@ -960,6 +960,64 @@ func (m *MailService) ImportBackup() (models.RestoreSummary, error) {
 	return uiResult(s.ImportBackup())
 }
 
+// ---- Sync between computers ----
+
+// GetDeviceSyncStatus describes the connection to the sync server.
+func (m *MailService) GetDeviceSyncStatus() (models.DeviceSyncStatus, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.DeviceSyncStatus{}, err
+	}
+	return s.DeviceSyncStatus(), nil
+}
+
+// ConnectDeviceSync turns on sync: with req.Create under a new sync code,
+// otherwise with another computer's code (this computer then takes the
+// synced settings and adds its own).
+func (m *MailService) ConnectDeviceSync(req models.DeviceSyncConnect) (models.DeviceSyncStatus, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.DeviceSyncStatus{}, err
+	}
+	return uiResult(s.ConnectDeviceSync(req))
+}
+
+// GetDeviceSyncCode returns the 24-word sync code, for another computer.
+func (m *MailService) GetDeviceSyncCode() (string, error) {
+	s, err := m.ready()
+	if err != nil {
+		return "", err
+	}
+	return uiResult(s.DeviceSyncCode())
+}
+
+// DisconnectDeviceSync stops syncing this computer (its data stays).
+func (m *MailService) DisconnectDeviceSync() error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.DisconnectDeviceSync())
+}
+
+// SyncDevicesNow syncs with the other computers now and waits for it.
+func (m *MailService) SyncDevicesNow() (models.DeviceSyncStatus, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.DeviceSyncStatus{}, err
+	}
+	return uiResult(s.SyncDevicesNow())
+}
+
+// SetDeviceSyncSecrets turns syncing of sign-ins and API keys on or off.
+func (m *MailService) SetDeviceSyncSecrets(on bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetDeviceSyncSecrets(on))
+}
+
 // GetDefaultPrompts returns the built-in grammar prompt and classifier
 // instructions (for "Reset to default").
 func (m *MailService) GetDefaultPrompts() models.DefaultPrompts { return core.DefaultPrompts() }
@@ -1140,6 +1198,15 @@ func (m *MailService) SetCalendarVisible(calendarID string, visible bool) error 
 	return uiError(s.SetCalendarVisible(calendarID, visible))
 }
 
+// SetCalendarMuted keeps a calendar shown without reminders for its events.
+func (m *MailService) SetCalendarMuted(calendarID string, muted bool) error {
+	s, err := m.ready()
+	if err != nil {
+		return err
+	}
+	return uiError(s.SetCalendarMuted(calendarID, muted))
+}
+
 // SetCalendarColor changes the color shown for a calendar ("" = the provider's).
 func (m *MailService) SetCalendarColor(calendarID, color string) error {
 	s, err := m.ready()
@@ -1230,6 +1297,16 @@ func (m *MailService) RespondToEvent(id, response string) error {
 		return err
 	}
 	return uiError(s.RespondToEvent(id, response))
+}
+
+// SetEventReminders sets your own reminders of an event (minutes before the
+// start; empty = none), also on invitations; scope is "this" or "series".
+func (m *MailService) SetEventReminders(id string, minutes []int, scope string) (models.CalendarEvent, error) {
+	s, err := m.ready()
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	return uiResult(s.SetEventReminders(id, minutes, scope))
 }
 
 // SyncCalendars syncs the calendars of an account ("" = all) now.

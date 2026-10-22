@@ -1,0 +1,35 @@
+# gomail-sync for Coolify (Docker Compose build pack). Coolify's proxy
+# terminates HTTPS and forwards to port 8080 inside the container; no port
+# is published on the host. See deploy/sync/README.md.
+services:
+  gomail-sync:
+    build:
+      # Relative to the project directory, which Coolify sets to the Base
+      # Directory (the repository root), not to this file's folder.
+      context: .
+      dockerfile: deploy/sync/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      # open: new sync accounts can be made ("Turn on sync" in gomail).
+      # closed: only codes already in use keep working.
+      - SIGNUPS=${SIGNUPS:-open}
+      - QUOTA_MB=${QUOTA_MB:-64}
+      - MAX_DOC_MB=${MAX_DOC_MB:-16}
+      - MAX_ACCOUNTS=${MAX_ACCOUNTS:-1000}
+      # Rate limits count per client address from X-Forwarded-For, set by
+      # Coolify's proxy (only believed from a private or loopback address).
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - gomail-sync-data:/data
+    healthcheck:
+      test: ["CMD", "/gomail-sync", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  gomail-sync-data:

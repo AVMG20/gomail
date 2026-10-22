@@ -21,6 +21,7 @@ import AccountAvatar from '@/components/common/AccountAvatar.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useMailboxSettings } from './mailboxSettings'
 import ModelPicker from './ModelPicker.vue'
+import ReasoningSelect from './ReasoningSelect.vue'
 import SettingRow from './SettingRow.vue'
 import SettingSection from './SettingSection.vue'
 
@@ -87,6 +88,10 @@ async function test() {
 
 const classifierModel = computed({ get: () => s.value.classifierModel, set: (v: string) => settings.update({ classifierModel: v }) })
 const chatModel = computed({ get: () => s.value.openRouterModel, set: (v: string) => settings.update({ openRouterModel: v }) })
+const textReasoning = computed({ get: () => s.value.textAIReasoning || 'default', set: (v: string) => settings.update({ textAIReasoning: v }) })
+const eventModel = computed({ get: () => s.value.eventAIModel ?? '', set: (v: string) => settings.update({ eventAIModel: v }) })
+const eventReasoning = computed({ get: () => s.value.eventAIReasoning || 'low', set: (v: string) => settings.update({ eventAIReasoning: v }) })
+const REASONING_HINT = 'How long a reasoning model thinks first: higher is slower and costs more. Models without reasoning ignore it.'
 
 function labelCurrent() {
   ai.requestBulk({ query: { ...mail.query, cursor: '' }, ids: [], title: `${mail.mailboxName}${mail.mailboxAccount ? ` · ${mail.mailboxAccount.displayName}` : ''}` })
@@ -187,8 +192,11 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
 
     <SettingSection title="Writing & summaries" description="To fix grammar while writing, right-click the text and choose “Improve grammar”." all-mailboxes>
       <p v-if="!s.openRouterKeySet" class="text-muted-foreground py-2 text-xs">Add an OpenRouter key above to use writing help.</p>
-      <SettingRow title="Text model" description="Used to fix grammar, summarize mail and turn text into calendar events." stacked>
+      <SettingRow title="Text model" description="Fixes grammar and summarizes mail." stacked>
         <ModelPicker v-model="chatModel" kind="chat" class="max-w-md" />
+      </SettingRow>
+      <SettingRow title="Reasoning" :description="REASONING_HINT">
+        <ReasoningSelect v-model="textReasoning" label="Text model reasoning" />
       </SettingRow>
       <SettingRow title="Grammar instructions" stacked>
         <template #description>
@@ -198,6 +206,21 @@ const pct = (v: number) => `${Math.round(v * 100)}%`
           </span>
         </template>
         <Textarea :model-value="s.grammarSystemPrompt || settings.defaults.grammar" rows="4" class="text-xs" @update:model-value="(v) => settings.update({ grammarSystemPrompt: String(v) }, 600)" />
+      </SettingRow>
+    </SettingSection>
+
+    <SettingSection v-if="hasMethod('ParseEventText')" title="Calendar events" description="“Fill in” on a new event turns a sentence like “lunch with Sam friday 12:30” into its date, time, place and guests." all-mailboxes>
+      <SettingRow title="Event model" stacked>
+        <template #description>
+          <span class="flex items-center justify-between gap-2">
+            {{ eventModel ? 'Used only to fill in events.' : 'Uses the text model unless you pick another one.' }}
+            <button v-if="eventModel" type="button" class="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1" @click="eventModel = ''"><RotateCcwIcon class="size-3" aria-hidden="true" /> Use the text model</button>
+          </span>
+        </template>
+        <ModelPicker v-model="eventModel" kind="chat" placeholder="Same as the text model" class="max-w-md" />
+      </SettingRow>
+      <SettingRow title="Reasoning" :description="`${REASONING_HINT} Low keeps filling in quick.`">
+        <ReasoningSelect v-model="eventReasoning" label="Event model reasoning" />
       </SettingRow>
     </SettingSection>
 

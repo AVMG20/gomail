@@ -33,6 +33,10 @@ function onDown(e: PointerEvent) {
   if (!el.value || el.value.contains(t)) return
   // Popovers/menus opened from inside the card (selects, date pickers) live in portals.
   if (t?.closest('[data-reka-popper-content-wrapper], [role="listbox"], [role="menu"], [role="dialog"]:not([data-floating-card])')) return
+  // While one is open, a click anywhere only closes it. (An open menu also
+  // turns off pointer events on the page, so a click in the card itself
+  // arrives here from outside it.)
+  if (document.querySelector('[data-reka-popper-content-wrapper]')) return
   emit('close')
 }
 function onKey(e: KeyboardEvent) {

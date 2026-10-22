@@ -87,9 +87,24 @@ function pointRect(e?: MouseEvent | null): AnchorRect {
   return { left: (r?.left ?? 300) + (r?.width ?? 600) / 2 - 160, top: (r?.top ?? 100) + 80, width: 1, height: 1 }
 }
 
+// A click on the grid while a card is open only closes that card (the card
+// closes on pointer-down; FullCalendar would then turn the same click into a
+// new selection and open another card). Watched on window, ahead of the card.
+let dismissing = false
+function onPointerDown() {
+  dismissing = !!(quick.value || details.value)
+}
+function onPointerUp() {
+  if (dismissing) setTimeout(() => { dismissing = false }, 0)
+}
+
 let reselecting = false
 function onSelect(arg: DateSelectArg) {
   if (reselecting) return
+  if (dismissing) {
+    api$()?.unselect()
+    return
+  }
   details.value = null
   if (!cal.writableCalendars.length) {
     toast('No editable calendar', { description: 'Turn on a mailbox with an editable calendar in the sidebar.' })
@@ -420,13 +435,21 @@ watch(sidebarOpen, async () => {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKey)
+  window.addEventListener('pointerdown', onPointerDown, true)
+  window.addEventListener('pointerup', onPointerUp, true)
+  window.addEventListener('pointercancel', onPointerUp, true)
   if (!cal.loaded) await cal.loadCalendars()
   if (cal.focusDate) {
     api$()?.gotoDate(cal.focusDate)
     cal.focusDate = null
   }
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('pointerdown', onPointerDown, true)
+  window.removeEventListener('pointerup', onPointerUp, true)
+  window.removeEventListener('pointercancel', onPointerUp, true)
+})
 
 const noCalendars = computed(() => cal.loaded && !cal.calendars.length)
 const consentMissing = computed(() => accounts.accounts.filter((a) => a.calendarConsent === false))

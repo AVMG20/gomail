@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -595,7 +596,7 @@ func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
 		s.checkReminders()
 	}
 
-	// Hidden calendar: a view filter only. Events stay synced and remind.
+	// Hidden calendar: events stay synced, but aren't listed and don't remind.
 	work := calByName(t, s, demo.GmailAccountID, "Work")
 	if err := s.SetCalendarVisible(work.ID, false); err != nil {
 		t.Fatal(err)
@@ -609,10 +610,30 @@ func TestCalendarDisableMuteAndViewFilters(t *testing.T) {
 		t.Fatal("hidden calendars not synced")
 	}
 	remindAt(gmailEv)
-	if notified(gmailEv.Title) != 1 {
-		t.Fatal("no reminder for a hidden calendar")
+	if notified(gmailEv.Title) != 0 {
+		t.Fatal("reminder for a hidden calendar")
 	}
 	_ = s.SetCalendarVisible(work.ID, true)
+
+	// A muted calendar (someone else's you follow): listed, no reminders.
+	if err := s.SetCalendarMuted(work.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if cals, _ := s.ListCalendars(); !slices.ContainsFunc(cals, func(c models.Calendar) bool { return c.ID == work.ID && c.Muted && c.Visible }) {
+		t.Fatal("muted calendar not listed as muted")
+	}
+	if n := countCal(t, s, work.ID, from, to); n == 0 {
+		t.Fatal("muted calendar's events hidden")
+	}
+	remindAt(gmailEv)
+	if notified(gmailEv.Title) != 0 {
+		t.Fatal("reminder for a muted calendar")
+	}
+	_ = s.SetCalendarMuted(work.ID, false)
+	remindAt(gmailEv)
+	if notified(gmailEv.Title) != 1 {
+		t.Fatal("no reminder after unmuting")
+	}
 
 	// Muted: events sync and show, no reminders.
 	if err := s.SetAccountCalendarMuted(demo.OutlookAccountID, true); err != nil {
@@ -728,5 +749,55 @@ func TestRemoveMeetingLink(t *testing.T) {
 	}
 	if got, _ := s.GetEvent(teams.ID); got.MeetingURL == "" {
 		t.Fatal("refused removal still changed the event")
+	}
+}
+
+func TestNoReminderSilencesTheDefault(t *testing.T) {
+	ui := &fakeUI{}
+	s, err := New(Options{DataDir: t.TempDir(), Demo: true, UI: ui, Secrets: secrets.NewMemory(), Online: func(context.Context) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.SyncCalendars(""); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := s.ListEvents(time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 3))
+	target, ok := findEvent(evs, "Sprint planning")
+	if !ok {
+		t.Fatal("no event")
+	}
+	ev, err := s.SetEventReminders(target.ID, nil, models.ScopeThis)
+	if err != nil || len(ev.Reminders) != 0 || !ev.RemindersOff {
+		t.Fatalf("off: %+v %v", ev, err)
+	}
+	// The mark survives a sync (the provider just reports no reminders).
+	if err := s.SyncCalendars(""); err != nil {
+		t.Fatal(err)
+	}
+	old := nowFunc
+	defer func() { nowFunc = old }()
+	nowFunc = func() time.Time { return target.Start.Add(-8 * time.Minute) } // the 10-minute default would be due
+	s.checkReminders()
+	notified := func() (n int) {
+		ui.mu.Lock()
+		defer ui.mu.Unlock()
+		for _, x := range ui.notified {
+			if x == target.Title {
+				n++
+			}
+		}
+		return n
+	}
+	if notified() != 0 {
+		t.Fatal("default reminder shown for an event set to no reminder")
+	}
+	if ev, err := s.SetEventReminders(target.ID, []int{5}, models.ScopeThis); err != nil || ev.RemindersOff {
+		t.Fatalf("on: %+v %v", ev, err)
+	}
+	nowFunc = func() time.Time { return target.Start.Add(-3 * time.Minute) }
+	s.checkReminders()
+	if notified() != 1 {
+		t.Fatalf("%d reminders after setting one", notified())
 	}
 }

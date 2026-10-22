@@ -25,8 +25,10 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-// Chat runs a chat completion and returns the assistant text.
-func (c *Client) Chat(ctx context.Context, model, system, user string, temperature float64) (string, error) {
+// Chat runs a chat completion and returns the assistant text. effort is
+// the reasoning effort for reasoning models ("" = the model's default);
+// OpenRouter maps it per provider, and models without reasoning ignore it.
+func (c *Client) Chat(ctx context.Context, model, system, user string, temperature float64, effort string) (string, error) {
 	api, err := c.api(true)
 	if err != nil {
 		return "", err
@@ -42,6 +44,10 @@ func (c *Client) Chat(ctx context.Context, model, system, user string, temperatu
 		"messages":    []chatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
 		"temperature": temperature,
 		"usage":       map[string]bool{"include": true}, // ask OpenRouter to report the cost
+	}
+	if effort != "" {
+		// Only the answer is used: don't send the reasoning back.
+		req["reasoning"] = map[string]any{"effort": effort, "exclude": true}
 	}
 	var resp struct {
 		Choices []struct {
@@ -97,14 +103,14 @@ func cleanRewrite(input, output string) string {
 }
 
 // ImproveGrammar returns text with spelling and grammar corrected.
-func (c *Client) ImproveGrammar(ctx context.Context, model, systemPrompt, text string) (string, error) {
+func (c *Client) ImproveGrammar(ctx context.Context, model, effort, systemPrompt, text string) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return text, nil
 	}
 	if strings.TrimSpace(systemPrompt) == "" {
 		systemPrompt = DefaultGrammarPrompt
 	}
-	out, err := c.Chat(ctx, model, systemPrompt, text, 0)
+	out, err := c.Chat(ctx, model, systemPrompt, text, 0, effort)
 	if err != nil {
 		return "", err
 	}
@@ -115,7 +121,7 @@ func (c *Client) ImproveGrammar(ctx context.Context, model, systemPrompt, text s
 }
 
 // Summarize returns a short bullet summary of an email.
-func (c *Client) Summarize(ctx context.Context, model, email string) (string, error) {
-	out, err := c.Chat(ctx, model, summaryPrompt, email, 0.2)
+func (c *Client) Summarize(ctx context.Context, model, effort, email string) (string, error) {
+	out, err := c.Chat(ctx, model, summaryPrompt, email, 0.2, effort)
 	return strings.TrimSpace(out), err
 }

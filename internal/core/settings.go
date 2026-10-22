@@ -119,6 +119,25 @@ func (s *Service) persist(st models.Settings) error {
 // kept. Callers that didn't read the settings through GetSettings (0) are
 // trusted; the labels they add count as added by the backend.
 func (s *Service) SaveSettings(in models.Settings) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	return s.saveSettings(in)
+}
+
+// editSettings changes the current settings: fn edits a copy, which is
+// saved like SaveSettings. No other save happens in between.
+func (s *Service) editSettings(fn func(st *models.Settings) error) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	st := s.Settings()
+	if err := fn(&st); err != nil {
+		return err
+	}
+	return s.saveSettings(st)
+}
+
+// saveSettings is SaveSettings with saveMu held.
+func (s *Service) saveSettings(in models.Settings) error {
 	config.Normalize(&in)
 	s.settingsMu.Lock()
 	old := s.settings
@@ -227,6 +246,8 @@ func (s *Service) SaveSettings(in models.Settings) error {
 // never share labels: the same name in another mailbox is another label.
 func (s *Service) resolveProviderLabels(accountID string, labels []mail.Label) map[string]string {
 	dismissed := s.dismissedLabels()[accountID]
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.settingsMu.Lock()
 	st := s.settings
 	st.Labels = slices.Clone(st.Labels)
@@ -433,6 +454,13 @@ func (s *Service) splitLabels(st *models.Settings, legacy bool) bool {
 // updateLabels changes the stored settings' labels outside SaveSettings
 // (accounts added or removed). fn reports whether it changed anything.
 func (s *Service) updateLabels(fn func(st *models.Settings) bool) {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.updateLabelsLocked(fn)
+}
+
+// updateLabelsLocked is updateLabels with saveMu held.
+func (s *Service) updateLabelsLocked(fn func(st *models.Settings) bool) {
 	s.settingsMu.Lock()
 	st := s.settings
 	st.Labels = slices.Clone(st.Labels)

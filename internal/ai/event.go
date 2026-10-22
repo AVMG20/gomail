@@ -25,8 +25,9 @@ Rules:
 - Use "" or false for anything not mentioned. Never invent details.`
 
 // ParseEvent turns natural language ("lunch with Sam friday 12:30 at
-// Coffee Co") into event fields. now (with its location) anchors relative dates.
-func (c *Client) ParseEvent(ctx context.Context, model, text string, now time.Time) (models.EventDraft, error) {
+// Coffee Co") into event fields. now (with its location) anchors relative
+// dates; effort is the reasoning effort ("" = the model's default).
+func (c *Client) ParseEvent(ctx context.Context, model, text string, now time.Time, effort string) (models.EventDraft, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return models.EventDraft{}, errors.New("describe the event first")
@@ -35,7 +36,7 @@ func (c *Client) ParseEvent(ctx context.Context, model, text string, now time.Ti
 		return models.EventDraft{}, errors.New("that description is too long; keep it to a sentence or two")
 	}
 	system := fmt.Sprintf(eventPrompt, now.Format("Monday 2006-01-02 15:04"), now.Location().String())
-	out, err := c.Chat(ctx, model, system, text, 0)
+	out, err := c.Chat(ctx, model, system, text, 0, effort)
 	if err != nil {
 		return models.EventDraft{}, err
 	}

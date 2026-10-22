@@ -32,6 +32,20 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+func TestDeviceSyncInterval(t *testing.T) {
+	if DefaultSettings().DeviceSyncInterval != 1 {
+		t.Fatal("syncs every minute by default")
+	}
+	for in, want := range map[int]int{0: 1, 1: 1, 5: 5, 15: 15, 30: 30, 60: 60, -1: -1, 2: 1, -5: 1, 1440: 1} {
+		s := DefaultSettings()
+		s.DeviceSyncInterval = in
+		Normalize(&s)
+		if s.DeviceSyncInterval != want {
+			t.Errorf("%d -> %d, want %d", in, s.DeviceSyncInterval, want)
+		}
+	}
+}
+
 func fmtSlice(s []string) string {
 	out := "["
 	for i, x := range s {
@@ -394,5 +408,19 @@ func TestSyncIntervalPerMailbox(t *testing.T) {
 	// Mailboxes without their own choice check every 5 minutes (not the old global setting).
 	if SyncInterval(s, "b") != DefaultSyncInterval || DefaultSyncInterval != 5 {
 		t.Fatalf("default %d", SyncInterval(s, "b"))
+	}
+}
+
+func TestAIReasoningSettings(t *testing.T) {
+	// Settings saved before these existed (empty) get the defaults.
+	var s models.Settings
+	Normalize(&s)
+	if s.TextAIReasoning != "default" || s.EventAIReasoning != "low" || s.EventAIModel != "" {
+		t.Fatalf("defaults %q %q %q", s.TextAIReasoning, s.EventAIReasoning, s.EventAIModel)
+	}
+	s.TextAIReasoning, s.EventAIReasoning, s.EventAIModel = "high", "bogus", "  x/y  "
+	Normalize(&s)
+	if s.TextAIReasoning != "high" || s.EventAIReasoning != "low" || s.EventAIModel != "x/y" {
+		t.Fatalf("normalized %q %q %q", s.TextAIReasoning, s.EventAIReasoning, s.EventAIModel)
 	}
 }

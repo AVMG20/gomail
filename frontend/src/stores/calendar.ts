@@ -44,6 +44,10 @@ export const useCalendarStore = defineStore('calendar', () => {
     if (ev.canEdit !== undefined) return ev.canEdit
     return !!calendarMap.value.get(ev.calendarId)?.canEdit && ev.isOrganizer
   }
+  /** Your own copy of any event on a writable calendar, invitations too: its reminders, and removing it. */
+  function canManageEvent(ev: CalendarEvent): boolean {
+    return canEditEvent(ev) || !!calendarMap.value.get(ev.calendarId)?.canEdit
+  }
 
   const available = computed(() => hasMethod('ListCalendars'))
   const calendarMap = computed(() => new Map(calendars.value.map((c) => [c.id, c])))
@@ -119,6 +123,18 @@ export const useCalendarStore = defineStore('calendar', () => {
     calendars.value = calendars.value.map((c) => (c.id === id ? { ...c, visible } : c))
     try {
       await api.setCalendarVisible(id, visible)
+    } catch (e) {
+      calendars.value = before
+      toast.error('Couldn’t update the calendar', { description: errorMessage(e) })
+    }
+  }
+
+  /** Keep a calendar shown without reminders for its events (or remind again). */
+  async function setCalendarMuted(id: string, muted: boolean) {
+    const before = calendars.value
+    calendars.value = calendars.value.map((c) => (c.id === id ? { ...c, muted } : c))
+    try {
+      await api.setCalendarMuted(id, muted)
     } catch (e) {
       calendars.value = before
       toast.error('Couldn’t update the calendar', { description: errorMessage(e) })
@@ -320,9 +336,10 @@ export const useCalendarStore = defineStore('calendar', () => {
     try {
       await api.deleteEvent(ev.id, scope)
       if (fromUndo) return
-      // Single events can be restored by recreating them; occurrences of a series can't.
-      const undoable = !ev.isRecurring
-      toast('Event deleted', {
+      // Your own single events can be restored by recreating them; occurrences
+      // of a series and invitations (you'd become their organizer) can't.
+      const undoable = !ev.isRecurring && canEditEvent(ev)
+      toast(canEditEvent(ev) ? 'Event deleted' : 'Removed from your calendar', {
         description: ev.title,
         duration: UNDO_MS,
         action: undoable ? { label: 'Undo', onClick: () => void create(eventToInput(ev)) } : undefined,
@@ -331,6 +348,26 @@ export const useCalendarStore = defineStore('calendar', () => {
       if (scope === 'series' && ev.isRecurring) void fetchEvents()
       else if (!events.value.some((x) => x.id === ev.id)) events.value = [...events.value, ev]
       if (!conflict(e)) toast.error('Couldn’t delete the event', { description: errorMessage(e) })
+    }
+  }
+
+  /** Your own reminders (minutes before; [] = none), invitations too. */
+  async function setReminders(ev: CalendarEvent, minutes: number[], scope: RecurrenceScope): Promise<boolean> {
+    const series = scope === 'series' && ev.isRecurring
+    const key = ev.seriesId || ev.id
+    const hit = (e: CalendarEvent) => (series ? (e.seriesId || e.id) === key : e.id === ev.id)
+    const before = events.value.filter(hit)
+    events.value = events.value.map((e) => (hit(e) ? { ...e, reminders: [...minutes], remindersOff: !minutes.length } : e))
+    try {
+      const saved = await api.setEventReminders(ev.id, minutes, scope)
+      if (series) await fetchEvents()
+      else replaceLocal(ev.id, saved)
+      return true
+    } catch (e) {
+      const old = new Map(before.map((x) => [x.id, x]))
+      events.value = events.value.map((x) => old.get(x.id) ?? x)
+      if (!conflict(e)) toast.error('Couldn’t change the reminder', { description: errorMessage(e) })
+      return false
     }
   }
 
@@ -352,8 +389,8 @@ export const useCalendarStore = defineStore('calendar', () => {
   }
 
   return {
-    calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, openEventId, canEditEvent, available, calendarMap, weekStart, showDeclined,
-    visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible, setCalendarColor,
-    soloCalendar, setAccountEnabled, setAccountMuted, soloAccount, syncAccount, connect, create, update, move, remove, respond,
+    calendars, events, range, loading, error, loaded, connecting, view, lastCalendarId, focusDate, openEventId, canEditEvent, canManageEvent, available, calendarMap, weekStart, showDeclined,
+    visibleEvents, writableCalendars, defaultCalendar, calendarsOf, loadCalendars, loadRange, fetchEvents, refresh, setCalendarVisible, setCalendarMuted, setCalendarColor,
+    soloCalendar, setAccountEnabled, setAccountMuted, soloAccount, syncAccount, connect, create, update, move, remove, respond, setReminders,
   }
 })

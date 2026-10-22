@@ -34,16 +34,16 @@ func (c CalendarRow) Provider() calendar.Calendar {
 }
 
 // color is the user's pick when there is one (SetCalendarColor), else the provider's.
-const calendarCols = `id, account_id, remote_id, name, CASE WHEN color_override != '' THEN color_override ELSE color END, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end, video_provider`
+const calendarCols = `id, account_id, remote_id, name, CASE WHEN color_override != '' THEN color_override ELSE color END, is_primary, can_edit, visible, time_zone, reminders, sync_state, window_start, window_end, video_provider, muted`
 
 func scanCalendar(sc interface{ Scan(...any) error }) (CalendarRow, error) {
 	var c CalendarRow
-	var primary, canEdit, visible int
+	var primary, canEdit, visible, muted int
 	var rem string
 	var ws, we int64
 	err := sc.Scan(&c.ID, &c.AccountID, &c.RemoteID, &c.Name, &c.Color, &primary, &canEdit, &visible, &c.TimeZone, &rem, &c.State, &ws, &we,
-		&c.VideoCallProvider)
-	c.Primary, c.CanEdit, c.Visible = primary == 1, canEdit == 1, visible == 1
+		&c.VideoCallProvider, &muted)
+	c.Primary, c.CanEdit, c.Visible, c.Muted = primary == 1, canEdit == 1, visible == 1, muted == 1
 	if rem != "" {
 		_ = json.Unmarshal([]byte(rem), &c.DefaultReminders)
 	}
@@ -138,6 +138,18 @@ func (s *Store) SetCalendarVisible(id string, visible bool) error {
 	return nil
 }
 
+// SetCalendarRemindersMuted turns a calendar's event reminders off (or on again).
+func (s *Store) SetCalendarRemindersMuted(id string, muted bool) error {
+	res, err := s.db.Exec(`UPDATE calendars SET muted = ? WHERE id = ?`, boolInt(muted), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // SetCalendarColor sets the color shown for a calendar ("" = the provider's).
 func (s *Store) SetCalendarColor(id, color string) error {
 	res, err := s.db.Exec(`UPDATE calendars SET color_override = ? WHERE id = ?`, color, id)
@@ -160,7 +172,7 @@ func (s *Store) SetCalendarSync(id, state string, start, end time.Time) error {
 const eventCols = `e.id, e.calendar_id, e.account_id, e.remote_id, e.series_remote, e.ical_uid, e.title, e.start_ms, e.end_ms, e.all_day,
 	e.time_zone, e.location, e.description, e.attendees, e.organizer, e.is_organizer, e.my_response, e.meeting_url, e.is_recurring,
 	e.recurrence, e.rrule, e.status, e.reminders,
-	(e.can_edit AND coalesce((SELECT c2.can_edit FROM calendars c2 WHERE c2.id = e.calendar_id), 0)), e.updated_ms, e.etag`
+	(e.can_edit AND coalesce((SELECT c2.can_edit FROM calendars c2 WHERE c2.id = e.calendar_id), 0)), e.updated_ms, e.etag, e.reminders_off`
 
 // EventRow is a stored event with its remote ids.
 type EventRow struct {
@@ -174,16 +186,16 @@ type EventRow struct {
 func scanEvent(sc interface{ Scan(...any) error }) (EventRow, error) {
 	var e EventRow
 	var start, end, updated int64
-	var allDay, isOrg, isRec, canEdit int
+	var allDay, isOrg, isRec, canEdit, remOff int
 	var atts, org, rem string
 	err := sc.Scan(&e.ID, &e.CalendarID, &e.AccountID, &e.RemoteID, &e.SeriesRemoteID, &e.ICalUID, &e.Title, &start, &end, &allDay,
 		&e.TimeZone, &e.Location, &e.Description, &atts, &org, &isOrg, &e.MyResponse, &e.MeetingURL, &isRec,
-		&e.Recurrence, &e.RRule, &e.Status, &rem, &canEdit, &updated, &e.ETag)
+		&e.Recurrence, &e.RRule, &e.Status, &rem, &canEdit, &updated, &e.ETag, &remOff)
 	if err != nil {
 		return e, err
 	}
 	e.Start, e.End, e.UpdatedAt = fromMillis(start), fromMillis(end), fromMillis(updated)
-	e.AllDay, e.IsOrganizer, e.IsRecurring, e.CanEdit = allDay == 1, isOrg == 1, isRec == 1, canEdit == 1
+	e.AllDay, e.IsOrganizer, e.IsRecurring, e.CanEdit, e.RemindersOff = allDay == 1, isOrg == 1, isRec == 1, canEdit == 1, remOff == 1
 	e.Attendees, e.Reminders = []models.Attendee{}, []int{}
 	if atts != "" {
 		_ = json.Unmarshal([]byte(atts), &e.Attendees)
@@ -322,13 +334,14 @@ func (s *Store) Events(start, end time.Time, showDeclined bool) ([]models.Calend
 }
 
 // ReminderEvents lists the events overlapping [start, end) that may show
-// reminders: accounts with access, enabled and not muted, any calendar
-// visibility, not cancelled or declined.
+// reminders: accounts with access, enabled and not muted, calendars shown
+// and not muted, not cancelled or declined.
 func (s *Store) ReminderEvents(start, end time.Time) ([]models.CalendarEvent, error) {
 	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events e
 		JOIN calendars c ON c.id = e.calendar_id
 		JOIN accounts a ON a.id = c.account_id
-		WHERE a.calendar_consent = 1 AND a.calendar_enabled = 1 AND a.calendar_muted = 0 AND e.status != 'cancelled'
+		WHERE a.calendar_consent = 1 AND a.calendar_enabled = 1 AND a.calendar_muted = 0 AND c.visible = 1 AND c.muted = 0
+			AND e.status != 'cancelled'
 			AND e.my_response != 'declined' AND e.start_ms < ? AND e.end_ms > ?
 		ORDER BY e.start_ms`, toMillis(end), toMillis(start))
 	if err != nil {
@@ -428,6 +441,19 @@ func rowToProvider(r EventRow) calendar.Event {
 		Attendees: e.Attendees, Organizer: e.Organizer, IsOrganizer: e.IsOrganizer, MyResponse: e.MyResponse, MeetingURL: e.MeetingURL,
 		IsRecurring: e.IsRecurring, Recurrence: e.Recurrence, RRule: e.RRule, Status: e.Status, Reminders: e.Reminders,
 		CanEdit: e.CanEdit, Updated: e.UpdatedAt, ETag: r.ETag}
+}
+
+// SetRemindersOff marks events whose reminders you turned off in gomail
+// (or clears the mark). Syncs keep it.
+func (s *Store) SetRemindersOff(ids []string, off bool) error {
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		for _, id := range ids {
+			if _, err := tx.Exec(`UPDATE events SET reminders_off = ? WHERE id = ?`, boolInt(off), id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // ToProvider converts a stored event to the provider form.

@@ -218,7 +218,7 @@ func TestChatAndGrammarCleanup(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&last)
 		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": reply}}}})
 	}, "sk")
-	out, err := c.ImproveGrammar(context.Background(), "openai/gpt-4o-mini", "", "helo world\n")
+	out, err := c.ImproveGrammar(context.Background(), "openai/gpt-4o-mini", "", "", "helo world\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestChatAndGrammarCleanup(t *testing.T) {
 		t.Errorf("request %v", last)
 	}
 	reply = `"Fixed text."`
-	out, _ = c.ImproveGrammar(context.Background(), "m", "custom prompt", "fixd text.")
+	out, _ = c.ImproveGrammar(context.Background(), "m", "", "custom prompt", "fixd text.")
 	if out != "Fixed text." {
 		t.Fatalf("quotes: %q", out)
 	}
@@ -238,11 +238,11 @@ func TestChatAndGrammarCleanup(t *testing.T) {
 		t.Error("custom prompt not used")
 	}
 	reply = "<p>Hello <b>there</b></p>"
-	out, _ = c.ImproveGrammar(context.Background(), "m", "", "<p>Helo <b>ther</b></p>")
+	out, _ = c.ImproveGrammar(context.Background(), "m", "", "", "<p>Helo <b>ther</b></p>")
 	if out != "<p>Hello <b>there</b></p>" {
 		t.Fatalf("html: %q", out)
 	}
-	if _, err := c.ImproveGrammar(context.Background(), JevModel, "", "x"); err == nil {
+	if _, err := c.ImproveGrammar(context.Background(), JevModel, "", "", "x"); err == nil {
 		t.Error("jev cannot chat")
 	}
 }

@@ -60,6 +60,31 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** Re-read every setting after another computer changed them (settings:changed). Edits the
+   *  backend may not have yet are kept: they are newer. Runs in turn with saves. */
+  function reload(): Promise<void> {
+    if (!settings.value) return Promise.resolve()
+    changedElsewhere++
+    inflight = inflight.then(refresh)
+    return inflight
+  }
+
+  async function refresh() {
+    const seen = changedElsewhere
+    try {
+      const fresh = await api.getSettings()
+      if (!settings.value) return
+      const keep: Partial<Settings> = {}
+      for (const k of unsaved.keys()) Object.assign(keep, { [k]: settings.value[k] })
+      // The label list goes with the revision it was read at (see SaveSettings).
+      if (unsaved.has('labels')) keep.labelsRev = settings.value.labelsRev
+      settings.value = { ...fresh, ...keep }
+      readElsewhere = seen
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function loadDefaults() {
     try {
       defaults.value = await api.getDefaultPrompts()
@@ -94,6 +119,14 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null
+  /** Settings changed here that the backend may not have yet, with the edit's sequence number
+   *  (a save that started later than the edit stored it). */
+  const unsaved = new Map<keyof Settings, number>()
+  let edits = 0
+  /** settings:changed events, and how many of them a re-read has caught up with: a save first
+   *  re-reads, so it doesn't send values another computer changed back. */
+  let changedElsewhere = 0
+  let readElsewhere = 0
   /** Callers waiting for the next save (every debounced update resolves, not just the last). */
   let waiters: (() => void)[] = []
   /** Saves run one at a time and always send the latest state, so the last write wins. */
@@ -104,7 +137,10 @@ export const useSettingsStore = defineStore('settings', () => {
     waiters = []
     saving.value = true
     try {
+      if (readElsewhere < changedElsewhere) await refresh()
+      const upTo = edits
       await api.saveSettings(settings.value!)
+      for (const [k, n] of unsaved) if (n <= upTo) unsaved.delete(k)
     } catch (e) {
       toast.error('Could not save settings', { description: errorMessage(e) })
     } finally {
@@ -117,6 +153,7 @@ export const useSettingsStore = defineStore('settings', () => {
   function update(patch: Partial<Settings>, delay = 350): Promise<void> {
     if (!settings.value) return Promise.resolve()
     settings.value = { ...settings.value, ...patch }
+    for (const k of Object.keys(patch)) unsaved.set(k as keyof Settings, ++edits)
     if (saveTimer) clearTimeout(saveTimer)
     const p = new Promise<void>((resolve) => waiters.push(resolve))
     saveTimer = setTimeout(() => {
@@ -189,6 +226,6 @@ export const useSettingsStore = defineStore('settings', () => {
     patchLabel, renameLabel, removeLabel,
     settings, saving, models, modelsLoading, modelsError, defaults, appInfo, updateInfo, checkingUpdate, checkForUpdate,
     labels, labelMap, mutedMailboxes, labelsForAccount, labelsForAccounts, labelInAccountOf, labelGroupIds, viewLabel, aiReady, grammarReady,
-    load, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
+    load, reload, refreshLabels, loadDefaults, loadAppInfo, update, flush, setOpenRouterKey, loadModels,
   }
 })

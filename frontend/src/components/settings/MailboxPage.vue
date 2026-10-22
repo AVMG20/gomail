@@ -147,11 +147,17 @@ async function reconnect() {
 
 // ---- remove
 const confirmRemove = ref(false)
+/** Sync between computers is on: the other computers remove the mailbox too. */
+const syncedRemove = ref(false)
 // Kept apart from the dialog's open state: the dialog's own close runs before the confirm click.
 let removeTarget: Account | null = null
 function askRemove() {
   removeTarget = a.value
+  syncedRemove.value = false
   confirmRemove.value = true
+  if (hasMethod('GetDeviceSyncStatus')) {
+    api.getDeviceSyncStatus().then((st) => (syncedRemove.value = st.connected), () => {})
+  }
 }
 async function remove() {
   const acc = removeTarget
@@ -353,7 +359,10 @@ function labelAll() {
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Remove {{ a.email }}?</AlertDialogTitle>
-          <AlertDialogDescription>Local copies of its mail and its sign-in token are deleted from this computer. Nothing is deleted from the server.</AlertDialogDescription>
+          <AlertDialogDescription>
+            Local copies of its mail and its sign-in token are deleted from this computer. Nothing is deleted from {{ providerName(a) }}.
+            <template v-if="syncedRemove"><br /><span data-testid="remove-synced">Your other computers remove it too when they next sync.</span></template>
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

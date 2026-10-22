@@ -490,6 +490,16 @@ CREATE INDEX auto_moves_recent ON auto_moves(to_kind, created_at);
 DELETE FROM sync_state WHERE key LIKE 'delta:%' AND account_id IN
 	(SELECT DISTINCT account_id FROM messages WHERE date = 0 AND subject = '' AND from_email = '');
 `,
+	// 19: "No reminder" chosen in gomail: kept across syncs (the providers
+	// can't tell it from "no reminders of its own", which gets the default).
+	`
+ALTER TABLE events ADD COLUMN reminders_off INTEGER NOT NULL DEFAULT 0;
+`,
+	// 20: calendars you see but don't want reminders of (and their backup copy).
+	`
+ALTER TABLE calendars ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pending_calendars ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number

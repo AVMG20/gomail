@@ -18,6 +18,8 @@ const (
 	DefaultTenant            = "common"
 	DefaultChatModel         = "openai/gpt-4o-mini"
 	DefaultClassifierModel   = "typesafe/jev-1.13"
+	DefaultTextAIReasoning   = "default"
+	DefaultEventAIReasoning  = "low"
 	DefaultClassifyThreshold = 0.5
 	DefaultRemoveThreshold   = 0.15
 	DefaultPrimaryColor      = "#2563eb"
@@ -102,6 +104,8 @@ func DefaultSettings() models.Settings {
 		MicrosoftTenant:     DefaultTenant,
 		OpenRouterModel:     DefaultChatModel,
 		ClassifierModel:     DefaultClassifierModel,
+		TextAIReasoning:     DefaultTextAIReasoning,
+		EventAIReasoning:    DefaultEventAIReasoning,
 		ClassifyThreshold:   DefaultClassifyThreshold,
 
 		ClassifyRemoveThreshold:  DefaultRemoveThreshold,
@@ -124,6 +128,7 @@ func DefaultSettings() models.Settings {
 		SyncDepthDays:            90,
 		AIDailyBudgetUSD:         1,
 		CheckUpdates:             true,
+		DeviceSyncInterval:       DefaultDeviceSyncInterval,
 		ShowInTray:               true,
 		Labels:                   []models.Label{JunkLabel()}, // mailboxes bring their own (MailboxDefaultLabels)
 		PrimaryColor:             DefaultPrimaryColor,
@@ -235,6 +240,13 @@ func Normalize(s *models.Settings) {
 	if s.ClassifierModel == "" {
 		s.ClassifierModel = DefaultClassifierModel
 	}
+	s.EventAIModel = strings.TrimSpace(s.EventAIModel)
+	if !validEffort(s.TextAIReasoning) {
+		s.TextAIReasoning = DefaultTextAIReasoning
+	}
+	if !validEffort(s.EventAIReasoning) {
+		s.EventAIReasoning = DefaultEventAIReasoning
+	}
 	if s.ClassifyThreshold <= 0 || s.ClassifyThreshold > 1 {
 		s.ClassifyThreshold = DefaultClassifyThreshold
 	}
@@ -276,7 +288,19 @@ func Normalize(s *models.Settings) {
 	s.JunkStaysPut = uniqueTrimmed(s.JunkStaysPut)
 	s.NotJunkSenders = normalizeSenderLists(s.NotJunkSenders)
 	s.SyncIntervals = normalizeIntervals(s.SyncIntervals)
+	if !slices.Contains(DeviceSyncIntervals, s.DeviceSyncInterval) {
+		s.DeviceSyncInterval = DefaultDeviceSyncInterval
+	}
 }
+
+// Device sync intervals (Settings.DeviceSyncInterval, minutes).
+const (
+	DefaultDeviceSyncInterval = 1
+	DeviceSyncManual          = -1 // only on start and with "Sync now"
+)
+
+// DeviceSyncIntervals are the choices offered.
+var DeviceSyncIntervals = []int{1, 5, 15, 30, 60, DeviceSyncManual}
 
 // SyncIntervalChoices are the background check intervals offered (minutes).
 var SyncIntervalChoices = []int{1, 5, 15, 30, 60}
@@ -724,4 +748,14 @@ func uniqueTrimmed(in []string) []string {
 		}
 	}
 	return out
+}
+
+// validEffort reports whether v is a reasoning setting: OpenRouter's
+// efforts or "default" (send none, the model decides).
+func validEffort(v string) bool {
+	switch v {
+	case "default", "none", "minimal", "low", "medium", "high", "xhigh":
+		return true
+	}
+	return false
 }

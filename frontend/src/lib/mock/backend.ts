@@ -8,7 +8,7 @@ import { groupSenders, type SenderGrouping, type SenderStat, type SenderSummary 
 import { fromWireInput, MockCalendar } from './calendar'
 import { labelInAccount, labelInMailbox } from '../labelScope'
 import type {
-  Account, AIModel, AppInfo, BackupResult, RestoreSummary, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
+  Account, AIModel, AppInfo, BackupResult, DeviceSyncConnect, DeviceSyncStatus, RestoreSummary, ClassificationResult, ClassifyEstimate, ClassifyJob, ComposeRequest, DefaultPrompts,
   AttachmentData, EventName, EventPayloads, Folder, LabelCount, ListQuery, Message, MessageLabel, MessagePage, MessageSummary,
   SearchQuery, SearchResult, Settings, Calendar, CalendarEvent, EventInput, RecurrenceScope, AttendeeResponse, EventDraft, AutoMove,
 } from '../types'
@@ -18,6 +18,11 @@ import {
 } from './data'
 
 type Listener = (payload: unknown) => void
+
+/** Some BIP39 words for pretend sync codes. */
+const MOCK_SYNC_WORDS = ['able', 'acid', 'bamboo', 'basket', 'cactus', 'canal', 'deer', 'dolphin', 'eagle', 'echo', 'fabric', 'fantasy', 'garden', 'gentle', 'harbor', 'hazard',
+  'island', 'ivory', 'jacket', 'jungle', 'kitten', 'ladder', 'lemon', 'magnet', 'maple', 'napkin', 'object', 'orange', 'palace', 'pepper', 'quote', 'rabbit',
+  'salmon', 'shadow', 'tackle', 'timber', 'umbrella', 'valley', 'violin', 'walnut', 'window', 'yellow', 'zebra']
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -70,6 +75,13 @@ class MockBackend {
   private incomingIdx = 0
   private jobSeq = 0
   private cal = new MockCalendar((accountId) => this.emit('calendar:changed', { accountId }))
+  /** Sync between computers: a pretend server (the codes it knows) and this computer's code. */
+  private syncCodes = new Set<string>()
+  private syncCode = ''
+  private sync: DeviceSyncStatus = {
+    available: true, connected: false, serverUrl: '', includeSecrets: true, syncing: false, lastSyncAt: null, error: '',
+    defaultServerUrl: 'https://gomail.avmg.nl',
+  }
 
   constructor() {
     for (const a of this.accounts) this.folders.set(a.id, foldersFor(a.id, a.provider))
@@ -635,6 +647,14 @@ class MockBackend {
     this.cal.setVisible(id, visible)
   }
 
+  async SetCalendarMuted(id: string, muted: boolean): Promise<void> {
+    await latency(20, 60)
+    const c = this.cal.calendars.find((x) => x.id === id)
+    if (!c) throw new Error('calendar not found')
+    c.muted = muted
+    this.emit('calendar:changed', { accountId: c.accountId })
+  }
+
   async SetCalendarColor(id: string, color: string): Promise<void> {
     await latency(20, 60)
     const c = this.cal.calendars.find((x) => x.id === id)
@@ -712,6 +732,11 @@ class MockBackend {
   async DeleteEvent(id: string, scope: RecurrenceScope): Promise<void> {
     await latency(100, 220)
     this.cal.remove(id, scope)
+  }
+
+  async SetEventReminders(id: string, minutes: number[], scope: RecurrenceScope): Promise<CalendarEvent> {
+    await latency(100, 220)
+    return this.cal.setReminders(id, minutes, scope)
   }
 
   async RespondToEvent(id: string, response: AttendeeResponse): Promise<void> {
@@ -1084,6 +1109,68 @@ class MockBackend {
       cancelled: false, path: exp.path, createdAt: new Date().toISOString(), labels: exp.labels, rules: 0, accountsAdded: 0, accountsReady: 0,
       accountsMerged: exp.accounts, accountsSkipped: 0, labelAssignments: exp.labelAssignments, appliedNow: exp.labelAssignments, calendars: 0, secretsRestored: false,
     }
+  }
+
+  // ---------------------------------------------------------------- sync between computers
+  async GetDeviceSyncStatus(): Promise<DeviceSyncStatus> {
+    await latency(20, 60)
+    return { ...this.sync }
+  }
+
+  /** "Turn on sync" makes a code from a few BIP39 words (the real one uses all 2048); a code works once it was made here. */
+  async ConnectDeviceSync(req: DeviceSyncConnect): Promise<DeviceSyncStatus> {
+    await sleep(400)
+    let server = (req.serverUrl || this.sync.defaultServerUrl).trim().replace(/\/+$/, '')
+    if (!server.includes('://')) server = `https://${server}`
+    if (!/^https:\/\//.test(server) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(server)) throw new Error('the server address must start with https://')
+    let code: string
+    if (req.create) {
+      code = Array.from({ length: 24 }, () => MOCK_SYNC_WORDS[Math.floor(Math.random() * MOCK_SYNC_WORDS.length)]).join(' ')
+      this.syncCodes.add(code)
+    } else {
+      const words = req.code.toLowerCase().split(/[^a-z]+/).filter(Boolean)
+      if (!words.length) throw new Error('enter the 24 words of the sync code')
+      const bad = words.findIndex((w) => !MOCK_SYNC_WORDS.includes(w))
+      if (bad >= 0) throw new Error(`word ${bad + 1}, “${words[bad]}”, isn’t a sync code word. Check it for a typo`)
+      if (words.length !== 24) throw new Error(`a sync code has 24 words; this has ${words.length}`)
+      code = words.join(' ')
+      if (!this.syncCodes.has(code)) throw new Error('no sync account uses this code on this server. Check the server address, and that sync is on on the other device')
+    }
+    this.syncCode = code
+    this.sync = { ...this.sync, connected: true, serverUrl: server, includeSecrets: req.create ? req.includeSecrets : true, error: '' }
+    this.emit('devicesync:status', { ...this.sync })
+    void this.SyncDevicesNow()
+    return { ...this.sync }
+  }
+
+  async GetDeviceSyncCode(): Promise<string> {
+    await latency(20, 60)
+    if (!this.sync.connected) throw new Error('device sync isn’t set up')
+    return this.syncCode
+  }
+
+  async DisconnectDeviceSync(): Promise<void> {
+    await latency(40, 100)
+    this.syncCode = ''
+    this.sync = { ...this.sync, connected: false, serverUrl: '', syncing: false, lastSyncAt: null, error: '' }
+    this.emit('devicesync:status', { ...this.sync })
+  }
+
+  async SyncDevicesNow(): Promise<DeviceSyncStatus> {
+    if (!this.sync.connected) throw new Error('device sync isn’t set up')
+    this.sync = { ...this.sync, syncing: true }
+    this.emit('devicesync:status', { ...this.sync })
+    await sleep(500)
+    this.sync = { ...this.sync, syncing: false, lastSyncAt: new Date().toISOString(), error: '' }
+    this.emit('devicesync:status', { ...this.sync })
+    return { ...this.sync }
+  }
+
+  async SetDeviceSyncSecrets(on: boolean): Promise<void> {
+    await latency(40, 100)
+    if (!this.sync.connected) throw new Error('device sync isn’t set up')
+    this.sync = { ...this.sync, includeSecrets: on }
+    this.emit('devicesync:status', { ...this.sync })
   }
 
   /** Next backend pass. ?update=1 pretends a newer release exists (and emits update:available). */

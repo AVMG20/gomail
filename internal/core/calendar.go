@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -282,6 +283,20 @@ func (s *Service) SetCalendarVisible(calendarID string, visible bool) error {
 	return nil
 }
 
+// SetCalendarMuted keeps a calendar shown but turns off reminders for its
+// events (someone else's calendar you follow).
+func (s *Service) SetCalendarMuted(calendarID string, muted bool) error {
+	row, err := s.store.Calendar(calendarID)
+	if err != nil {
+		return errors.New("calendar not found")
+	}
+	if err := s.store.SetCalendarRemindersMuted(calendarID, muted); err != nil {
+		return err
+	}
+	s.emitCalendar(row.AccountID)
+	return nil
+}
+
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // SetCalendarColor changes the color gomail shows for a calendar and its
@@ -356,6 +371,7 @@ func (s *Service) EnableCalendar(accountID string) (models.Account, error) {
 		}
 		s.forgetClients(acct.ID)
 		_ = s.store.SetNeedsReauth(acct.ID, false)
+		defer s.deviceSyncSignedIn(acct.ID)
 	}
 	if err := s.store.SetCalendarConsent(acct.ID, true); err != nil {
 		return acct, err
@@ -558,8 +574,13 @@ func (s *Service) CreateEvent(in models.EventInput) (models.CalendarEvent, error
 		s.emitCalendar(acct.ID)
 		return models.CalendarEvent{}, fmt.Errorf("creating the event failed: %w", s.calendarError(acct, err))
 	}
+	// Every reminder removed in the editor (it starts with the default): none at all.
+	off := in.ReminderMinutes != nil && len(in.ReminderMinutes) == 0
 	if created.RRule == "" && !created.IsRecurring {
 		ids, err := s.store.ApplyEvents(row, store.EventChanges{Upserts: []calendar.Event{created}})
+		if err == nil && off {
+			_ = s.store.SetRemindersOff(ids, true)
+		}
 		s.emitCalendar(acct.ID)
 		if err != nil || len(ids) == 0 {
 			return models.CalendarEvent{}, err
@@ -572,6 +593,14 @@ func (s *Service) CreateEvent(in models.EventInput) (models.CalendarEvent, error
 	}
 	s.emitCalendar(acct.ID)
 	occ, err := s.store.SeriesEvents(row.ID, created.RemoteID)
+	if err == nil && len(occ) > 0 && off {
+		ids := make([]string, 0, len(occ))
+		for _, o := range occ {
+			ids = append(ids, o.ID)
+		}
+		_ = s.store.SetRemindersOff(ids, true)
+		occ, _ = s.store.SeriesEvents(row.ID, created.RemoteID)
+	}
 	if err == nil && len(occ) > 0 {
 		first := occ[0]
 		for _, o := range occ {
@@ -700,6 +729,15 @@ func (s *Service) UpdateEvent(id string, in models.EventInput, scope string) (mo
 		s.emitCalendar(acct.ID)
 		return models.CalendarEvent{}, s.eventChangeError(acct, p, row, "saving the event failed", err)
 	}
+	// Removing every reminder means none at all; adding one undoes that. (A
+	// drag sends the event's own empty list: that changes nothing.)
+	if in.ReminderMinutes != nil && (len(in.ReminderMinutes) > 0 || len(cur.Reminders) > 0) {
+		ids := make([]string, 0, len(old))
+		for _, o := range old {
+			ids = append(ids, o.ID)
+		}
+		_ = s.store.SetRemindersOff(ids, len(in.ReminderMinutes) == 0)
+	}
 	if scope == models.ScopeThis && updated.RemoteID == cur.RemoteID && ev.RRule == "" {
 		_, _ = s.store.ApplyEvents(row, store.EventChanges{Upserts: []calendar.Event{updated}})
 	} else {
@@ -758,6 +796,77 @@ func (s *Service) DeleteEvent(id, scope string) error {
 		return s.eventChangeError(acct, p, row, "deleting the event failed", err)
 	}
 	return nil
+}
+
+// SetEventReminders changes your own reminders of an event (minutes before
+// the start; empty = none), also on invitations you didn't organize.
+// Scope "series" changes every occurrence of a recurring event.
+func (s *Service) SetEventReminders(id string, minutes []int, scope string) (models.CalendarEvent, error) {
+	cur, row, acct, p, err := s.eventContext(id)
+	if err != nil {
+		return models.CalendarEvent{}, err
+	}
+	if !row.CanEdit {
+		return models.CalendarEvent{}, errors.New("this calendar is read-only")
+	}
+	clean := []int{}
+	for _, m := range minutes {
+		if m < 0 || m > 40320 {
+			return models.CalendarEvent{}, errors.New("a reminder must be between 0 minutes and 4 weeks before the event")
+		}
+		if !slices.Contains(clean, m) {
+			clean = append(clean, m)
+		}
+	}
+	slices.Sort(clean)
+	old := []store.EventRow{cur}
+	target := cur.RemoteID
+	if normScope(scope) == models.ScopeSeries && cur.SeriesRemoteID != "" {
+		if old, err = s.store.SeriesEvents(cur.CalendarID, cur.SeriesRemoteID); err != nil {
+			return models.CalendarEvent{}, err
+		}
+		target = cur.SeriesRemoteID
+	}
+	var next []calendar.Event
+	for _, o := range old {
+		n := o.ToProvider()
+		n.Reminders = clean
+		next = append(next, n)
+	}
+	if _, err := s.store.ApplyEvents(row, store.EventChanges{Upserts: next}); err != nil {
+		return models.CalendarEvent{}, err
+	}
+	s.emitCalendar(acct.ID)
+	ctx, cancel := s.calCtx()
+	defer cancel()
+	updated, err := p.SetReminders(ctx, row.Provider(), target, clean)
+	if err != nil {
+		_ = s.store.PutEventRows(old)
+		s.emitCalendar(acct.ID)
+		return models.CalendarEvent{}, s.eventChangeError(acct, p, row, "saving the reminder failed", err)
+	}
+	ids := make([]string, 0, len(old))
+	for _, o := range old {
+		ids = append(ids, o.ID)
+	}
+	if err := s.store.SetRemindersOff(ids, len(clean) == 0); err != nil {
+		slog.Warn("reminders off mark", "err", err)
+	}
+	if target == cur.RemoteID && updated.RemoteID == cur.RemoteID {
+		// The new version (ETag) keeps the next change from looking like a conflict.
+		_, _ = s.store.ApplyEvents(row, store.EventChanges{Upserts: []calendar.Event{updated}})
+	} else {
+		// A series: take the provider's view of the occurrences.
+		s.goBG(func() {
+			ctx, cancel := s.calCtx()
+			defer cancel()
+			if _, err := s.syncCalendar(ctx, acct, p, row); err == nil {
+				s.emitCalendar(acct.ID)
+			}
+		})
+	}
+	s.emitCalendar(acct.ID)
+	return s.GetEvent(id)
 }
 
 // RespondToEvent answers an invitation (accepted | tentative | declined).

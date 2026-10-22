@@ -626,6 +626,80 @@ includesSecrets, settings, extra, accounts, secrets?}`:
   applied right away to messages and calendars already present, and
   otherwise on ingest (`ApplySync`, `ReplaceCalendars`).
 
+## Sync between computers
+
+Settings → Sync keeps several installs the same through a `gomail-sync`
+server (`cmd/gomail-sync`, `internal/syncserver`; deployment in
+[deploy/sync/README.md](../deploy/sync/README.md)). The default server is
+`https://gomail.avmg.nl`.
+
+**Sync code and keys.** `ConnectDeviceSync({create: true})` makes a sync
+code: 24 words from the BIP39 English list (`internal/devsync/code.go`),
+256 random bits plus an 8-bit checksum, encoded exactly like a BIP39
+mnemonic. Other computers call `ConnectDeviceSync({code})`; `ParseCode`
+ignores case, spacing, line breaks and numbering, takes four-letter
+abbreviations, names a word that isn't in the list and rejects a bad
+checksum. HKDF-SHA256 derives three values from the code's entropy: the
+account id (sent), the auth key (sent; the server stores a salted SHA-256)
+and the AES-256-GCM key (never sent). The code is kept in the OS keychain
+(`devicesync:code`); `GetDeviceSyncCode` returns it for the next computer.
+
+**Documents.** The engine (`internal/devsync`) syncs a few documents of keyed
+JSON values, each encrypted (gzip, then AES-GCM with the document name as
+associated data) and stored with a revision (at least the server's clock in
+ms, so revisions never repeat after the server lost or restored its data).
+A key's entry carries its value and the time it was written, from a hybrid
+clock: never below a time the computer has already seen, so a clock that is
+behind can't lose a later change. Merging takes the newer entry per key;
+deletions leave tombstones, kept for good.
+`internal/core/devsync.go` maps app state to documents. Mailboxes are named
+`provider:email` and labels by a per-computer sync id, because local ids
+differ:
+
+| Document | Keys |
+|---|---|
+| `accounts` | `a/<mailbox>` name, color, signature, order, calendar switches; `c/<mailbox>` calendar choices (shown, color, reminders muted); with sign-in sync on: `t/<mailbox>` refresh token, `s/openrouter`, `s/oauth` (OAuth app); `secrets` the switch itself |
+| `settings` | `g/<field>` for the fields in `syncedSettings`; `m/<mailbox>/<choice>` muted, auto-label, AI corrections off, Junk stays put, Not-junk senders, hidden folders (by remote id) |
+| `labels` | `l/<mailbox>/<sync id>` labels, `l/*/junk`, `r/<mailbox>/<field>/<action>/<text>` rules, `q/<mailbox>` quiet labels, `x/<mailbox>` deleted imported labels |
+| `marks-<hash>` | one per mailbox: label decisions per remote message id (manual, AI with confidence, rejected, override, already labeled by Jev) |
+
+Removing a mailbox deletes its keys in every document, sign-in included
+(the computer remembers removed mailboxes until it syncs them again).
+
+Not synced: `deviceSettings` (zoom, launch at login, tray, close to tray,
+mail kept, check intervals, `deviceSyncInterval`, notifications, calendar
+notifications, reading pane) and everything the
+provider already syncs (mail, folders, archive/junk/trash moves, read and
+starred state). `TestDeviceSyncClassifiesEverySetting` fails until a new
+settings field is put in one of the lists.
+
+**Rounds.** On start, every `deviceSyncInterval` minutes (1 by default;
+5, 15, 30, 60, or -1 for only on start and "Sync now"), after waking, when
+back online and on `SyncDevicesNow`. A round fetches the server's copy if
+its revision moved, then compares each document with its local shadow (the
+entries as last merged, stored encrypted in the settings table) to find
+this computer's changes, merges, applies what other computers changed, and
+uploads with the revision it read; a 409 means another computer was
+faster, so it merges again. The shadow is saved before applying, with the
+keys being applied pending, so a round that stops halfway doesn't take
+them for local changes. Applying makes the local state equal the shadow,
+so nothing is sent back; a deletion a computer doesn't carry out isn't
+either. While a computer joins (its first round), its values count as
+oldest: it takes the synced settings and adds what only it has (and keeps
+what the account deleted before, like a mailbox it has signed in). It
+uploads no sign-ins or keys before it learns the account's `secrets`
+switch; `s/` and `t/` keys apply only while the switch is on. A
+per-mailbox choice at its default that hasn't synced yet isn't a change
+(the mailbox may have just arrived). Keys this computer can't hold yet (a
+mailbox it doesn't have, a label decision whose label hasn't arrived) are
+kept and applied once it can. A sign-in from another computer is only used
+for a mailbox without a working one; a rotated refresh token isn't
+uploaded again, and one that stopped working here isn't removed. If the
+server lost the account, the next round signs up again under the same
+code (when the server takes sign-ups) and uploads everything.
+After applying, the backend emits `settings:changed` (the UI re-reads its
+settings) and `devicesync:status` carries `DeviceSyncStatus`.
+
 ## Data directory
 
 | OS      | Default                                   |

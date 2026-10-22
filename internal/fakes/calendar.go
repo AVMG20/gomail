@@ -22,6 +22,25 @@ type CalEvent struct {
 	Attendee string // invited guest (self is the mailbox owner)
 	Response string // the owner's response: "needsAction" (Google) / "none" (Graph) ...
 	ICalUID  string
+	// Reminders are the owner's own popup reminders (minutes before; nil = none).
+	Reminders []int
+}
+
+// guestFields are what a guest may change on an invitation: their answer and
+// their own reminders. The fakes refuse other changes, like the providers do
+// (or worse: Google would quietly fork the guest's copy).
+var guestFields = map[string]bool{"attendees": true, "reminders": true, "isReminderOn": true, "reminderMinutesBeforeStart": true}
+
+func guestPatchOK(e *CalEvent, b map[string]any) bool {
+	if e.Attendee == "" {
+		return true
+	}
+	for k := range b {
+		if !guestFields[k] {
+			return false
+		}
+	}
+	return true
 }
 
 // GoogleCalendar fakes the Calendar API v3: one primary calendar, full and
@@ -119,6 +138,11 @@ func (g *GoogleCalendar) render(e *CalEvent) map[string]any {
 		m["attendees"] = []any{map[string]any{"email": e.Attendee, "organizer": true, "responseStatus": "accepted"},
 			map[string]any{"email": g.Email, "self": true, "responseStatus": e.Response}}
 	}
+	over := []any{}
+	for _, r := range e.Reminders {
+		over = append(over, map[string]any{"method": "popup", "minutes": r})
+	}
+	m["reminders"] = map[string]any{"useDefault": false, "overrides": over}
 	return m
 }
 
@@ -201,6 +225,10 @@ func (g *GoogleCalendar) serve(w http.ResponseWriter, r *http.Request) {
 		case http.MethodGet:
 			writeJSON(w, 200, g.render(e))
 		case http.MethodPatch:
+			if !guestPatchOK(e, body) {
+				writeJSON(w, 403, map[string]any{"error": map[string]any{"code": 403, "message": "Forbidden: only the organizer can change this event"}})
+				return
+			}
 			applyGoogle(e, body)
 			g.version++
 			g.changed[id] = g.version
@@ -240,6 +268,16 @@ func applyGoogle(e *CalEvent, b map[string]any) {
 			m, _ := a.(map[string]any)
 			if m["self"] == true {
 				e.Response = fmt.Sprint(m["responseStatus"])
+			}
+		}
+	}
+	if r, ok := b["reminders"].(map[string]any); ok {
+		e.Reminders = nil
+		over, _ := r["overrides"].([]any)
+		for _, o := range over {
+			m, _ := o.(map[string]any)
+			if n, ok := m["minutes"].(float64); ok {
+				e.Reminders = append(e.Reminders, int(n))
 			}
 		}
 	}
@@ -291,6 +329,9 @@ func (g *Graph) renderCal(e *CalEvent) map[string]any {
 		m["organizer"] = map[string]any{"emailAddress": map[string]string{"address": e.Attendee}}
 		m["responseStatus"] = map[string]string{"response": e.Response}
 	}
+	if len(e.Reminders) > 0 {
+		m["isReminderOn"], m["reminderMinutesBeforeStart"] = true, e.Reminders[0]
+	}
 	return m
 }
 
@@ -334,6 +375,10 @@ func (g *Graph) calendarRoute(w http.ResponseWriter, r *http.Request, p string, 
 		case len(seg) == 3 && r.Method == http.MethodGet:
 			writeJSON(w, 200, g.renderCal(e))
 		case len(seg) == 3 && r.Method == http.MethodPatch:
+			if !guestPatchOK(e, body) {
+				apiError(w, 403, "ErrorAccessDenied", "Only the organizer can change this meeting.")
+				return true
+			}
 			g.applyCal(e, body)
 			writeJSON(w, 200, g.renderCal(e))
 		case len(seg) == 3 && r.Method == http.MethodDelete:
@@ -373,5 +418,11 @@ func (g *Graph) applyCal(e *CalEvent, b map[string]any) {
 	}
 	if v, ok := b["end"]; ok {
 		e.End = parse(v)
+	}
+	if on, ok := b["isReminderOn"].(bool); ok {
+		e.Reminders = nil
+		if n, ok := b["reminderMinutesBeforeStart"].(float64); on && ok {
+			e.Reminders = []int{int(n)}
+		}
 	}
 }

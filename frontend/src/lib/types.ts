@@ -52,6 +52,8 @@ export interface Calendar {
   primary: boolean
   canEdit: boolean
   visible: boolean
+  /** Shown, but its events never remind (someone else's calendar you follow). */
+  muted?: boolean
   /** Video meetings this calendar can create: "meet" (Google), "teams" (Microsoft) or "" (none). */
   videoCallProvider?: 'meet' | 'teams' | 'skype' | '' | string
 }
@@ -92,6 +94,8 @@ export interface CalendarEvent {
   status: 'confirmed' | 'tentative' | 'cancelled' | string
   /** Minutes before the start. */
   reminders: number[]
+  /** You chose "No reminder" in gomail: the default reminder doesn't apply either. */
+  remindersOff?: boolean
   /** Human summary of the recurrence ("Weekly on Monday"), from the backend. */
   recurrenceText?: string
   /** Backend: you can edit this event (organizer on an editable calendar). */
@@ -383,6 +387,12 @@ export interface Settings {
   labelsRev?: number
   /** Chat model: used only for grammar improvement and summaries. */
   openRouterModel: string
+  /** Reasoning effort of the chat model: "default" (the model's own) or OpenRouter's none … xhigh. */
+  textAIReasoning?: string
+  /** Model that fills in new events from text ("" = openRouterModel). */
+  eventAIModel?: string
+  /** Its reasoning effort (default "low"). */
+  eventAIReasoning?: string
   /** Jev decision model used for AI labeling. */
   classifierModel: string
   /** 0..1; labels below this confidence are left unassigned. */
@@ -446,6 +456,8 @@ export interface Settings {
   launchAtLogin?: boolean
   /** Check GitHub releases for updates once a day. */
   checkUpdates?: boolean
+  /** How often this computer syncs with the others (minutes): 1, 5, 15, 30, 60, or -1 = only manually. Per computer. */
+  deviceSyncInterval?: number
   /** Delay before a message is actually sent (0 = off). Requested; stored locally until supported. */
   undoSendSeconds?: number
   /** Calendar: first day of the week ("auto" follows the locale). */
@@ -566,6 +578,30 @@ export interface AppInfo {
   demo: boolean
 }
 
+/** Sync between computers through a gomail-sync server (Settings → Sync). */
+export interface DeviceSyncStatus {
+  /** false with demo data */
+  available: boolean
+  connected: boolean
+  serverUrl: string
+  /** Sign-ins and API keys sync too. */
+  includeSecrets: boolean
+  syncing: boolean
+  lastSyncAt: string | null
+  /** The last round's problem ("" = fine). */
+  error: string
+  defaultServerUrl: string
+}
+
+/** Turns on sync for a computer. */
+export interface DeviceSyncConnect {
+  serverUrl: string
+  /** A new sync code (the first computer; read it with getDeviceSyncCode); otherwise `code` is another computer's 24 words. */
+  create: boolean
+  code: string
+  includeSecrets: boolean
+}
+
 /** ExportBackup result. */
 export interface BackupResult {
   cancelled: boolean
@@ -630,6 +666,8 @@ export const Events = {
   CalendarOpen: 'calendar:open',
   ComposeOpen: 'compose:open',
   UpdateAvailable: 'update:available',
+  DeviceSync: 'devicesync:status',
+  SettingsChanged: 'settings:changed',
 } as const
 
 export interface EventPayloads {
@@ -658,6 +696,10 @@ export interface EventPayloads {
   'classify:progress': Partial<ClassifyJobProgress> & { done: number; total: number }
   'classify:finished': Partial<ClassifyJobProgress>
   'mail:new': { accountId: string; count: number; latest: MessageSummary }
+  /** Sync between computers: connection or round state changed. */
+  'devicesync:status': DeviceSyncStatus
+  /** Another computer changed settings: re-read them. */
+  'settings:changed': Record<string, never> | undefined
 }
 
 export type EventName = keyof EventPayloads

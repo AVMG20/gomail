@@ -11,6 +11,7 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -515,12 +516,18 @@ func (c *Client) Move(ctx context.Context, from, to calendar.Calendar, remoteID 
 	return c.Update(ctx, to, moved.ID, ev, models.ScopeThis)
 }
 
+// Delete cancels an event you organize (guests are told); an invitation is
+// only removed from your calendar, without telling anyone.
 func (c *Client) Delete(ctx context.Context, cal calendar.Calendar, remoteID, scope, etag string) error {
 	var hdr map[string]string
 	if etag != "" {
 		hdr = map[string]string{"If-Match": etag}
 	}
-	err := c.api.JSONHeaders(ctx, http.MethodDelete, c.eventsPath(cal)+"/"+url.PathEscape(remoteID)+sendUpdates, hdr, nil, nil)
+	query := sendUpdates
+	if g, err := c.get(ctx, cal, remoteID); err == nil && g.Organizer != nil && !g.Organizer.Self {
+		query = "?sendUpdates=none"
+	}
+	err := c.api.JSONHeaders(ctx, http.MethodDelete, c.eventsPath(cal)+"/"+url.PathEscape(remoteID)+query, hdr, nil, nil)
 	if s := httpx.StatusOf(err); s == http.StatusGone || s == http.StatusNotFound {
 		return nil // already deleted
 	}
@@ -547,6 +554,43 @@ func (c *Client) Respond(ctx context.Context, cal calendar.Calendar, remoteID, r
 	}
 	return wrap(c.api.JSON(ctx, http.MethodPatch, c.eventsPath(cal)+"/"+url.PathEscape(remoteID)+sendUpdates,
 		map[string]any{"attendees": g.Attendees}, nil))
+}
+
+// SetReminders patches only the popup reminders: they belong to this
+// calendar's copy of the event, so guests may change them too and nobody is
+// notified. Other reminders (email) stay, and an event on the calendar's
+// default reminders keeps them when the popups don't change.
+func (c *Client) SetReminders(ctx context.Context, cal calendar.Calendar, remoteID string, minutes []int) (calendar.Event, error) {
+	cur, err := c.get(ctx, cal, remoteID)
+	if err != nil {
+		return calendar.Event{}, err
+	}
+	over := []gReminder{}
+	if cur.Reminders != nil {
+		if cur.Reminders.UseDefault && slices.Equal(sortedInts(cal.DefaultReminders), sortedInts(minutes)) {
+			return c.toEvent(cur, cal), nil
+		}
+		for _, r := range cur.Reminders.Overrides {
+			if r.Method != "popup" {
+				over = append(over, r)
+			}
+		}
+	}
+	for _, m := range minutes {
+		over = append(over, gReminder{Method: "popup", Minutes: m})
+	}
+	var g gEvent
+	if err := c.api.JSON(ctx, http.MethodPatch, c.eventsPath(cal)+"/"+url.PathEscape(remoteID)+"?sendUpdates=none",
+		map[string]any{"reminders": map[string]any{"useDefault": false, "overrides": over}}, &g); err != nil {
+		return calendar.Event{}, wrap(err)
+	}
+	return c.toEvent(g, cal), nil
+}
+
+func sortedInts(v []int) []int {
+	v = slices.Clone(v)
+	slices.Sort(v)
+	return v
 }
 
 var _ calendar.Provider = (*Client)(nil)

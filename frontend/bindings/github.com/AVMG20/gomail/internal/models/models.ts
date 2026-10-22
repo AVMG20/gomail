@@ -240,6 +240,12 @@ export interface Calendar {
     "visible": boolean;
 
     /**
+     * Muted: shown, but its events never remind (SetCalendarMuted). Hidden
+     * calendars don't remind either.
+     */
+    "muted": boolean;
+
+    /**
      * VideoCallProvider is what EventInput.addVideoCall creates here:
      * "meet" (Google Meet), "teams" (Microsoft Teams), "skype" (personal
      * Microsoft accounts that only allow Skype) or "" (not supported).
@@ -322,6 +328,12 @@ export interface CalendarEvent {
      * minutes before start
      */
     "reminders": number[] | null;
+
+    /**
+     * RemindersOff: you chose "No reminder" in gomail, so the default
+     * reminder (Settings) doesn't apply to this event either.
+     */
+    "remindersOff": boolean;
 
     /**
      * the calendar is writable and we may change this event
@@ -510,6 +522,60 @@ export interface DatabaseStatus {
 export interface DefaultPrompts {
     "grammar": string;
     "classify": string;
+}
+
+/**
+ * DeviceSyncConnect turns on sync for a computer.
+ */
+export interface DeviceSyncConnect {
+    /**
+     * "" = the default server
+     */
+    "serverUrl": string;
+
+    /**
+     * Create turns on sync with a new sync code (the first computer; read
+     * it with GetDeviceSyncCode). Otherwise Code is the 24-word code of
+     * another computer, and this one takes the synced settings.
+     */
+    "create": boolean;
+    "code": string;
+
+    /**
+     * IncludeSecrets syncs sign-ins and API keys (a new account; a joining
+     * computer follows the account's choice).
+     */
+    "includeSecrets": boolean;
+}
+
+/**
+ * DeviceSyncStatus describes syncing settings, labels and sign-ins between
+ * computers through a gomail-sync server (Settings → Sync).
+ */
+export interface DeviceSyncStatus {
+    /**
+     * false in demo mode
+     */
+    "available": boolean;
+    "connected": boolean;
+    "serverUrl": string;
+
+    /**
+     * sign-ins and API keys sync too
+     */
+    "includeSecrets": boolean;
+    "syncing": boolean;
+    "lastSyncAt": string | null;
+
+    /**
+     * the last round's problem ("" = fine)
+     */
+    "error": string;
+
+    /**
+     * DefaultServerURL is the server suggested when connecting.
+     */
+    "defaultServerUrl": string;
 }
 
 /**
@@ -1350,6 +1416,13 @@ export interface Settings {
     "checkUpdates": boolean;
 
     /**
+     * DeviceSyncInterval is how often (minutes) this computer syncs with
+     * the others (Settings → Sync): 1 (default), 5, 15, 30 or 60; -1 = only
+     * on start and with "Sync now". Kept per computer.
+     */
+    "deviceSyncInterval": number;
+
+    /**
      * TrustedLinkDomains open from mail without the "Open link?" prompt
      * (lowercase host names without "www."; subdomains match too).
      */
@@ -1388,9 +1461,26 @@ export interface Settings {
     "openRouterModel": string;
 
     /**
+     * TextAIReasoning is the text model's reasoning effort: OpenRouter's
+     * none | minimal | low | medium | high | xhigh, or "default" (the model's own).
+     */
+    "textAIReasoning": string;
+
+    /**
      * OpenRouter Decisions model, default "typesafe/jev-1.13"
      */
     "classifierModel": string;
+
+    /**
+     * EventAIModel fills in new calendar events from text ("" = OpenRouterModel).
+     */
+    "eventAIModel": string;
+
+    /**
+     * EventAIReasoning is its reasoning effort (as TextAIReasoning).
+     * Default "low": a form fill needs little thinking.
+     */
+    "eventAIReasoning": string;
 
     /**
      * Labels and AI labeling.

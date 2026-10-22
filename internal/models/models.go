@@ -335,6 +335,10 @@ type Settings struct {
 	AIDailyBudgetUSD        float64 `json:"aiDailyBudgetUsd"`        // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
 	LaunchAtLogin           bool    `json:"launchAtLogin"`           // start gomail at login, minimized to the tray when enabled (default false)
 	CheckUpdates            bool    `json:"checkUpdates"`            // check GitHub releases once a day (default true)
+	// DeviceSyncInterval is how often (minutes) this computer syncs with
+	// the others (Settings → Sync): 1 (default), 5, 15, 30 or 60; -1 = only
+	// on start and with "Sync now". Kept per computer.
+	DeviceSyncInterval int `json:"deviceSyncInterval"`
 
 	// TrustedLinkDomains open from mail without the "Open link?" prompt
 	// (lowercase host names without "www."; subdomains match too).
@@ -355,7 +359,15 @@ type Settings struct {
 	// (provider labels found by a sync) aren't taken as deleted.
 	LabelsRev       int64  `json:"labelsRev"`
 	OpenRouterModel string `json:"openRouterModel"` // chat model (grammar, summaries, drafts)
+	// TextAIReasoning is the text model's reasoning effort: OpenRouter's
+	// none | minimal | low | medium | high | xhigh, or "default" (the model's own).
+	TextAIReasoning string `json:"textAIReasoning"`
 	ClassifierModel string `json:"classifierModel"` // OpenRouter Decisions model, default "typesafe/jev-1.13"
+	// EventAIModel fills in new calendar events from text ("" = OpenRouterModel).
+	EventAIModel string `json:"eventAIModel"`
+	// EventAIReasoning is its reasoning effort (as TextAIReasoning).
+	// Default "low": a form fill needs little thinking.
+	EventAIReasoning string `json:"eventAIReasoning"`
 
 	// Labels and AI labeling.
 	Labels               []Label `json:"labels"`

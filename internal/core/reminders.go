@@ -56,6 +56,9 @@ func (s *Service) checkReminders() {
 		}
 		mins := ev.Reminders
 		if len(mins) == 0 {
+			if ev.RemindersOff {
+				continue
+			}
 			mins = []int{st.CalendarDefaultReminder}
 		}
 		start := ev.Start
