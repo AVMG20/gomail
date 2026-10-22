@@ -18,7 +18,7 @@ const invite = {
   isOrganizer: false, myResponse: 'needsAction', meetingUrl: '', recurrence: '', reminders: [], isRecurring: false, seriesId: '', status: 'confirmed', canEdit: false,
 } as CalendarEvent
 
-function mount(event: CalendarEvent = invite, setup?: () => void) {
+async function mount(event: CalendarEvent = invite, setup?: () => void) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const cal = useCalendarStore()
@@ -30,6 +30,7 @@ function mount(event: CalendarEvent = invite, setup?: () => void) {
   const app = createApp(EventDetails, { anchor: { left: 10, top: 10, width: 1, height: 1 }, event, onClose: closed })
   app.use(pinia)
   app.mount(el)
+  for (let i = 0; i < 4; i++) await nextTick() // the card renders into its portal after mounting
   const button = (label: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
   return { cal, closed, button, unmount: () => { app.unmount(); el.remove() } }
 }
@@ -40,7 +41,7 @@ afterEach(() => vi.restoreAllMocks())
 describe('EventDetails RSVP', () => {
   it('closes the card once the answer is sent', async () => {
     const rsvp = vi.spyOn(api, 'respondToEvent').mockResolvedValue()
-    const c = mount()
+    const c = await mount()
     c.button('Yes').click()
     await flush()
     expect(rsvp).toHaveBeenCalledWith('e1', 'accepted')
@@ -52,7 +53,7 @@ describe('EventDetails RSVP', () => {
 
   it('stays open with the error when the answer fails', async () => {
     vi.spyOn(api, 'respondToEvent').mockRejectedValue(new Error('offline'))
-    const c = mount()
+    const c = await mount()
     c.button('Maybe').click()
     await flush()
     expect(c.closed).not.toHaveBeenCalled()
@@ -72,8 +73,8 @@ describe('EventDetails layout', () => {
     useCalendarStore().calendars = [{ id: 'c', accountId: 'a', name: 'me@gmail.com', color: '#4285f4' }] as never
   }
 
-  it('shows no guest list or Email guests when you are the only one invited, and your address once', () => {
-    const c = mount(mine, setup)
+  it('shows no guest list or Email guests when you are the only one invited, and your address once', async () => {
+    const c = await mount(mine, setup)
     const text = document.body.textContent ?? ''
     expect(text).not.toMatch(/guest/i)
     expect(document.body.querySelector('[aria-label="Email guests"]')).toBeNull()
@@ -82,8 +83,8 @@ describe('EventDetails layout', () => {
     c.unmount()
   })
 
-  it('lists guests (marking you) once someone else is invited', () => {
-    const c = mount({ ...mine, attendees: [...mine.attendees, { name: 'Sam', email: 'sam@x.y', response: 'needsAction' }] } as CalendarEvent, setup)
+  it('lists guests (marking you) once someone else is invited', async () => {
+    const c = await mount({ ...mine, attendees: [...mine.attendees, { name: 'Sam', email: 'sam@x.y', response: 'needsAction' }] } as CalendarEvent, setup)
     const text = document.body.textContent ?? ''
     expect(text).toContain('2 guests')
     expect(text).toContain('(you)')
@@ -102,7 +103,7 @@ describe('EventDetails on an invitation', () => {
 
   it('lets you remove it and change your own reminder on a writable calendar, but not edit it', async () => {
     const set = vi.spyOn(api, 'setEventReminders').mockImplementation(async (_id, minutes) => ({ ...inv, reminders: minutes }))
-    const c = mount(inv, setup(true))
+    const c = await mount(inv, setup(true))
     expect(q('Edit event')).toBeNull()
     expect(q('Remove from your calendar')).not.toBeNull()
     expect(q('Change reminder')?.textContent).toContain('10 minutes before')
@@ -114,24 +115,24 @@ describe('EventDetails on an invitation', () => {
 
   it('removing it offers no Undo (recreating it would make you the organizer)', async () => {
     vi.spyOn(api, 'deleteEvent').mockResolvedValue()
-    const c = mount(inv, setup(true))
+    const c = await mount(inv, setup(true))
     await c.cal.remove(c.cal.events[0], 'this')
     expect(c.cal.events).toHaveLength(0)
     expect(toastFn).toHaveBeenCalledWith('Removed from your calendar', expect.objectContaining({ action: undefined }))
     c.unmount()
   })
 
-  it('shows the default reminder an event without its own gets, or that it has none', () => {
-    let c = mount({ ...inv, reminders: [] } as CalendarEvent, setup(true))
+  it('shows the default reminder an event without its own gets, or that it has none', async () => {
+    let c = await mount({ ...inv, reminders: [] } as CalendarEvent, setup(true))
     expect(q('Change reminder')?.textContent).toContain('10 minutes before (default)')
     c.unmount()
-    c = mount({ ...inv, reminders: [], remindersOff: true } as CalendarEvent, setup(true))
+    c = await mount({ ...inv, reminders: [], remindersOff: true } as CalendarEvent, setup(true))
     expect(q('Change reminder')?.textContent).toContain('No reminder')
     c.unmount()
   })
 
-  it('offers neither on a read-only calendar', () => {
-    const c = mount(inv, setup(false))
+  it('offers neither on a read-only calendar', async () => {
+    const c = await mount(inv, setup(false))
     expect(q('Remove from your calendar')).toBeNull()
     expect(q('Change reminder')).toBeNull()
     expect(document.body.textContent).toContain('10 minutes before')
@@ -142,11 +143,11 @@ describe('EventDetails on an invitation', () => {
 describe('EventDetails location', () => {
   it('opens an address in Google Maps, and a link as itself', async () => {
     const open = vi.spyOn(api, 'openExternal').mockResolvedValue()
-    let c = mount({ ...invite, location: 'Basisweg 63, Amsterdam' } as CalendarEvent)
+    let c = await mount({ ...invite, location: 'Basisweg 63, Amsterdam' } as CalendarEvent)
     document.body.querySelector<HTMLElement>('a[title="Open in Google Maps"]')!.click()
     expect(open).toHaveBeenCalledWith('https://www.google.com/maps/search/?api=1&query=Basisweg%2063%2C%20Amsterdam')
     c.unmount()
-    c = mount({ ...invite, location: 'https://example.com/room' } as CalendarEvent)
+    c = await mount({ ...invite, location: 'https://example.com/room' } as CalendarEvent)
     document.body.querySelector<HTMLElement>('a[title="Open link"]')!.click()
     expect(open).toHaveBeenLastCalledWith('https://example.com/room')
     c.unmount()

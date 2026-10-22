@@ -140,7 +140,10 @@ function onEventClick(arg: EventClickArg) {
   arg.jsEvent.preventDefault()
   quick.value = null
   const r = arg.el.getBoundingClientRect()
-  details.value = { anchor: { left: r.left, top: r.top, width: r.width, height: r.height }, event: arg.event.extendedProps.ev as CalendarEvent }
+  // An agenda row spans the whole list: open the card next to the click, not beside the row.
+  const x = arg.view.type.startsWith('list') ? arg.jsEvent.clientX : r.left
+  const anchor = { left: x, top: r.top, width: x === r.left ? r.width : 1, height: r.height }
+  details.value = { anchor, event: arg.event.extendedProps.ev as CalendarEvent }
 }
 
 // ------------------------------------------------------------ drag / resize
@@ -393,7 +396,7 @@ function closeDetails() {
   details.value = null
   // The chip that opened the card may have been re-rendered meanwhile; refocus it by id.
   setTimeout(() => {
-    if (!id || (document.activeElement && document.activeElement !== document.body)) return
+    if (!id || details.value || quick.value || (document.activeElement && document.activeElement !== document.body)) return
     document.querySelector<HTMLElement>(`.gm-fc [data-ev-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true })
   }, 0)
 }

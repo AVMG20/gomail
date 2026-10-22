@@ -31,7 +31,8 @@ const currentAccount = computed(() => (current.value ? accounts.accountMap.get(c
         </span>
       </SelectValue>
     </SelectTrigger>
-    <SelectContent>
+    <!-- popper: opens below (or above) the field instead of over it, also near the window's edge. -->
+    <SelectContent position="popper">
       <SelectGroup v-for="g in groups" :key="g.account.id">
         <SelectLabel class="text-muted-foreground text-[11px]">{{ g.account.email }}</SelectLabel>
         <SelectItem v-for="c in g.calendars" :key="c.id" :value="c.id">
