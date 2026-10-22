@@ -16,6 +16,7 @@ import {
   parseRRule, recurrenceForSave, REMINDER_CHOICES, toHm, toRfc3339, toYmd, utcToZoned, zonedToUtc, type RepeatFreq,
 } from '@/lib/calendar'
 import type { Address, EventInput } from '@/lib/types'
+import { useAccountsStore } from '@/stores/accounts'
 import { useCalendarStore } from '@/stores/calendar'
 import { useSettingsStore } from '@/stores/settings'
 import CalendarPicker from './CalendarPicker.vue'
@@ -27,6 +28,7 @@ import { api, errorMessage, hasMethod } from '@/lib/api'
 import { shortcutLabel } from '@/lib/platform'
 
 const cal = useCalendarStore()
+const accounts = useAccountsStore()
 const settings = useSettingsStore()
 const open = ref(true)
 
@@ -79,7 +81,14 @@ const error = ref('')
 
 const readOnly = computed(() => !!ev && !cal.canEditEvent(ev))
 const timeZones = [...new Set([tz0, localTz, ...allTimeZones()].filter(Boolean))]
+const reminderAction = computed(() => (maxReminders.value === 1 && reminders.value.length ? 'Change reminder' : 'Add reminder'))
 const reminderOptions = computed(() => REMINDER_CHOICES.filter((m) => !reminders.value.includes(m)))
+/** Reminders the calendar keeps per event: Outlook one, Google five. */
+const maxReminders = computed(() => accounts.accounts.find((a) => a.id === cal.calendarMap.get(calendarId.value)?.accountId)?.provider === 'outlook' ? 1 : 5)
+// Moved to a calendar that keeps fewer: keep the earliest ones, like Outlook does.
+watch(maxReminders, (max) => {
+  if (reminders.value.length > max) reminders.value = [...reminders.value].sort((a, b) => b - a).slice(0, max)
+}, { immediate: true })
 
 function roundUp(d: Date): Date {
   const x = new Date(d)
@@ -270,7 +279,9 @@ async function requestClose() {
 
 function addReminder(v: unknown) {
   const n = Number(v)
-  if (!Number.isNaN(n) && !reminders.value.includes(n)) reminders.value = [...reminders.value, n]
+  if (Number.isNaN(n) || reminders.value.includes(n)) return
+  // Outlook's one reminder is replaced; elsewhere the menu is hidden once full.
+  reminders.value = maxReminders.value === 1 ? [n] : [...reminders.value, n]
 }
 </script>
 
@@ -414,9 +425,10 @@ function addReminder(v: unknown) {
               {{ formatReminder(m) }}
               <button type="button" class="hover:bg-background rounded-full p-0.5" :aria-label="`Remove reminder ${formatReminder(m)}`" :disabled="readOnly" @click="reminders = reminders.filter((x) => x !== m)"><XIcon class="size-3" /></button>
             </span>
-            <Select v-if="!readOnly" :model-value="''" @update:model-value="addReminder">
-              <SelectTrigger class="h-7 w-auto gap-1 border-dashed text-xs" aria-label="Add reminder"><span>Add reminder</span></SelectTrigger>
-              <SelectContent>
+            <Select v-if="!readOnly && (reminders.length < maxReminders || maxReminders === 1)" :model-value="''" @update:model-value="addReminder">
+              <SelectTrigger class="h-7 w-auto gap-1 border-dashed text-xs" :aria-label="reminderAction"><span>{{ reminderAction }}</span></SelectTrigger>
+              <!-- popper: item-aligned has no chosen item to line up with and opened off screen. -->
+              <SelectContent position="popper" align="start">
                 <SelectItem v-for="m in reminderOptions" :key="m" :value="String(m)">{{ formatReminder(m) }}</SelectItem>
               </SelectContent>
             </Select>

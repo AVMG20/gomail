@@ -501,7 +501,7 @@ func body(ev calendar.Event, withRecurrence bool, videoProvider string) map[stri
 	if ev.Reminders != nil {
 		b["isReminderOn"] = len(ev.Reminders) > 0
 		if len(ev.Reminders) > 0 {
-			b["reminderMinutesBeforeStart"] = ev.Reminders[0]
+			b["reminderMinutesBeforeStart"] = slices.Max(ev.Reminders) // one per event: the earliest
 		}
 	}
 	if p := onlineProviders[videoProvider]; ev.AddVideoCall && p != "" {
