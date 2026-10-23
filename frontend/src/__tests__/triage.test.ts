@@ -118,17 +118,39 @@ describe('opening new mail', () => {
     expect(mail.openId).toBe('n1')
   })
 
-  it('goes to the mailbox’s Inbox, not the folder last used there', async () => {
+  it('goes to the mailbox’s Inbox, not the folder in use', async () => {
     setupFolders()
     readMode('manual')
     const mail = useMailStore()
-    mail.lastByAccount = { a: { accountId: 'a', folderId: 'a:archive', kind: 'archive' } }
-    mail.mailbox = { accountId: 'b', folderId: 'b:inbox', kind: 'inbox' }
+    mail.mailbox = { accountId: 'b', folderId: 'b:archive', kind: 'archive' }
     vi.spyOn(api, 'listMessages').mockResolvedValue(page([row('n2')]))
     await mail.revealNew('a', 'n2')
     expect(mail.mailbox).toEqual({ accountId: 'a', folderId: 'a:inbox', kind: 'inbox' })
     expect(mail.openId).toBe('n2')
     expect(mail.byId.has('n2')).toBe(true)
+  })
+})
+
+describe('switching mailboxes', () => {
+  it('stays on the same kind of folder', () => {
+    setupFolders()
+    const mail = useMailStore()
+    mail.setMailbox({ accountId: 'b', folderId: 'b:inbox', kind: 'inbox' })
+    mail.setMailbox({ accountId: 'a', folderId: 'a:archive', kind: 'archive' })
+    mail.switchAccount('')
+    expect(mail.mailbox).toEqual({ accountId: '', folderId: '', kind: 'archive' })
+    mail.switchAccount('a')
+    expect(mail.mailbox).toEqual({ accountId: 'a', folderId: 'a:archive', kind: 'archive' })
+    mail.switchAccount('b') // no Archive there
+    expect(mail.mailbox).toEqual({ accountId: 'b', folderId: 'b:inbox', kind: 'inbox' })
+  })
+
+  it('leaves a folder of its own for the Inbox', () => {
+    setupFolders()
+    const mail = useMailStore()
+    mail.setMailbox({ accountId: 'a', folderId: 'a:work', kind: 'user' })
+    mail.switchAccount('b')
+    expect(mail.mailbox).toEqual({ accountId: 'b', folderId: 'b:inbox', kind: 'inbox' })
   })
 })
 

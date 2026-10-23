@@ -47,7 +47,6 @@ const THREAD_CACHE_MAX = 40
 const PREFETCH_DELAY_MS = 300
 const FILTERS_KEY = 'gomail.labelFilters.v1'
 const MAILBOX_KEY = 'gomail.mailbox.v1'
-const LAST_BY_ACCOUNT_KEY = 'gomail.lastMailbox.v1'
 
 export const UNIFIED_NAMES: Record<string, string> = {
   all: 'All mail', inbox: 'All inboxes', starred: 'Starred', sent: 'Sent', drafts: 'Drafts', archive: 'Archive', spam: 'Junk', trash: 'Trash',
@@ -80,8 +79,6 @@ export const useMailStore = defineStore('mail', () => {
 
   const storedMailbox = readJSON<Mailbox | null>(MAILBOX_KEY, null)
   const mailbox = ref<Mailbox>(storedMailbox ?? { accountId: '', folderId: '', kind: 'inbox' })
-  /** Last mailbox per account ("" = All inboxes), restored when switching accounts. */
-  const lastByAccount = ref<Record<string, Mailbox>>(readJSON(LAST_BY_ACCOUNT_KEY, {}))
   /** Scroll offset per mailbox key, restored by the list. */
   const scrollPositions = new Map<string, number>()
   const search = ref('')
@@ -366,8 +363,6 @@ export const useMailStore = defineStore('mail', () => {
     clearSelection()
     openId.value = null
     writeJSON(MAILBOX_KEY, mb)
-    lastByAccount.value = { ...lastByAccount.value, [mb.accountId]: mb }
-    writeJSON(LAST_BY_ACCOUNT_KEY, lastByAccount.value)
   }
 
   function inboxOf(accountId: string): Mailbox {
@@ -376,11 +371,14 @@ export const useMailStore = defineStore('mail', () => {
     return { accountId, folderId: f?.id ?? '', kind: 'inbox' }
   }
 
-  /** Switch to an account (or "" for All inboxes), restoring its last folder. */
+  /** Switch to an account (or "" for All inboxes), staying on the same kind of folder
+   *  (All mail stays All mail); a folder or label of its own falls back to the Inbox. */
   function switchAccount(accountId: string) {
-    const last = lastByAccount.value[accountId]
-    const valid = last && (!last.folderId || accounts.folderMap.has(last.folderId))
-    setMailbox(valid ? last : inboxOf(accountId))
+    const kind = mailbox.value.kind
+    if (!(kind in UNIFIED_NAMES)) return setMailbox(inboxOf(accountId))
+    if (!accountId) return setMailbox({ accountId: '', folderId: '', kind })
+    const f = accounts.folderOf(accountId, kind)
+    setMailbox(f ? { accountId, folderId: f.id, kind } : inboxOf(accountId))
   }
 
   function goToKind(kind: string) {
@@ -397,7 +395,7 @@ export const useMailStore = defineStore('mail', () => {
     if (!list.length) return
     const accountOk = !mb.accountId || accounts.accountMap.has(mb.accountId)
     const folderOk = !mb.folderId || accounts.folderMap.has(mb.folderId)
-    if (!storedMailbox && mb.accountId === '' && mailboxKey(mb) === '|inbox' && !lastByAccount.value['']) {
+    if (!storedMailbox && mb.accountId === '' && mailboxKey(mb) === '|inbox') {
       // First launch: default to the first account, not the combined view.
       setMailbox(inboxOf(list[0].id))
     } else if (!accountOk || !folderOk) {
@@ -1214,7 +1212,7 @@ export const useMailStore = defineStore('mail', () => {
     mailbox, search, unreadOnly, filters, messages, viewUnread, threadRev, nextCursor, hasMoreRemote, olderBeyondDepth, similar, loadingOlder, loadOlder, total, status, refreshing, loadingMore, error,
     openId, selection, anchorId, selectAllQuery, addressBook, remoteAllowed, phishingDismissed, originalColors,
     labelFilter, hasLabelFilter, viewUnreadCount, query, byId, indexById, openSummary, hasMore, selectionCount, isUnified, selectionAccountIds, mailboxName, mailboxAccount,
-    lastByAccount, switchAccount, goToKind, reveal, revealNew, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
+    switchAccount, goToKind, reveal, revealNew, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, snapshot, undoMove, currentTargets, actOnTargets, markTargetsRead, hoveredId, pointAt, hoveredTarget, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, threadsChanged, suggestAddresses,
