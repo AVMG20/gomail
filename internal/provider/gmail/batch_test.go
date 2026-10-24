@@ -33,6 +33,10 @@ type batchServer struct {
 func newBatchServer(t *testing.T, status func(id string, attempt int) int) (*Client, *batchServer) {
 	b := &batchServer{attempts: map[string]int{}, status: status}
 	msgs := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gmail/v1/users/me/labels" {
+			writeJSON(w, map[string]any{"labels": []map[string]string{{"id": "INBOX", "name": "INBOX", "type": "system"}}})
+			return
+		}
 		id, ok := strings.CutPrefix(r.URL.Path, "/gmail/v1/users/me/messages/")
 		if !ok || r.Header.Get("Authorization") != "Bearer tok" {
 			t.Errorf("unexpected %s %s", r.Method, r.URL)
@@ -64,7 +68,7 @@ func newBatchServer(t *testing.T, status func(id string, attempt int) int) (*Cli
 		noBatch := b.noBatch
 		if r.URL.Path == fakes.GmailBatchPath {
 			b.batches = append(b.batches, strings.Count(readAll(r), "Content-Type: application/http"))
-		} else {
+		} else if strings.Contains(r.URL.Path, "/messages/") {
 			b.singles++
 		}
 		b.mu.Unlock()

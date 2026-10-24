@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,6 +63,8 @@ type Client struct {
 
 	mu       sync.Mutex
 	labels   map[string]gLabel // id -> user label
+	known    map[string]bool   // every label id seen (nil: not loaded yet)
+	meta     metaCache
 	fwdCache map[string][]mailmime.Attachment
 }
 
@@ -146,13 +149,15 @@ func (c *Client) loadLabels(ctx context.Context) ([]gLabel, error) {
 		return nil, err
 	}
 	m := map[string]gLabel{}
+	known := map[string]bool{}
 	for _, l := range resp.Labels {
+		known[l.ID] = true
 		if l.Type == "user" {
 			m[l.ID] = l
 		}
 	}
 	c.mu.Lock()
-	c.labels = m
+	c.labels, c.known = m, known
 	c.mu.Unlock()
 	return resp.Labels, nil
 }
@@ -351,7 +356,54 @@ func (c *Client) listIDs(ctx context.Context, labelID, q string, limit int) ([]s
 
 // fetchMetadata fetches message metadata in batches. Ids that no longer
 // exist are returned in gone.
-func (c *Client) fetchMetadata(ctx context.Context, ids []string, progress ...func(done, total int)) (msgs []mail.Message, gone []string, err error) {
+func (c *Client) fetchMetadata(ctx context.Context, ids []string, progress ...func(done, total int)) ([]mail.Message, []string, error) {
+	gs, gone, err := c.fetchRaw(ctx, ids, progress...)
+	if err != nil {
+		return nil, nil, err
+	}
+	msgs, err := c.messages(ctx, gs)
+	return msgs, gone, err
+}
+
+// messages converts fetched messages. When one carries a label id that
+// wasn't known (a label made since the labels were loaded), the labels are
+// loaded again first, so the message doesn't lose it.
+func (c *Client) messages(ctx context.Context, gs []gMessage) ([]mail.Message, error) {
+	unknown := func() []string {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		var out []string
+		for _, g := range gs {
+			for _, l := range g.LabelIDs {
+				if !c.known[l] {
+					out = append(out, l)
+				}
+			}
+		}
+		return out
+	}
+	if len(unknown()) > 0 {
+		if _, err := c.loadLabels(ctx); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		for _, g := range gs {
+			for _, l := range g.LabelIDs {
+				c.known[l] = true // not listed (yet): don't reload for it again
+			}
+		}
+		c.mu.Unlock()
+	}
+	msgs := make([]mail.Message, len(gs))
+	for i, g := range gs {
+		msgs[i] = c.toMessage(g)
+	}
+	return msgs, nil
+}
+
+// fetchRaw fetches message metadata in batches, in the order of ids. Ids
+// that no longer exist are returned in gone.
+func (c *Client) fetchRaw(ctx context.Context, ids []string, progress ...func(done, total int)) (msgs []gMessage, gone []string, err error) {
 	paths := make([]string, len(ids))
 	for i, id := range ids {
 		paths[i] = "messages/" + url.PathEscape(id) + "?" + metadataQuery
@@ -378,9 +430,54 @@ func (c *Client) fetchMetadata(ctx context.Context, ids []string, progress ...fu
 		if err := json.Unmarshal(r.body, &g); err != nil {
 			return nil, nil, fmt.Errorf("unexpected response from Gmail: %w", err)
 		}
-		msgs = append(msgs, c.toMessage(g))
+		msgs = append(msgs, g)
 	}
 	return msgs, gone, nil
+}
+
+// metaCacheSize bounds the metadata kept for label changes (a few KB each).
+const metaCacheSize = 2000
+
+// metaCache keeps the metadata of recently synced messages (c.mu). Gmail
+// never changes a message's headers, snippet or date, only its labels, so a
+// history record that only changed labels is applied from here without
+// fetching the message again.
+type metaCache struct {
+	m     map[string]gMessage
+	order []string // ids in insertion order, oldest first (may hold removed ones)
+}
+
+func (mc *metaCache) get(id string) (gMessage, bool) {
+	g, ok := mc.m[id]
+	return g, ok
+}
+
+func (mc *metaCache) put(g gMessage) {
+	if mc.m == nil {
+		mc.m = map[string]gMessage{}
+	}
+	if _, ok := mc.m[g.ID]; !ok {
+		mc.order = append(mc.order, g.ID)
+	}
+	mc.m[g.ID] = g
+	for len(mc.m) > metaCacheSize {
+		delete(mc.m, mc.order[0])
+		mc.order = mc.order[1:]
+	}
+	if len(mc.order) > 2*metaCacheSize {
+		mc.order = slices.DeleteFunc(mc.order, func(id string) bool { _, ok := mc.m[id]; return !ok })
+	}
+}
+
+func (mc *metaCache) remove(id string) { delete(mc.m, id) }
+
+// remember caches the metadata of synced messages.
+func (c *Client) remember(gs []gMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, g := range gs {
+		c.meta.put(g)
+	}
 }
 
 func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncResult, error) {
@@ -434,7 +531,12 @@ func (c *Client) initial(ctx context.Context, req provider.SyncRequest) (mail.Sy
 			}
 		}
 	}
-	msgs, _, err := c.fetchMetadata(ctx, ids, func(done, total int) { req.Report("fetching", done, total) })
+	gs, _, err := c.fetchRaw(ctx, ids, func(done, total int) { req.Report("fetching", done, total) })
+	if err != nil {
+		return mail.SyncResult{}, err
+	}
+	c.remember(gs)
+	msgs, err := c.messages(ctx, gs)
 	if err != nil {
 		return mail.SyncResult{}, err
 	}
@@ -485,21 +587,23 @@ func (c *Client) initial(ctx context.Context, req provider.SyncRequest) (mail.Sy
 	return mail.SyncResult{Upserts: msgs, State: map[string]string{"historyId": p.HistoryID}, Initial: true, Complete: complete}, nil
 }
 
+// hMessage is a message in a history record: its id and labels after the
+// change.
+type hMessage struct {
+	ID       string   `json:"id"`
+	LabelIDs []string `json:"labelIds"`
+}
+
+type hChange struct {
+	Message hMessage `json:"message"`
+}
+
 type gHistory struct {
 	History []struct {
-		Messages      []struct{ ID string } `json:"messages"`
-		MessagesAdded []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"messagesAdded"`
-		MessagesDeleted []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"messagesDeleted"`
-		LabelsAdded []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"labelsAdded"`
-		LabelsRemoved []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"labelsRemoved"`
+		MessagesAdded   []hChange `json:"messagesAdded"`
+		MessagesDeleted []hChange `json:"messagesDeleted"`
+		LabelsAdded     []hChange `json:"labelsAdded"`
+		LabelsRemoved   []hChange `json:"labelsRemoved"`
 	} `json:"history"`
 	NextPageToken string `json:"nextPageToken"`
 	HistoryID     string `json:"historyId"`
@@ -508,6 +612,10 @@ type gHistory struct {
 func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.SyncResult, error) {
 	changed := map[string]bool{}
 	deleted := map[string]bool{}
+	added := map[string]bool{}
+	// Labels after a message's latest label change (records come oldest
+	// first); nil when the record didn't carry them.
+	labels := map[string][]string{}
 	page := ""
 	newHistory := startHistoryID
 	for {
@@ -524,12 +632,11 @@ func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.S
 		for _, rec := range h.History {
 			for _, m := range rec.MessagesAdded {
 				changed[m.Message.ID] = true
+				added[m.Message.ID] = true
 			}
-			for _, m := range rec.LabelsAdded {
+			for _, m := range append(rec.LabelsAdded, rec.LabelsRemoved...) {
 				changed[m.Message.ID] = true
-			}
-			for _, m := range rec.LabelsRemoved {
-				changed[m.Message.ID] = true
+				labels[m.Message.ID] = m.Message.LabelIDs
 			}
 			for _, m := range rec.MessagesDeleted {
 				deleted[m.Message.ID] = true
@@ -550,7 +657,28 @@ func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.S
 		}
 	}
 	sort.Strings(ids)
-	msgs, gone, err := c.fetchMetadata(ctx, ids)
+	// A label change (read, star, archive, labels) of a message synced
+	// before is applied from the record; new mail and messages not cached
+	// here are fetched.
+	var relabeled []gMessage
+	var fetch []string
+	c.mu.Lock()
+	for _, id := range ids {
+		if g, ok := c.meta.get(id); ok && !added[id] && labels[id] != nil {
+			g.LabelIDs = labels[id]
+			relabeled = append(relabeled, g)
+		} else {
+			fetch = append(fetch, id)
+		}
+	}
+	c.mu.Unlock()
+	fetched, gone, err := c.fetchRaw(ctx, fetch)
+	if err != nil {
+		return mail.SyncResult{}, err
+	}
+	gs := append(relabeled, fetched...)
+	c.remember(gs)
+	msgs, err := c.messages(ctx, gs)
 	if err != nil {
 		return mail.SyncResult{}, err
 	}
@@ -560,6 +688,11 @@ func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.S
 	}
 	res.Deleted = append(res.Deleted, gone...)
 	sort.Strings(res.Deleted)
+	c.mu.Lock()
+	for _, id := range res.Deleted {
+		c.meta.remove(id)
+	}
+	c.mu.Unlock()
 	return res, nil
 }
 
@@ -831,6 +964,9 @@ func (c *Client) labelID(ctx context.Context, name string, create bool) (string,
 	}
 	c.mu.Lock()
 	c.labels[l.ID] = gLabel{ID: l.ID, Name: name, Type: "user"}
+	if c.known != nil {
+		c.known[l.ID] = true
+	}
 	c.mu.Unlock()
 	return l.ID, nil
 }
