@@ -17,6 +17,8 @@ export interface DraftAttachment {
   mimeType: string
   size: number
   dataBase64: string
+  /** Loaded from a reopened draft: its attachment id on the server draft (pairs the file there). */
+  remoteId?: string
 }
 
 export interface Draft {
@@ -355,7 +357,7 @@ export const useComposeStore = defineStore('compose', () => {
     try {
       attachments = await Promise.all(files.map(async (a) => {
         const data = await api.getAttachmentData(m.id, a.id)
-        return { id: uid('att'), filename: data.filename || a.filename, mimeType: data.mimeType || a.mimeType, size: data.size ?? a.size, dataBase64: data.dataBase64 }
+        return { id: uid('att'), filename: data.filename || a.filename, mimeType: data.mimeType || a.mimeType, size: data.size ?? a.size, dataBase64: data.dataBase64, remoteId: a.id }
       }))
     } catch (e) {
       toast.error('Couldn’t open the draft', { description: `Its attachments couldn’t be loaded: ${errorMessage(e)}` })
@@ -500,7 +502,9 @@ export const useComposeStore = defineStore('compose', () => {
     return {
       accountId: d.accountId, to: d.to, cc: d.cc, bcc: d.bcc, subject: d.subject,
       bodyHtml: d.html, bodyText: htmlToText(d.html), replyToId: d.replyToId, mode: d.mode,
-      attachments: d.attachments.map(({ filename, mimeType, dataBase64 }) => ({ filename, mimeType, dataBase64 })),
+      // Files loaded from the server draft go back with their id there: a new file of the same
+      // name (a newer version) is uploaded instead of being taken for the old one.
+      attachments: d.attachments.map(({ remoteId, filename, mimeType, dataBase64 }) => ({ id: remoteId, filename, mimeType, dataBase64 })),
       draftId: d.remoteId ?? '',
       // This is the whole file list (saves and sends wait until restored files are back), so
       // files removed here are removed from the server draft too.

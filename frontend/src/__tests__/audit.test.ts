@@ -105,7 +105,28 @@ describe('drafts', () => {
     expect(data).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(5000)
     expect(save).toHaveBeenCalled()
-    expect(save.mock.calls[0][0].attachments).toEqual([{ filename: 'invoice.pdf', mimeType: 'application/pdf', dataBase64: 'UERG' }])
+    expect(save.mock.calls[0][0].attachments).toEqual([{ id: '2', filename: 'invoice.pdf', mimeType: 'application/pdf', dataBase64: 'UERG' }])
+  })
+
+  it('a reopened draft sends its loaded files with their server id, and a replacement without one', async () => {
+    vi.useFakeTimers()
+    const compose = useComposeStore()
+    const save = vi.spyOn(api, 'saveDraft').mockResolvedValue('draft:a:1')
+    vi.spyOn(api, 'getAttachmentData').mockResolvedValue({ filename: 'invoice.pdf', mimeType: 'application/pdf', size: 3, dataBase64: 'UERG' })
+    vi.spyOn(useMailStore(), 'softRefresh').mockResolvedValue(undefined as never)
+    const m = {
+      ...row('d1'), cc: [], bcc: [], replyTo: [], to: [{ name: '', email: 'to@x.io' }], bodyHtml: '<p>hi</p>', bodyText: 'hi',
+      attachments: [{ id: 'srv1', filename: 'invoice.pdf', mimeType: 'application/pdf', size: 3, inline: false, contentId: '' }],
+    } as unknown as Message
+    await compose.editDraft(m)
+    const d = compose.drafts[0]
+    d.attachments = [{ id: 'att-new', filename: 'invoice.pdf', mimeType: 'application/pdf', size: 2, dataBase64: 'UEQ=' }]
+    await vi.advanceTimersByTimeAsync(5000)
+    const req = save.mock.calls.at(-1)![0]
+    expect(req.attachmentsComplete).toBe(true)
+    expect(req.attachments).toHaveLength(1)
+    expect(req.attachments[0].id).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(req.attachments))).toEqual([{ filename: 'invoice.pdf', mimeType: 'application/pdf', dataBase64: 'UEQ=' }])
   })
 
   it('does not open (and overwrite) a draft whose attachments could not be loaded', async () => {

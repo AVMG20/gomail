@@ -234,6 +234,9 @@ type MessagePage struct {
 }
 
 type OutgoingAttachment struct {
+	// ID is the server attachment id (Attachment.ID) of a file loaded from
+	// a reopened draft; empty for files the user added.
+	ID         string `json:"id,omitempty"`
 	Filename   string `json:"filename"`
 	MimeType   string `json:"mimeType"`
 	DataBase64 string `json:"dataBase64"`

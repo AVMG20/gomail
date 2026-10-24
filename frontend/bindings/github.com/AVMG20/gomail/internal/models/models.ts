@@ -1079,6 +1079,11 @@ export interface NotificationOpen {
 }
 
 export interface OutgoingAttachment {
+    /**
+     * ID is the server attachment id (Attachment.ID) of a file loaded from
+     * a reopened draft; empty for files the user added.
+     */
+    "id"?: string;
     "filename": string;
     "mimeType": string;
     "dataBase64": string;
