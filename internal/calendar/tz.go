@@ -1,7 +1,10 @@
 package calendar
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -72,9 +75,18 @@ var windowsZones = map[string]string{
 	"Samoa Standard Time": "Pacific/Apia", "Line Islands Standard Time": "Pacific/Kiritimati",
 }
 
-// IANAZone turns a provider time zone name (IANA or Windows) into an IANA
+// IANAZone turns a provider time zone name (IANA, Windows, or a Windows
+// display name like "(UTC+01:00) Amsterdam, Berlin, ...") into an IANA
 // name that loads, or "" when unknown.
 func IANAZone(name string) string {
+	if z := knownZone(name); z != "" {
+		return z
+	}
+	return displayZone(name)
+}
+
+// knownZone is IANAZone for IANA and Windows ids only.
+func knownZone(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return ""
@@ -90,6 +102,91 @@ func IANAZone(name string) string {
 		return ""
 	}
 	return name
+}
+
+// displayRe matches a Windows display name: "(UTC+01:00) Amsterdam, Berlin"
+// ("(GMT+01:00)" on older Windows, "(UTC)" for offset 0).
+var displayRe = regexp.MustCompile(`^\((?:UTC|GMT)(?:([+-])(\d{1,2}):(\d{2}))?\)\s*(.*)$`)
+
+// displayNames maps display names without a city to their zone.
+var displayNames = map[string]string{
+	"pacific time (us & canada)": "America/Los_Angeles", "mountain time (us & canada)": "America/Denver",
+	"central time (us & canada)": "America/Chicago", "eastern time (us & canada)": "America/New_York",
+	"atlantic time (canada)": "America/Halifax", "alaska": "America/Anchorage", "hawaii": "Pacific/Honolulu",
+	"coordinated universal time": "UTC",
+}
+
+var displayCache = struct {
+	sync.Mutex
+	m map[string]string // display name -> IANA name or ""
+}{m: map[string]string{}}
+
+// displayOffset returns the UTC offset (seconds) of a Windows display name.
+func displayOffset(name string) (int, bool) {
+	m := displayRe.FindStringSubmatch(strings.TrimSpace(name))
+	if m == nil {
+		return 0, false
+	}
+	h, _ := strconv.Atoi(m[2])
+	mi, _ := strconv.Atoi(m[3])
+	off := h*3600 + mi*60
+	if m[1] == "-" {
+		off = -off
+	}
+	return off, true
+}
+
+// displayZone finds the zone of a Windows display name: one of its cities
+// (Europe/Amsterdam for "Amsterdam, Berlin, ...") whose standard or summer
+// offset is the one in the name. "" when none fits.
+func displayZone(name string) string {
+	name = strings.TrimSpace(name)
+	off, ok := displayOffset(name)
+	if !ok {
+		return ""
+	}
+	displayCache.Lock()
+	z, ok := displayCache.m[name]
+	displayCache.Unlock()
+	if ok {
+		return z
+	}
+	rest := displayRe.FindStringSubmatch(name)[4]
+	fits := func(z string) bool {
+		loc, err := time.LoadLocation(z)
+		if err != nil {
+			return false
+		}
+		year := time.Now().Year()
+		for _, m := range []time.Month{time.January, time.July} {
+			if _, o := time.Date(year, m, 1, 12, 0, 0, 0, loc).Zone(); o == off {
+				return true
+			}
+		}
+		return false
+	}
+	found := ""
+	if z := displayNames[strings.ToLower(rest)]; z != "" && fits(z) {
+		found = z
+	}
+	for i, city := range strings.Split(rest, ",") {
+		city = strings.ReplaceAll(strings.TrimSpace(city), " ", "_")
+		if found != "" || i >= 8 || city == "" || strings.ContainsAny(city, "()&/.") {
+			continue
+		}
+		for _, region := range []string{"Europe", "America", "Asia", "Africa", "Australia", "Pacific", "Atlantic", "Indian"} {
+			if fits(region + "/" + city) {
+				found = region + "/" + city
+				break
+			}
+		}
+	}
+	displayCache.Lock()
+	if len(displayCache.m) < 256 {
+		displayCache.m[name] = found
+	}
+	displayCache.Unlock()
+	return found
 }
 
 // extraWindows maps IANA zones that aren't a territory-"001" default to
