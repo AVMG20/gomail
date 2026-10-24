@@ -31,8 +31,11 @@ function pick(id: string) {
 }
 
 // Only the labels of the mailbox shown (one per name in the unified view, counted over every mailbox).
+// The built-in Junk label's mail is in the Junk folder: as a filter it only shows while in use.
+const inFilter = (id: string) => mail.labelFilter.labels.includes(id) || mail.labelFilter.hidden.includes(id)
 const items = computed(() =>
-  fuzzyFilter(q.value, settings.labelsForAccount(mail.mailbox.accountId), (l) => l.name, 100).map((l) => ({ ...l, total: groupCount(settings.labels, accounts.labelCounts, l)?.total })),
+  fuzzyFilter(q.value, settings.labelsForAccount(mail.mailbox.accountId).filter((l) => l.source !== 'system' || inFilter(l.id)), (l) => l.name, 100)
+    .map((l) => ({ ...l, total: groupCount(settings.labels, accounts.labelCounts, l)?.total })),
 )
 const activeCount = computed(() => mail.labelFilter.labels.length + mail.labelFilter.hidden.length + (mail.labelFilter.unlabeled ? 1 : 0))
 </script>
