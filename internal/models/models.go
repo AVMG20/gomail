@@ -337,11 +337,11 @@ type Settings struct {
 	// SyncDepths maps an account id to how far back (days: 30, 90, 365 or
 	// 0 = all mail) its mail is downloaded; mailboxes without an entry use
 	// config.DefaultSyncDepth. Nil only in settings from before it existed.
-	SyncDepths              map[string]int `json:"syncDepths"`
-	BackfillPaused          bool    `json:"backfillPaused"`          // pause the background backfill
-	AIDailyBudgetUSD        float64 `json:"aiDailyBudgetUsd"`        // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
-	LaunchAtLogin           bool    `json:"launchAtLogin"`           // start gomail at login, minimized to the tray when enabled (default false)
-	CheckUpdates            bool    `json:"checkUpdates"`            // check GitHub releases once a day (default true)
+	SyncDepths       map[string]int `json:"syncDepths"`
+	BackfillPaused   bool           `json:"backfillPaused"`   // pause the background backfill
+	AIDailyBudgetUSD float64        `json:"aiDailyBudgetUsd"` // automatic labeling pauses when reached (default 1.00, 0 = unlimited)
+	LaunchAtLogin    bool           `json:"launchAtLogin"`    // start gomail at login, minimized to the tray when enabled (default false)
+	CheckUpdates     bool           `json:"checkUpdates"`     // check GitHub releases once a day (default true)
 	// DeviceSyncInterval is how often (minutes) this computer syncs with
 	// the others (Settings → Sync): 1 (default), 5, 15, 30 or 60; -1 = only
 	// on start and with "Sync now". Kept per computer.
