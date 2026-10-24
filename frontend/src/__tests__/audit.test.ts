@@ -85,6 +85,31 @@ describe('recipients', () => {
     expect(value).toEqual([{ name: 'Anna Smith', email: 'anna@acme.com' }])
     app.unmount()
   })
+
+  it('Ctrl+Enter in the field makes the chip and reaches the window to send', async () => {
+    let value: { name: string; email: string }[] = []
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const seen: boolean[] = []
+    el.addEventListener('keydown', (e) => seen.push(e.defaultPrevented))
+    const app = createApp(RecipientField, { modelValue: value, label: 'To', 'onUpdate:modelValue': (v: typeof value) => (value = v) })
+    app.use(createPinia())
+    app.mount(el)
+    const input = el.querySelector('input')!
+    input.value = 'anna@acme.com'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+    expect(value.map((a) => a.email)).toEqual(['anna@acme.com'])
+    expect(seen).toEqual([false])
+    // A plain Enter only makes the chip.
+    input.value = 'bob@acme.com'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(seen).toEqual([false, true])
+    app.unmount()
+  })
 })
 
 describe('drafts', () => {
