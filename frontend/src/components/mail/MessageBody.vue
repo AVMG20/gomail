@@ -28,6 +28,7 @@ import type { Message } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
+import { backendBlocked, placeholder } from './blockedImages'
 
 const props = defineProps<{ message: Message; allowRemote: boolean }>()
 const emit = defineEmits<{ loadImages: []; trustSender: [] }>()
@@ -74,25 +75,14 @@ function sanitize(html: string, allowRemote: boolean): { html: string; blocked: 
       el.setAttribute('rel', 'noopener noreferrer')
       el.removeAttribute('target')
     }
+    // Blocked by the backend already (no source left): the same placeholder, not a broken image.
+    backendBlocked(el)
     if (!allowRemote) {
       for (const attr of ['src', 'srcset', 'background', 'poster']) {
         const v = el.getAttribute(attr)
         if (v && (REMOTE.test(v.trim()) || (attr === 'srcset' && /https?:/i.test(v)))) {
           el.removeAttribute(attr)
-          if (el.tagName === 'IMG') {
-            const w = el.getAttribute('width')
-            const h = el.getAttribute('height')
-            // Hide tracking pixels entirely; keep a soft placeholder box for real images.
-            if ((w && +w <= 2) || (h && +h <= 2)) el.setAttribute('style', 'display:none')
-            else {
-              el.setAttribute('data-blocked', '1')
-              const hh = h && +h > 0 ? Math.min(+h, 240) : 48
-              el.setAttribute('style', `${el.getAttribute('style') ?? ''};height:${hh}px !important`)
-              // Transparent pixel avoids the broken-image icon; CSS draws a soft placeholder.
-              el.setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7')
-              el.removeAttribute('alt')
-            }
-          }
+          if (el.tagName === 'IMG') placeholder(el)
           blocked++
         }
       }
