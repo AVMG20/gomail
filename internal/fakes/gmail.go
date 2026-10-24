@@ -1,6 +1,7 @@
 package fakes
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -55,7 +56,7 @@ type gmailHistory struct {
 
 // Gmail is a stateful fake of the Gmail REST API (users/me only): profile,
 // labels, messages (list/get/attachments/batchModify/trash/send), history,
-// drafts and the multipart upload endpoint.
+// drafts, the multipart upload endpoint and batch requests.
 type Gmail struct {
 	Server *httptest.Server
 	email  string
@@ -70,6 +71,8 @@ type Gmail struct {
 	sent      []*GmailMessage
 	seq       int
 	uploads   int
+	requests  int // HTTP requests (a batch counts once)
+	batches   int
 }
 
 // Uploads counts calls to the multipart upload endpoint.
@@ -85,8 +88,103 @@ func NewGmail(email string, auth func(string) bool) *Gmail {
 	for _, id := range []string{"INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "STARRED", "UNREAD", "IMPORTANT"} {
 		g.labels = append(g.labels, gmailLabel{ID: id, Name: id, Type: "system"})
 	}
-	g.Server = httptest.NewServer(http.HandlerFunc(g.serve))
+	batch := GoogleBatch(GmailBatchPath, http.HandlerFunc(g.serve))
+	g.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		g.requests++
+		if r.URL.Path == GmailBatchPath {
+			g.batches++
+		}
+		g.mu.Unlock()
+		batch.ServeHTTP(w, r)
+	}))
 	return g
+}
+
+// Requests returns the number of HTTP requests served (a batch request
+// counts once) and how many of them were batch requests.
+func (g *Gmail) Requests() (requests, batches int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.requests, g.batches
+}
+
+// GmailBatchPath is the path of Gmail's batch endpoint.
+const GmailBatchPath = "/batch/gmail/v1"
+
+// GoogleBatch serves a Google batch endpoint at path in front of h: a POST
+// with a multipart/mixed body of application/http parts (at most 100) is
+// split into its requests, each is served by h with the outer request's
+// headers (Authorization), and the answers come back as a multipart/mixed
+// response whose parts carry "response-" plus the request's Content-ID.
+// Other requests go to h unchanged.
+func GoogleBatch(path string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != path {
+			h.ServeHTTP(w, r)
+			return
+		}
+		mt, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if r.Method != http.MethodPost || err != nil || mt != "multipart/mixed" {
+			apiError(w, 400, "badRequest", "a batch request must be a multipart/mixed POST")
+			return
+		}
+		type sub struct {
+			id  string
+			req *http.Request
+		}
+		var subs []sub
+		mr := multipart.NewReader(r.Body, params["boundary"])
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				apiError(w, 400, "badRequest", "invalid multipart body: "+err.Error())
+				return
+			}
+			if ct := part.Header.Get("Content-Type"); ct != "application/http" {
+				apiError(w, 400, "badRequest", "batch part of type "+ct)
+				return
+			}
+			req, err := http.ReadRequest(bufio.NewReader(part))
+			if err != nil {
+				apiError(w, 400, "badRequest", "invalid batch part: "+err.Error())
+				return
+			}
+			body, _ := io.ReadAll(req.Body)
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			subs = append(subs, sub{id: strings.Trim(part.Header.Get("Content-ID"), "<>"), req: req})
+		}
+		if len(subs) == 0 || len(subs) > 100 {
+			apiError(w, 400, "badRequest", fmt.Sprintf("a batch holds 1 to 100 requests, not %d", len(subs)))
+			return
+		}
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		for _, s := range subs {
+			req := httptest.NewRequest(s.req.Method, s.req.URL.RequestURI(), s.req.Body)
+			for k, v := range r.Header {
+				if !strings.HasPrefix(strings.ToLower(k), "content-") {
+					req.Header[k] = v
+				}
+			}
+			for k, v := range s.req.Header {
+				req.Header[k] = v
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			res := rec.Result()
+			res.ContentLength = int64(rec.Body.Len())
+			pw, _ := mw.CreatePart(map[string][]string{"Content-Type": {"application/http"}, "Content-ID": {"<response-" + s.id + ">"}})
+			_ = res.Write(pw)
+		}
+		_ = mw.Close()
+		w.Header().Set("Content-Type", "multipart/mixed; boundary="+mw.Boundary())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(buf.Bytes())
+	})
 }
 
 // Close stops the server.
@@ -539,10 +637,16 @@ func (g *Gmail) historyList(w http.ResponseWriter, q map[string][]string) {
 		return
 	}
 	var out []map[string]any
+	// Like Gmail, records carry the message's labels (here: its current
+	// ones), so a label change can be applied without fetching it.
 	ref := func(ids []string) []map[string]any {
 		var list []map[string]any
 		for _, id := range ids {
-			list = append(list, map[string]any{"message": map[string]string{"id": id}})
+			msg := map[string]any{"id": id}
+			if m, ok := g.msgs[id]; ok {
+				msg["threadId"], msg["labelIds"] = m.ThreadID, slices.Clone(m.LabelIDs)
+			}
+			list = append(list, map[string]any{"message": msg})
 		}
 		return list
 	}

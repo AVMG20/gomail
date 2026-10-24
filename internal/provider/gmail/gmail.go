@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AVMG20/gomail/internal/httpx"
@@ -29,7 +30,8 @@ const BaseURL = "https://gmail.googleapis.com"
 // it): every message that isn't in Spam or Trash.
 const AllMail = "ALL_MAIL"
 
-// Concurrency for metadata fetches.
+// Concurrency for one request per message (trash, and metadata when the
+// batch endpoint is unavailable).
 const workers = 8
 
 // Gmail allows 15,000 quota units per user per minute. Pacing at 200 units/s
@@ -54,8 +56,9 @@ var folderLabel = map[string]bool{"INBOX": true, "SENT": true, "DRAFT": true, "S
 
 // Client talks to one Gmail account.
 type Client struct {
-	api  *httpx.Client
-	base string
+	api     *httpx.Client
+	base    string
+	noBatch atomic.Bool // the batch endpoint failed: one request per call
 
 	mu       sync.Mutex
 	labels   map[string]gLabel // id -> user label
@@ -74,7 +77,11 @@ func New(tokens httpx.TokenSource, base string) *Client {
 	}
 	budget := httpx.NewBudget(quotaPerSecond, quotaBurst)
 	c.api.Throttle = func(ctx context.Context, r httpx.Request) error {
-		return budget.Take(ctx, quotaCost(r.Method, r.Path), c.api.Sleep)
+		cost, ok := ctx.Value(costKey{}).(float64) // a batch: the sum of its calls
+		if !ok {
+			cost = quotaCost(r.Method, r.Path)
+		}
+		return budget.Take(ctx, cost, c.api.Sleep)
 	}
 	return c
 }
@@ -342,31 +349,38 @@ func (c *Client) listIDs(ctx context.Context, labelID, q string, limit int) ([]s
 	return ids, nil
 }
 
-// fetchMetadata fetches message metadata with a bounded worker pool. Ids
-// that no longer exist are returned in gone.
+// fetchMetadata fetches message metadata in batches. Ids that no longer
+// exist are returned in gone.
 func (c *Client) fetchMetadata(ctx context.Context, ids []string, progress ...func(done, total int)) (msgs []mail.Message, gone []string, err error) {
+	paths := make([]string, len(ids))
+	for i, id := range ids {
+		paths[i] = "messages/" + url.PathEscape(id) + "?" + metadataQuery
+	}
 	var mu sync.Mutex
 	done := 0
-	err = provider.Parallel(ctx, workers, ids, func(ctx context.Context, id string) error {
-		var g gMessage
-		err := c.api.JSON(ctx, http.MethodGet, "messages/"+url.PathEscape(id)+"?"+metadataQuery, nil, &g)
+	res, err := c.getAll(ctx, paths, func(n int) {
 		mu.Lock()
 		defer mu.Unlock()
-		done++
+		done += n
 		for _, p := range progress {
 			p(done, len(ids))
 		}
-		if httpx.StatusOf(err) == http.StatusNotFound {
-			gone = append(gone, id)
-			return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, r := range res {
+		if r.err != nil {
+			gone = append(gone, ids[i]) // getAll only leaves 404s
+			continue
 		}
-		if err != nil {
-			return err
+		var g gMessage
+		if err := json.Unmarshal(r.body, &g); err != nil {
+			return nil, nil, fmt.Errorf("unexpected response from Gmail: %w", err)
 		}
 		msgs = append(msgs, c.toMessage(g))
-		return nil
-	})
-	return msgs, gone, err
+	}
+	return msgs, gone, nil
 }
 
 func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncResult, error) {
