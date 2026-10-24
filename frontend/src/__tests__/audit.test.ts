@@ -19,6 +19,7 @@ import type { Message, MessagePage, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useComposeStore } from '@/stores/compose'
 import { ACTION_CHUNK, useMailStore } from '@/stores/mail'
+import ComposeDock from '@/components/compose/ComposeDock.vue'
 import ComposeWindow from '@/components/compose/ComposeWindow.vue'
 import RecipientField from '@/components/compose/RecipientField.vue'
 
@@ -137,6 +138,28 @@ describe('send checks', () => {
     await nextTick()
     expect(document.body.textContent).toContain('Send anyway')
     expect(sendSpy).not.toHaveBeenCalled()
+    app.unmount()
+  })
+})
+
+describe('compose dock', () => {
+  it('the tab Esc parks focus on shows no focus ring until it is left and tabbed back to', async () => {
+    const compose = useComposeStore()
+    const d = compose.compose()
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const app = createApp(ComposeDock)
+    app.use(getActivePinia()!)
+    app.mount(el)
+    await nextTick()
+    compose.minimize(d.id)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 10))
+    const tab = el.querySelector<HTMLElement>(`[data-dock-tab="${d.id}"]`)!
+    expect(document.activeElement).toBe(tab)
+    expect(tab.hasAttribute('data-parked')).toBe(true)
+    tab.blur()
+    expect(tab.hasAttribute('data-parked')).toBe(false)
     app.unmount()
   })
 })

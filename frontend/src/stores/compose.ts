@@ -400,6 +400,9 @@ export const useComposeStore = defineStore('compose', () => {
       const active = document.activeElement
       if (active && active !== document.body && document.contains(active)) return
       const tab = id ? document.querySelector<HTMLElement>(`[data-dock-tab="${id}"]`) : null
+      // Parked there, not chosen by the user: no focus ring while they go on with the list or
+      // the calendar (the tab clears this when it loses focus).
+      if (tab) tab.dataset.parked = ''
       ;(tab ?? document.querySelector<HTMLElement>('[role="listbox"]'))?.focus({ preventScroll: true })
     }, 0)
   }
