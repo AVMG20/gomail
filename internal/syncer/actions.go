@@ -52,11 +52,15 @@ func localIDs(ms []models.MessageSummary) []string {
 	return out
 }
 
+// changed tells the UI that mail of these accounts changed locally. The
+// counts that follow from it (folder and account unread, label counts) are
+// refreshed on messages:changed, so there is no accounts:changed: it made
+// every window re-read all accounts, folders and label counts a second time
+// on each action.
 func (e *Engine) changed(accounts ...string) {
 	for _, a := range accounts {
 		e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: a})
 	}
-	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{})
 }
 
 // localChanges tracks optimistic local changes whose push to the provider

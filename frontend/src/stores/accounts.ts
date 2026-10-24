@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
-import { useDebounceFn } from '@vueuse/core'
 import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod, readLocal, writeLocal } from '@/lib/api'
 import type { Account, Folder, LabelCount, SyncProgress } from '@/lib/types'
@@ -12,6 +11,8 @@ export interface LabelScope {
 }
 
 export const SYSTEM_ORDER = ['inbox', 'starred', 'sent', 'drafts', 'archive', 'spam', 'trash']
+/** Changes within this long of each other share one refresh. */
+const REFRESH_MS = 300
 
 export const useAccountsStore = defineStore('accounts', () => {
   const accounts = ref<Account[]>([])
@@ -47,6 +48,8 @@ export const useAccountsStore = defineStore('accounts', () => {
   }
 
   let foldersSeq = 0
+  /** Per account: the newest folder load, so an older reply (out of order) never overwrites it. */
+  const folderLoads = new Map<string, number>()
   let countsSeq = 0
 
   /** Move folder unread counters right away (read/unread); refreshCounts() then corrects them. */
@@ -62,10 +65,10 @@ export const useAccountsStore = defineStore('accounts', () => {
   }
   async function loadFolders(ids = accounts.value.map((a) => a.id)) {
     const seq = ++foldersSeq
+    ids.forEach((id) => folderLoads.set(id, seq))
     const results = await Promise.all(ids.map(async (id) => [id, sortFolders(await api.getFolders(id))] as const))
-    if (seq !== foldersSeq) return // a newer load is on its way (out-of-order responses)
     const next = { ...folders.value }
-    for (const [id, list] of results) next[id] = list
+    for (const [id, list] of results) if (folderLoads.get(id) === seq) next[id] = list
     for (const id of Object.keys(next)) if (!accounts.value.some((a) => a.id === id)) delete next[id]
     folders.value = next
   }
@@ -88,7 +91,7 @@ export const useAccountsStore = defineStore('accounts', () => {
     } finally {
       deletingFolders.delete(id)
       await loadFolders([f.accountId])
-      refreshCounts()
+      refreshCounts(f.accountId)
     }
   }
 
@@ -128,10 +131,53 @@ export const useAccountsStore = defineStore('accounts', () => {
     accounts.value = withSignatures(await api.getAccounts())
   }
 
-  /** Counts (folder unread, label counts, account unread) after mail changes. */
-  const refreshCounts = useDebounceFn(async () => {
-    await Promise.all([reloadAccounts(), loadFolders(), loadLabelCounts()])
-  }, 400)
+  // ---- refreshing after changes: every event and action asks here, so changes in a row (an
+  // action, its messages:changed, the round's accounts:changed…) share one round of calls.
+  /** What the next refresh re-reads: the account list, folders per account ("" = every account), label counts. */
+  const due = { accounts: false, folders: new Set<string>(), labels: false }
+  let dueTimer: ReturnType<typeof setTimeout> | null = null
+  let dueRun: Promise<void> | null = null
+  let dueDone = () => {}
+
+  /** Re-read this state shortly (once for everything asked meanwhile); resolves once it is read. */
+  function refresh(what: { accounts?: boolean; folders?: string; labels?: boolean }): Promise<void> {
+    if (what.accounts) due.accounts = true
+    if (what.folders !== undefined) due.folders.add(what.folders)
+    if (what.labels) due.labels = true
+    if (dueTimer) clearTimeout(dueTimer)
+    dueTimer = setTimeout(() => void runRefresh(), REFRESH_MS)
+    return (dueRun ??= new Promise<void>((done) => (dueDone = done)))
+  }
+
+  async function runRefresh() {
+    dueTimer = null
+    const done = dueDone
+    dueRun = null
+    const all = due.folders.has('')
+    const folderIds = [...due.folders]
+    const { accounts: accts, labels } = due
+    due.accounts = due.labels = false
+    due.folders.clear()
+    try {
+      // Every account's folders (one may be new or gone): the account list first.
+      if (accts && all) await reloadAccounts()
+      await Promise.all([
+        accts && !all ? reloadAccounts() : null,
+        folderIds.length ? loadFolders(all ? undefined : folderIds.filter((id) => accountMap.value.has(id))) : null,
+        labels ? loadLabelCounts() : null,
+      ])
+    } catch {
+      /* transient; the next change refreshes again */
+    } finally {
+      done()
+    }
+  }
+
+  /** Counts (folder unread, label counts, account unread) after mail changes; accountId: only
+   *  that mailbox's mail changed ("" = any). */
+  function refreshCounts(accountId = '') {
+    return refresh({ accounts: true, folders: accountId, labels: true })
+  }
 
   function folderOf(accountId: string, kind: string): Folder | undefined {
     return folders.value[accountId]?.find((f) => f.kind === kind)
@@ -209,6 +255,6 @@ export const useAccountsStore = defineStore('accounts', () => {
   return {
     setAccountColor, moveAccount,
     accounts, folders, labelCounts, labelTotals, labelScope, loaded, syncing, progress, setProgress, online, accountMap, anySyncing, folderMap,
-    load, saveSignature, loadFolders, deleteFolder, adjustUnread, loadLabelCounts, reloadAccounts, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
+    load, saveSignature, loadFolders, deleteFolder, adjustUnread, loadLabelCounts, reloadAccounts, refresh, refreshCounts, folderOf, unifiedUnread, setSyncing, sync,
   }
 })

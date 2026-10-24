@@ -32,7 +32,7 @@ export function useBackendEvents() {
   const addrs = (v: string | Address[] | null | undefined): Address[] => (Array.isArray(v) ? v : v ? parseAddressList(v) : [])
   const refreshLabels = useDebounceFn(() => {
     void settings.refreshLabels()
-    void accounts.loadLabelCounts()
+    void accounts.refresh({ labels: true })
   }, 300)
 
   // Only refetch calendar data when the calendar has been opened this session.
@@ -44,10 +44,6 @@ export function useBackendEvents() {
   }, 250)
 
   const refreshList = useDebounceFn(() => void mail.softRefresh(), 250)
-  const reloadAccounts = useDebounceFn(async () => {
-    await accounts.load()
-    mail.ensureValidMailbox()
-  }, 200)
 
   // Accounts with a "Sync now" (accounts.sync) running: its outcome gets a toast, background rounds' don't.
   const manual = new Set<string>()
@@ -100,21 +96,31 @@ export function useBackendEvents() {
       const wasManual = manual.delete(p.accountId)
       if (p.error) onSyncError(p.accountId, p.error, wasManual)
       else lastError.delete(p.accountId)
-      accounts.refreshCounts()
       if (p.newMessages > 0) {
+        accounts.refreshCounts(p.accountId)
         mail.threadsChanged({ accountId: p.accountId })
         refreshList()
+      } else {
+        // Mail the round changed comes with messages:changed (its counts refresh from there); the
+        // event has no "changed" flag. Only the sync status (last synced, error) is new here.
+        void accounts.refresh({ accounts: true })
       }
     }),
     api.on('messages:changed', (p) => {
       // Cached conversations go only where mail changed (the event's ids, else checked against the refreshed list).
       const ids = (p as { ids?: string[] } | undefined)?.ids
       mail.threadsChanged({ accountId: p?.accountId, ids })
-      // Only refresh the list when the change can affect the current view.
-      if (!p?.accountId || !mail.mailbox.accountId || p.accountId === mail.mailbox.accountId) refreshList()
-      accounts.refreshCounts()
+      // Only refresh the list when the change can affect the current view, and isn't just the
+      // backend confirming a read/star change the list already shows.
+      const echo = mail.takeEcho(p?.accountId ?? '')
+      if (!echo && (!p?.accountId || !mail.mailbox.accountId || p.accountId === mail.mailbox.accountId)) refreshList()
+      accounts.refreshCounts(p?.accountId ?? '')
     }),
-    api.on('accounts:changed', () => void reloadAccounts()),
+    // The account list and its status; with an account id, that mailbox's folders (a round may
+    // have found new ones) — its mail's counts follow messages:changed.
+    api.on('accounts:changed', (p) => {
+      void accounts.refresh({ accounts: true, folders: p?.accountId ?? '', labels: !p?.accountId }).then(() => mail.ensureValidMailbox())
+    }),
     api.on('labels:changed', () => refreshLabels()),
     api.on('settings:changed', () => void settings.reload()),
     api.on('network:status', (p) => {
