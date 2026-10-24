@@ -161,15 +161,18 @@ export const useAccountsStore = defineStore('accounts', () => {
     syncing.value = s
   }
 
-  async function sync(id = '') {
+  /** "Sync now" for one mailbox ("" = all). Never throws: useBackendEvents reports how it went,
+   *  the same way from every place that offers it. Resolves to the error ("" when it went fine). */
+  async function sync(id = ''): Promise<string> {
     const ids = id ? [id] : accounts.value.map((a) => a.id)
     ids.forEach((x) => setSyncing(x, true))
     try {
       if (id) await api.syncNow(id)
       else await Promise.all(ids.map((x) => api.syncNow(x)))
+      return ''
     } catch (e) {
       ids.forEach((x) => setSyncing(x, false))
-      throw e
+      return errorMessage(e) || 'Something went wrong'
     }
   }
 

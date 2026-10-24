@@ -278,7 +278,7 @@ const subtitle = computed(() => {
 
 const syncing = computed(() => (mail.mailbox.accountId ? accounts.syncing.has(mail.mailbox.accountId) : accounts.anySyncing))
 async function refresh() {
-  await accounts.sync(mail.mailbox.accountId).catch(() => {})
+  await accounts.sync(mail.mailbox.accountId)
   void mail.softRefresh()
 }
 

@@ -273,6 +273,34 @@ describe('sync toasts', () => {
     expect(toast.error).toHaveBeenCalledTimes(3)
     app.unmount()
   })
+
+  it('a “Sync now” that fails before its round starts says so once, and never throws', async () => {
+    const { app, accounts } = await withEvents()
+    vi.spyOn(api, 'syncNow').mockRejectedValue(new Error('account not found'))
+    await expect(accounts.sync('a')).resolves.toBe('Account not found')
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.error.mock.calls[0][0]).toBe('Sync failed for alex@example.com')
+    expect(toast.error.mock.calls[0][1]).toMatchObject({ description: 'Account not found' })
+    expect(accounts.syncing.has('a')).toBe(false)
+    vi.spyOn(api, 'syncNow').mockRejectedValue(new Error("You're offline. gomail will sync again when the connection is back."))
+    await accounts.sync('')
+    expect(toast.error).toHaveBeenCalledTimes(2)
+    expect(toast.error.mock.calls[1]).toMatchObject(['Couldn’t sync', { id: 'sync-offline' }])
+    app.unmount()
+  })
+
+  it('a round that failed and reported it is not reported again by the failed call', async () => {
+    const { app, accounts, finished } = await withEvents()
+    const full = "Your disk is full, so gomail can't save mail. Free up some space; syncing resumes automatically."
+    vi.spyOn(api, 'syncNow').mockImplementation(async (id) => {
+      finished(id, full) // the round's sync:finished comes before the call returns
+      throw new Error(full)
+    })
+    await accounts.sync('a')
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.error.mock.calls[0]).toMatchObject(['Sync failed for alex@example.com', { id: 'sync-failed:a', description: full }])
+    app.unmount()
+  })
 })
 
 describe('list search box', () => {

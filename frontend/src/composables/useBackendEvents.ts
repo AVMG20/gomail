@@ -51,29 +51,42 @@ export function useBackendEvents() {
 
   // Accounts with a "Sync now" (accounts.sync) running: its outcome gets a toast, background rounds' don't.
   const manual = new Set<string>()
-  const offSyncAction = accounts.$onAction(({ name, args, onError }) => {
+  const offSyncAction = accounts.$onAction(({ name, args, after }) => {
     if (name !== 'sync') return
     const ids = args[0] ? [args[0] as string] : accounts.accounts.map((a) => a.id)
     ids.forEach((id) => manual.add(id))
-    onError(() => ids.forEach((id) => manual.delete(id)))
+    // A failed call: mailboxes whose round finished have said how it went (sync:finished); the
+    // others never got that far (offline, removed meanwhile) and get the call's error.
+    after((error) => {
+      if (!error) return
+      const left = ids.filter((id) => manual.delete(id))
+      if (left.length) reportManual(left, error as string)
+    })
   })
   /** Per account: the last sync error that needed the user, so a repeat of it doesn't toast again. */
   const lastError = new Map<string, string>()
 
+  /** The one toast of a failed "Sync now", whichever button, menu or command started it. */
+  function reportManual(accountIds: string[], error: string) {
+    const forUser = syncErrorsForUser(error)
+    if (forUser.length) accountIds.forEach((id) => lastError.set(id, forUser.join('; ')))
+    if (REAUTH_SYNC.test(error) && !forUser.length) return // the sign-in banner says it
+    // While offline every mailbox fails the same way: one toast for all of them.
+    const offline = !forUser.length && /offline/i.test(error)
+    const acc = accountIds.length === 1 ? accounts.accountMap.get(accountIds[0]) : undefined
+    toast.error(offline || !acc ? 'Couldn’t sync' : `Sync failed for ${acc.email}`, {
+      id: offline ? 'sync-offline' : `sync-failed:${accountIds.join(',')}`,
+      description: forUser.length ? forUser.join('; ') : error,
+    })
+  }
+
   function onSyncError(accountId: string, error: string, wasManual: boolean) {
+    if (wasManual) return reportManual([accountId], error)
     const acc = accounts.accountMap.get(accountId)
     const forUser = syncErrorsForUser(error)
     const known = lastError.get(accountId)
     if (forUser.length) lastError.set(accountId, forUser.join('; '))
-    if (wasManual) {
-      if (REAUTH_SYNC.test(error) && !forUser.length) return // the sign-in banner says it
-      // While offline every mailbox fails the same way: one toast for all of them.
-      const offline = !forUser.length && /offline/i.test(error)
-      toast.error(offline ? 'Couldn’t sync' : `Sync failed${acc ? ` for ${acc.email}` : ''}`, {
-        id: offline ? 'sync-offline' : `sync-failed:${accountId}`,
-        description: forUser.length ? forUser.join('; ') : error,
-      })
-    } else if (forUser.length && forUser.join('; ') !== known) {
+    if (forUser.length && forUser.join('; ') !== known) {
       toast.error(`Sync failed${acc ? ` for ${acc.email}` : ''}`, { id: `sync-failed:${accountId}`, description: forUser.join('; ') })
     }
   }
