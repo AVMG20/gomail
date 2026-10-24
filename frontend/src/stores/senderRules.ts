@@ -68,30 +68,30 @@ export const useSenderRulesStore = defineStore('senderRules', () => {
     const moved = results.reduce((n, r) => n + r.count, 0)
     const title = results.length === 1 ? `${ruleTarget(results[0].rule.contains)} goes to Junk from now on` : `${results.length} senders go to Junk from now on`
     announce(title)
-    toast(title, {
-      description: moved ? `${moved.toLocaleString()} ${moved === 1 ? 'message' : 'messages'} moved to Junk and marked read.` : undefined,
-      action: {
-        label: 'Undo',
-        onClick: async () => {
-          try {
-            if (created.length) await api.removeRules(created)
-            await undoPicked?.()
-            for (const r of results) {
-              const inbox = accounts.folderOf(r.rule.accountId, 'inbox')?.id
-              if (inbox && r.moved.length) await inChunks(r.moved, (c) => api.moveToFolder(c, inbox))
-            }
-            const unread = results.flatMap((r) => r.unread)
-            if (unread.length) await inChunks(unread, (c) => api.markRead(c, false))
-          } catch (e) {
-            toast.error('Undo failed', { description: errorMessage(e) })
+    mail.undoToast(
+      title,
+      async () => {
+        try {
+          if (created.length) await api.removeRules(created)
+          await undoPicked?.()
+          for (const r of results) {
+            const inbox = accounts.folderOf(r.rule.accountId, 'inbox')?.id
+            if (inbox && r.moved.length) await inChunks(r.moved, (c) => api.moveToFolder(c, inbox))
           }
-          await refreshRules()
-          void mail.softRefresh()
-          accounts.refreshCounts()
-        },
+          const unread = results.flatMap((r) => r.unread)
+          if (unread.length) await inChunks(unread, (c) => api.markRead(c, false))
+        } catch (e) {
+          toast.error('Undo failed', { description: errorMessage(e) })
+        }
+        await refreshRules()
+        void mail.softRefresh()
+        accounts.refreshCounts()
       },
-      cancel: editRules(results[0].rule.accountId),
-    })
+      {
+        description: moved ? `${moved.toLocaleString()} ${moved === 1 ? 'message' : 'messages'} moved to Junk and marked read.` : undefined,
+        cancel: editRules(results[0].rule.accountId),
+      },
+    )
   }
 
   /** "Always label <sender> as <label>": a rule for the mailbox, and the label on the sender's mail
@@ -104,23 +104,20 @@ export const useSenderRulesStore = defineStore('senderRules', () => {
       const name = settings.labelMap.get(labelId)?.name ?? 'the label'
       const who = ruleTarget(r.rule.contains)
       const n = r.labeled.length
-      toast(`${who} is labeled “${name}” from now on`, {
-        description: n ? `${n.toLocaleString()} ${n === 1 ? 'message' : 'messages'} labeled.` : undefined,
-        action: {
-          label: 'Undo',
-          onClick: async () => {
-            try {
-              if (r.created) await api.removeRules([r.rule.id])
-              if (n) await inChunks(r.labeled, (c) => api.removeLabel(c, labelId))
-            } catch (e) {
-              toast.error('Undo failed', { description: errorMessage(e) })
-            }
-            await refreshRules()
-            void mail.softRefresh()
-          },
+      mail.undoToast(
+        `${who} is labeled “${name}” from now on`,
+        async () => {
+          try {
+            if (r.created) await api.removeRules([r.rule.id])
+            if (n) await inChunks(r.labeled, (c) => api.removeLabel(c, labelId))
+          } catch (e) {
+            toast.error('Undo failed', { description: errorMessage(e) })
+          }
+          await refreshRules()
+          void mail.softRefresh()
         },
-        cancel: editRules(accountId),
-      })
+        { description: n ? `${n.toLocaleString()} ${n === 1 ? 'message' : 'messages'} labeled.` : undefined, cancel: editRules(accountId) },
+      )
     } catch (e) {
       await refreshRules()
       toast.error('Couldn’t add the rule', { description: errorMessage(e) })

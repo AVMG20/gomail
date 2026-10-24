@@ -79,28 +79,23 @@ export const useAiStore = defineStore('ai', () => {
         for (const r of results) if (r.moved) byPlace.set(r.moved, (byPlace.get(r.moved) ?? 0) + 1)
         const places = [...byPlace].map(([k, n], i) => `${ids.length > 1 ? `${n} ` : ''}${i ? 'to' : 'moved to'} ${PLACE[k] ?? k}`)
         if (places.length) parts.push(places.join(', '))
-        toast(parts.join(' · '), {
-          action: {
-            label: 'Undo',
-            onClick: async () => {
-              for (const r of results) {
-                const prev = before.get(r.messageId) ?? []
-                for (const l of r.added) if (!prev.includes(l)) await api.removeLabel([r.messageId], l)
-                for (const l of r.removed) await api.restoreLabel([r.messageId], l)
-                // Back where it was: the folder it left (the inbox when it was there).
-                const was = wasIn.get(r.messageId)
-                if (!r.moved || !was) continue
-                const from = was.folderIds.map((id) => accounts.folderMap.get(id)).filter((f) => !!f && f.kind !== r.moved)
-                const back = from.find((f) => f!.kind === 'inbox') ?? from[0] ?? (was.accountId ? accounts.folderOf(was.accountId, 'inbox') : undefined)
-                // A conversation moved as a whole: "c:<id>" brings back its messages in that box.
-                const row = settings.settings?.conversationView === false ? r.messageId : `c:${r.messageId}`
-                if (back) await api.moveToFolder([row], back.id)
-                if (was.unread) await api.markRead([row], false)
-              }
-              accounts.refreshCounts()
-              void mail.softRefresh()
-            },
-          },
+        mail.undoToast(parts.join(' · '), async () => {
+          for (const r of results) {
+            const prev = before.get(r.messageId) ?? []
+            for (const l of r.added) if (!prev.includes(l)) await api.removeLabel([r.messageId], l)
+            for (const l of r.removed) await api.restoreLabel([r.messageId], l)
+            // Back where it was: the folder it left (the inbox when it was there).
+            const was = wasIn.get(r.messageId)
+            if (!r.moved || !was) continue
+            const from = was.folderIds.map((id) => accounts.folderMap.get(id)).filter((f) => !!f && f.kind !== r.moved)
+            const back = from.find((f) => f!.kind === 'inbox') ?? from[0] ?? (was.accountId ? accounts.folderOf(was.accountId, 'inbox') : undefined)
+            // A conversation moved as a whole: "c:<id>" brings back its messages in that box.
+            const row = settings.settings?.conversationView === false ? r.messageId : `c:${r.messageId}`
+            if (back) await api.moveToFolder([row], back.id)
+            if (was.unread) await api.markRead([row], false)
+          }
+          accounts.refreshCounts()
+          void mail.softRefresh()
         })
       }
       accounts.refreshCounts()

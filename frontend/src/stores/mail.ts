@@ -843,7 +843,7 @@ export const useMailStore = defineStore('mail', () => {
   /** The toast of an action with Undo; z / mod+Z run the same undo while it shows. Whichever
    *  comes first runs it, the other finds nothing left to do. `undo` resolves to false when it
    *  failed (and said so). */
-  function undoToast(what: string, undo: () => unknown, opts: { description?: string } = {}) {
+  function undoToast(what: string, undo: () => unknown, opts: { description?: string; cancel?: NonNullable<Parameters<typeof toast>[1]>['cancel'] } = {}) {
     let ran = false
     const entry: UndoEntry = {
       what,
@@ -860,6 +860,7 @@ export const useMailStore = defineStore('mail', () => {
     lastUndo.value = entry
     entry.toastId = toast(what, {
       description: opts.description,
+      cancel: opts.cancel,
       duration: UNDO_MS,
       action: { label: 'Undo', onClick: () => entry.run() },
       onDismiss: gone,
