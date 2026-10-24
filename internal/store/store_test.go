@@ -559,3 +559,64 @@ func TestLabelFilterLookupMatchesWalk(t *testing.T) {
 	}
 	s.SetHideProviderLabels(false)
 }
+
+// Recipient autocomplete ignores case and accents in any script, matching
+// the start of the address or of a name word.
+func TestSearchContactsAnyScript(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	from := func(i int, name, email string) mail.Message {
+		m := msg(i, "hi", "x", "INBOX", "ALL")
+		m.From = models.Address{Name: name, Email: email}
+		return m
+	}
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{
+		from(1, "Иван Петров", "Ivan@Example.com"),
+		from(2, "Élodie Martin", "elodie@example.com"),
+		from(3, "Bob Smith", "bob@example.com"),
+		from(4, "ZOË ÅSTRÖM", "zoe@example.org"),
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	search := func(q string) string {
+		t.Helper()
+		cs, err := s.SearchContacts(q, 10, []string{"me@example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, c := range cs {
+			out = append(out, c.Email)
+		}
+		return strings.Join(out, ",")
+	}
+	for q, want := range map[string]string{
+		"Bob":     "bob@example.com",
+		"smi":     "bob@example.com",
+		"Иван":    "ivan@example.com",
+		"иван":    "ivan@example.com",
+		"ПЕТР":    "ivan@example.com",
+		"Élodie":  "elodie@example.com",
+		"élo":     "elodie@example.com",
+		"elo":     "elodie@example.com",
+		"ÉLO":     "elodie@example.com",
+		"mart":    "elodie@example.com",
+		"zoë åst": "zoe@example.org",
+		"astrom":  "zoe@example.org",
+		"ivan@":   "ivan@example.com",
+		"odie":    "",
+		"example": "",
+		"%":       "",
+	} {
+		if got := search(q); got != want {
+			t.Errorf("%q: %q, want %q", q, got, want)
+		}
+	}
+	// A newer name replaces the old one, for matching too.
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{from(9, "Ivan Petrov", "ivan@example.com")}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if search("petrov") != "ivan@example.com" || search("петров") != "" {
+		t.Fatalf("renamed: %q %q", search("petrov"), search("петров"))
+	}
+}

@@ -6,6 +6,9 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
@@ -362,14 +365,15 @@ func (s *Store) FolderByKind(accountID, kind string) (models.Folder, error) {
 // word of the name, ranked by frequency (sent-to counts 5x) and recency.
 // exclude lists addresses to leave out (the user's own accounts).
 func (s *Store) SearchContacts(query string, limit int, exclude []string) ([]models.Contact, error) {
-	query = strings.TrimSpace(strings.ToLower(query))
+	query = foldText(strings.TrimSpace(query))
 	if limit <= 0 || limit > 50 {
 		limit = 10
 	}
 	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
+	// The key starts with the email; every name word follows a space.
 	q := `SELECT email, name, count, last_seen FROM contacts
-		WHERE (email LIKE ? ESCAPE '\' OR name LIKE ? ESCAPE '\' OR name LIKE ? ESCAPE '\')`
-	args := []any{esc + "%", esc + "%", "% " + esc + "%"}
+		WHERE (match_key LIKE ? ESCAPE '\' OR match_key LIKE ? ESCAPE '\')`
+	args := []any{esc + "%", "% " + esc + "%"}
 	if len(exclude) > 0 {
 		q += ` AND email NOT IN (` + placeholders(len(exclude)) + `)`
 		for _, e := range exclude {
@@ -396,6 +400,21 @@ func (s *Store) SearchContacts(query string, limit int, exclude []string) ([]mod
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// contactKey is what autocomplete matches a contact on: "email name",
+// folded. SQLite's LIKE only ignores the case of ASCII letters.
+func contactKey(email, name string) string { return foldText(email + " " + name) }
+
+// foldText lower-cases s and strips its diacritics ("Élodie" -> "elodie").
+func foldText(s string) string {
+	var b strings.Builder
+	for _, r := range norm.NFD.String(strings.ToLower(s)) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return norm.NFC.String(b.String())
 }
 
 // FolderMessageIDs lists the cached messages of a folder.
