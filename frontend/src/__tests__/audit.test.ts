@@ -1,7 +1,7 @@
 // Regression tests for the mail audit (compose, list and settings fixes).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia, getActivePinia, setActivePinia } from 'pinia'
 
 const toasts: { kind: string; msg: string; opts?: { action?: { onClick: () => unknown } } }[] = []
 vi.mock('vue-sonner', () => {
@@ -19,6 +19,7 @@ import type { Message, MessagePage, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useComposeStore } from '@/stores/compose'
 import { ACTION_CHUNK, useMailStore } from '@/stores/mail'
+import ComposeWindow from '@/components/compose/ComposeWindow.vue'
 import RecipientField from '@/components/compose/RecipientField.vue'
 
 function deferred<T>() {
@@ -108,6 +109,34 @@ describe('recipients', () => {
     await nextTick()
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     expect(seen).toEqual([false, true])
+    app.unmount()
+  })
+})
+
+describe('send checks', () => {
+  it('a wrong address is reported before the "no subject" question', async () => {
+    const compose = useComposeStore()
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockResolvedValue(undefined)
+    const d = compose.compose([{ name: '', email: 'bob' }])
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const app = createApp(ComposeWindow, { draft: d })
+    app.use(getActivePinia()!)
+    app.mount(el)
+    await nextTick()
+    const win = el.querySelector('[role="dialog"]')!
+    const ctrlEnter = () => win.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+    ctrlEnter()
+    await nextTick()
+    expect(toasts.map((t) => t.msg)).toEqual(['Check this address: bob'])
+    expect(document.body.textContent).not.toContain('Send anyway')
+    // Fixed: now the missing subject is asked about, and nothing is sent yet.
+    d.to = [{ name: '', email: 'bob@acme.com' }]
+    ctrlEnter()
+    await nextTick()
+    await nextTick()
+    expect(document.body.textContent).toContain('Send anyway')
+    expect(sendSpy).not.toHaveBeenCalled()
     app.unmount()
   })
 })

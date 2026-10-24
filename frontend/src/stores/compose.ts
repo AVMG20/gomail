@@ -547,34 +547,43 @@ export const useComposeStore = defineStore('compose', () => {
     }, 1500)
   }
 
-  async function send(id: string, delaySeconds = 0) {
+  /** Whether the draft can be sent as it is; if not, says what to fix. The compose window asks
+   *  this before its "no subject" / "attachment" questions, so "Send anyway" can't be followed
+   *  by "Check this address". */
+  function canSend(id: string): boolean {
     const d = drafts.value.find((x) => x.id === id)
-    if (!d || d.sending || d.queued) return
+    if (!d) return false
     if (!d.to.length && !d.cc.length && !d.bcc.length) {
       toast.error('Add at least one recipient')
-      return
+      return false
     }
     const invalid = [...d.to, ...d.cc, ...d.bcc].filter((a) => !isEmail(a.email))
     if (invalid.length) {
       toast.error(`Check ${invalid.length === 1 ? 'this address' : 'these addresses'}: ${invalid.map((a) => a.email).join(', ')}`)
-      return
+      return false
     }
     const bytes = d.attachments.reduce((n, a) => n + (a.size || 0), 0)
     if (bytes > MAX_ATTACH_BYTES) {
       toast.error('Attachments are larger than 25 MB', { description: 'Remove some files or share them with a link instead.' })
-      return
+      return false
     }
     // Never send without files the user attached.
     if (d.filesPending) {
       toast('Attachments are still loading', { description: 'Try again in a moment.' })
-      return
+      return false
     }
     if (d.missingFiles?.length) {
       toast.error(`Re-add ${d.missingFiles.length === 1 ? 'this attachment' : 'these attachments'}: ${d.missingFiles.join(', ')}`, {
         description: 'They couldn’t be restored after gomail closed. Re-add them, or choose “Continue without them”.',
       })
-      return
+      return false
     }
+    return true
+  }
+
+  async function send(id: string, delaySeconds = 0) {
+    const d = drafts.value.find((x) => x.id === id)
+    if (!d || d.sending || d.queued || !canSend(id)) return
     if (delaySeconds > 0) {
       const visible = !d.minimized
       d.queued = true
@@ -624,5 +633,5 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  return { drafts, compose, composeWith, respond, respondToThread, replyTargetFor, isDraftMessage, editDraft, close, minimize, discard, saveAndClose, focus, send, undoSend, resolveMissing, restoreFiles }
+  return { drafts, compose, composeWith, respond, respondToThread, replyTargetFor, isDraftMessage, editDraft, close, minimize, discard, saveAndClose, focus, canSend, send, undoSend, resolveMissing, restoreFiles }
 })
