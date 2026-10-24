@@ -117,7 +117,12 @@ func Open(path string) (*Store, error) {
 	if path == ":memory:" {
 		db.SetMaxOpenConns(1)
 	} else {
+		// Keep every connection open when idle: the UI loads several views
+		// at once, and with Go's default of 2 idle the rest were closed and
+		// reopened per burst (DSN pragmas again, cold page cache: ~3x slower).
 		db.SetMaxOpenConns(8)
+		db.SetMaxIdleConns(8)
+		db.SetConnMaxIdleTime(0)
 	}
 	if err := db.Ping(); err != nil {
 		db.Close()

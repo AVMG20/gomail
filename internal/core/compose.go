@@ -99,7 +99,7 @@ func (s *Service) buildOutgoing(req models.ComposeRequest, draft bool) (models.A
 		if total > maxAttachmentBytes {
 			return acct, out, errors.New("attachments are larger than 25 MB in total")
 		}
-		out.Attachments = append(out.Attachments, mail.OutgoingAttachment{Filename: sanitizeFilename(filepath.Base(a.Filename)), MimeType: a.MimeType, Data: data})
+		out.Attachments = append(out.Attachments, mail.OutgoingAttachment{ID: a.ID, Filename: sanitizeFilename(filepath.Base(a.Filename)), MimeType: a.MimeType, Data: data})
 	}
 	if req.ReplyToID != "" && out.Mode != "new" {
 		orig, err := s.messageRaw(strings.TrimPrefix(req.ReplyToID, store.ConversationPrefix)) // loads threading headers

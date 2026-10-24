@@ -186,6 +186,19 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 	// The label filter: any of the chosen labels, or "No label" (q.Unlabeled), OR-combined
 	// like the filter popover. OnlyUnlabeled (bulk AI labeling) always restricts.
 	hasLabel := `EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN (` + placeholders(len(q.Labels)) + `)` + s.labelCond() + `)`
+	if len(q.Labels) > 0 && !q.Unlabeled {
+		few, err := s.fewLabeled(q.Labels)
+		if err != nil {
+			return nil, err
+		}
+		if few {
+			// A rare label: look its messages up. Walking the view in date
+			// order and checking each message reads all of it to count, or
+			// to fill a page the label is rare in (all mailboxes: 55 ms ->
+			// 3 ms).
+			hasLabel = `m.id IN (SELECT ml.message_id FROM message_labels ml WHERE ml.label_id IN (` + placeholders(len(q.Labels)) + `)` + s.labelCond() + `)`
+		}
+	}
 	noLabel := `NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id` + s.labelCond() + `)`
 	switch {
 	case len(q.Labels) > 0 && q.Unlabeled:
@@ -223,6 +236,20 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 		}
 	}
 	return w, nil
+}
+
+// fewLabels is the most label assignments a label filter looks up message
+// by message (a row read each, ~6 µs); past it, walking the view in date
+// order wins for pages and for views narrowed otherwise (unread). A var
+// for tests.
+var fewLabels = 1000
+
+// fewLabeled reports whether the labels are on at most fewLabels messages.
+func (s *Store) fewLabeled(labels []string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM message_labels WHERE label_id IN (`+placeholders(len(labels))+`) LIMIT ?)`,
+		append(anySlice(labels), fewLabels+1)...).Scan(&n)
+	return n <= fewLabels, err
 }
 
 func (s *Store) addKindFilter(w *where, kinds []string) {

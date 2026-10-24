@@ -219,8 +219,10 @@ func safeURL(u string) string {
 
 var dayCodes = map[string]string{"sunday": "SU", "monday": "MO", "tuesday": "TU", "wednesday": "WE", "thursday": "TH", "friday": "FR", "saturday": "SA"}
 
-// rruleOf translates a Graph recurrence pattern into an RRULE.
-func rruleOf(r *gRecurrence) string {
+// rruleOf translates a Graph recurrence pattern into an RRULE. The end date
+// becomes the end of that day in the recurrence's zone (tz when it has
+// none), a DATE for all-day events.
+func rruleOf(r *gRecurrence, tz string, allDay bool) string {
 	if r == nil {
 		return ""
 	}
@@ -247,7 +249,10 @@ func rruleOf(r *gRecurrence) string {
 		parts = append(parts, "COUNT="+strconv.Itoa(r.Range.NumberOfOccurrences))
 	case "endDate":
 		if d, err := time.Parse("2006-01-02", r.Range.EndDate); err == nil {
-			parts = append(parts, "UNTIL="+d.Add(24*time.Hour-time.Second).Format("20060102T150405Z"))
+			if z := calendar.IANAZone(r.Range.RecurrenceTimeZone); z != "" {
+				tz = z
+			}
+			parts = append(parts, "UNTIL="+calendar.UntilValue(d, calendar.ZoneLoc(tz), allDay))
 		}
 	}
 	return strings.Join(parts, ";")
@@ -307,10 +312,10 @@ func toEvent(g gEvent, cal calendar.Calendar) calendar.Event {
 	if g.Type == "occurrence" || g.Type == "exception" {
 		ev.SeriesRemoteID = g.SeriesMasterID
 	}
-	ev.RRule = rruleOf(g.Recurrence)
+	ev.RRule = rruleOf(g.Recurrence, ev.TimeZone, ev.AllDay)
 	ev.IsRecurring = ev.SeriesRemoteID != "" || ev.RRule != "" || g.Type == "seriesMaster"
 	if ev.RRule != "" {
-		ev.Recurrence = calendar.Summarize(ev.RRule)
+		ev.Recurrence = calendar.SummarizeIn(ev.RRule, ev.TimeZone)
 	}
 	if g.IsReminderOn {
 		ev.Reminders = []int{g.ReminderMinutesBeforeStart}
@@ -440,12 +445,12 @@ func (c *Client) collect(ctx context.Context, cal calendar.Calendar, items []gEv
 			if !ok && len(masters) < 50 {
 				var m gEvent
 				if err := c.api.JSON(ctx, http.MethodGet, "me/events/"+url.PathEscape(ev.SeriesRemoteID)+"?$select=recurrence", nil, &m); err == nil {
-					rule = rruleOf(m.Recurrence)
+					rule = rruleOf(m.Recurrence, ev.TimeZone, ev.AllDay)
 				}
 				masters[ev.SeriesRemoteID] = rule
 			}
 			if rule != "" {
-				ev.RRule, ev.Recurrence = rule, calendar.Summarize(rule)
+				ev.RRule, ev.Recurrence = rule, calendar.SummarizeIn(rule, ev.TimeZone)
 			}
 		}
 		res.Upserts = append(res.Upserts, ev)
@@ -509,7 +514,12 @@ func body(ev calendar.Event, withRecurrence bool, videoProvider string) map[stri
 		b["onlineMeetingProvider"] = p
 	}
 	if withRecurrence && ev.RRule != "" {
-		if r := recurrenceOf(ev.RRule, ev.Start.In(loc), tzName); r != nil {
+		start := ev.Start.In(loc)
+		if ev.AllDay {
+			// All-day dates are 00:00 UTC: keep the date, not the instant.
+			start = time.Date(ev.Start.Year(), ev.Start.Month(), ev.Start.Day(), 0, 0, 0, 0, loc)
+		}
+		if r := recurrenceOf(ev.RRule, start, tzName); r != nil {
 			b["recurrence"] = r
 		}
 	}
@@ -517,7 +527,8 @@ func body(ev calendar.Event, withRecurrence bool, videoProvider string) map[stri
 }
 
 // recurrenceOf turns a simple RRULE (as built by calendar.BuildRRule) into
-// a Graph patternedRecurrence.
+// a Graph patternedRecurrence; start is in the recurrence's zone, which
+// also gives a UTC UNTIL its end date.
 func recurrenceOf(rule string, start time.Time, tz string) map[string]any {
 	kv := map[string]string{}
 	for _, p := range strings.Split(rule, ";") {
@@ -541,8 +552,8 @@ func recurrenceOf(rule string, start time.Time, tz string) map[string]any {
 	rng := map[string]any{"type": "noEnd", "startDate": start.Format("2006-01-02"), "recurrenceTimeZone": tz}
 	if n, err := strconv.Atoi(kv["COUNT"]); err == nil && n > 0 {
 		rng["type"], rng["numberOfOccurrences"] = "numbered", n
-	} else if u := kv["UNTIL"]; len(u) >= 8 {
-		if d, err := time.Parse("20060102", u[:8]); err == nil {
+	} else if u := kv["UNTIL"]; u != "" {
+		if d, ok := calendar.UntilDay(u, start.Location()); ok {
 			rng["type"], rng["endDate"] = "endDate", d.Format("2006-01-02")
 		}
 	}

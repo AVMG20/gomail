@@ -891,14 +891,31 @@ func (c *Client) SaveDraft(ctx context.Context, out mail.Outgoing, draftID strin
 	return draftID, nil
 }
 
+// attSlack bounds how many bytes more than its content Graph may report
+// for a file (its size includes the attachment's properties).
+const attSlack = 2 << 10
+
 // syncAttachments makes the draft's user-added attachments match atts.
 // Files the draft got from createForward, or that this client doesn't know
 // about (uploaded before a restart, or elsewhere), are left alone unless
 // complete says atts is the draft's whole file list.
 func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mail.OutgoingAttachment, complete bool) error {
-	want := map[string]mail.OutgoingAttachment{}
+	type wanted struct {
+		key string // attKey of the content
+		a   mail.OutgoingAttachment
+	}
+	var want []wanted
+	keys, seen := map[string]bool{}, map[string]bool{}
 	for _, a := range atts {
-		want[attKey(a.Filename, len(a.Data))] = a
+		key := attKey(a.Filename, len(a.Data))
+		dup := key // the same file attached twice is uploaded once
+		if a.ID != "" {
+			dup = "id:" + a.ID
+		}
+		if !seen[dup] {
+			seen[dup], keys[key] = true, true
+			want = append(want, wanted{key, a})
+		}
 	}
 	c.mu.Lock()
 	if c.added == nil {
@@ -934,7 +951,7 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 	c.mu.Lock()
 	var drop []string
 	for key := range ours {
-		if _, keep := want[key]; !keep {
+		if !keys[key] {
 			drop = append(drop, key)
 		}
 	}
@@ -960,28 +977,30 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 		}
 	}
 	existing.Value = kept
-	// Pair the wanted files with the draft's files. Graph's size includes
-	// the attachment's properties, so a file already on the draft may
-	// report more bytes than its content: an exact key, our own upload, or
-	// the same name with at least that size all count.
+	// Pair the wanted files with the draft's files: a file loaded from the
+	// draft by its attachment id, a file we uploaded by our record of it.
+	// Anything else is uploaded. Only for a client that sends neither ids
+	// nor the whole file list, the same name with a size that fits
+	// Graph's overhead counts too; with the whole list, that file may be
+	// an older version the user removed, which must not be sent instead.
 	claimed := map[string]bool{} // server attachment id -> wanted
-	present := map[string]bool{} // want key -> on the draft
-	for _, pass := range []func(e gAttachment, key string, a mail.OutgoingAttachment) bool{
-		func(e gAttachment, key string, _ mail.OutgoingAttachment) bool {
-			return attKey(e.Name, int(e.Size)) == key
-		},
-		func(e gAttachment, key string, _ mail.OutgoingAttachment) bool { return ours[key] == e.ID },
-		func(e gAttachment, _ string, a mail.OutgoingAttachment) bool {
-			return strings.EqualFold(e.Name, a.Filename) && int(e.Size) >= len(a.Data)
+	present := make([]bool, len(want))
+	for _, pass := range []func(e gAttachment, w wanted) bool{
+		func(e gAttachment, w wanted) bool { return w.a.ID != "" && e.ID == w.a.ID },
+		func(e gAttachment, w wanted) bool { return !e.IsInline && ours[w.key] == e.ID },
+		func(e gAttachment, w wanted) bool {
+			n := len(w.a.Data)
+			return w.a.ID == "" && !complete && !e.IsInline && strings.EqualFold(e.Name, w.a.Filename) &&
+				int(e.Size) >= n && int(e.Size) <= n+attSlack
 		},
 	} {
-		for key, a := range want {
-			if present[key] {
+		for i, w := range want {
+			if present[i] {
 				continue
 			}
 			for _, e := range existing.Value {
-				if !claimed[e.ID] && !e.IsInline && pass(e, key, a) {
-					claimed[e.ID], present[key] = true, true
+				if !claimed[e.ID] && pass(e, w) {
+					claimed[e.ID], present[i] = true, true
 					break
 				}
 			}
@@ -997,18 +1016,18 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 			}
 		}
 	}
-	for key, a := range want {
-		if present[key] {
+	for i, w := range want {
+		if present[i] {
 			continue
 		}
-		id, err := c.addAttachment(ctx, draftID, a, known)
+		id, err := c.addAttachment(ctx, draftID, w.a, known)
 		if err != nil {
-			return fmt.Errorf("could not attach %s: %w", a.Filename, err)
+			return fmt.Errorf("could not attach %s: %w", w.a.Filename, err)
 		}
 		known[id] = true
 		if id != "" {
 			c.mu.Lock()
-			ours[key] = id
+			ours[w.key] = id
 			c.mu.Unlock()
 		}
 	}

@@ -306,16 +306,22 @@ func expand(master calendar.Event, put func(calendar.Event)) {
 		kv[k] = v
 	}
 	count, _ := strconv.Atoi(kv["COUNT"])
-	var until time.Time
+	// The last day the series may run, in the event's zone (UNTIL is a UTC
+	// time, or a DATE for all-day series).
+	loc := calendar.ZoneLoc(master.TimeZone)
+	if master.AllDay {
+		loc = time.UTC // all-day dates are kept at 00:00 UTC
+	}
+	var lastDay time.Time
 	if u := kv["UNTIL"]; u != "" {
-		until, _ = time.Parse("20060102T150405Z", u)
+		lastDay, _ = calendar.UntilDay(u, loc)
 	}
 	step := map[string][3]int{"DAILY": {0, 0, 1}, "WEEKLY": {0, 0, 7}, "MONTHLY": {0, 1, 0}, "YEARLY": {1, 0, 0}}[kv["FREQ"]]
 	dur := master.End.Sub(master.Start)
 	limit := master.Start.AddDate(2, 0, 0)
 	for i := 0; i < 400; i++ {
 		start := master.Start.AddDate(step[0]*i, step[1]*i, step[2]*i)
-		if (count > 0 && i >= count) || (!until.IsZero() && start.After(until)) || start.After(limit) {
+		if (count > 0 && i >= count) || (!lastDay.IsZero() && calendar.DateUTC(start.In(loc)).After(lastDay)) || start.After(limit) {
 			return
 		}
 		occ := master

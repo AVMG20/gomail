@@ -37,7 +37,7 @@ const canEdit = computed(() => cal.canEditEvent(ev.value))
 const canManage = computed(() => cal.canManageEvent(ev.value))
 const canSetReminders = computed(() => canManage.value && hasMethod('SetEventReminders'))
 const joinUrl = computed(() => (ev.value.meetingUrl && isSafeExternalUrl(ev.value.meetingUrl) ? ev.value.meetingUrl : ''))
-const repeat = computed(() => ev.value.recurrenceText || (ev.value.recurrence ? describeRepeat(parseRRule(ev.value.recurrence)) : ev.value.isRecurring ? 'Repeats' : ''))
+const repeat = computed(() => ev.value.recurrenceText || (ev.value.recurrence ? describeRepeat(parseRRule(ev.value.recurrence, ev.value.timeZone)) : ev.value.isRecurring ? 'Repeats' : ''))
 const myEmail = computed(() => account.value?.email.toLowerCase() ?? '')
 const guests = computed(() => {
   const list = [...ev.value.attendees]

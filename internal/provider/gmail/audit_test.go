@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/fakes"
 	"github.com/AVMG20/gomail/internal/httpx"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
@@ -22,14 +23,14 @@ import (
 // auditServer serves a tiny Gmail mailbox for the tests below.
 func auditServer(t *testing.T, h func(w http.ResponseWriter, r *http.Request, p string) bool) *Client {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(fakes.GoogleBatch(fakes.GmailBatchPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		p := strings.TrimPrefix(r.URL.Path, "/gmail/v1/users/me/")
 		if !h(w, r, p) {
 			t.Errorf("unexpected %s %s", r.Method, r.URL)
 			w.WriteHeader(500)
 		}
-	}))
+	})))
 	t.Cleanup(srv.Close)
 	c := New(httpx.StaticToken("tok"), srv.URL)
 	c.SetSleep(func(context.Context, time.Duration) error { return nil })

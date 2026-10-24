@@ -165,43 +165,47 @@ var sameThread = `t.account_id = x.account_id AND t.thread_key = x.thread_key
 
 var sourceRank = map[string]int{"manual": 4, "provider": 3, "system": 2, "ai": 1}
 
-// aggregateThreads fills thread-level fields of conversation rows.
+// aggregateThreads fills thread-level fields of conversation rows. The
+// members and labels of all the page's threads are read in one query each
+// (per 500 rows), ordered per anchor so they fold in like one thread at a
+// time.
 func (s *Store) aggregateThreads(rows []models.MessageSummary) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	msgs, err := s.db.Prepare(`SELECT t.unread, t.starred, t.has_attachments, t.from_name, t.from_email, a.email
-		FROM messages x JOIN messages t ON ` + sameThread + ` JOIN accounts a ON a.id = t.account_id
-		WHERE x.id = ? ORDER BY t.date, t.id`)
-	if err != nil {
-		return err
+	type agg struct {
+		seen  map[string]bool
+		count int
+		best  map[string]models.MessageLabel
+		order []string
 	}
-	defer msgs.Close()
-	labels, err := s.db.Prepare(`SELECT ml.label_id, ml.source, max(ml.confidence)
-		FROM messages x JOIN messages t ON ` + sameThread + ` JOIN message_labels ml ON ml.message_id = t.id
-		WHERE x.id = ?` + s.labelCond() + ` GROUP BY ml.label_id, ml.source`)
-	if err != nil {
-		return err
-	}
-	defer labels.Close()
+	byID := make(map[string]int, len(rows))
+	aggs := make([]agg, len(rows))
+	ids := make([]string, len(rows))
 	for i := range rows {
 		r := &rows[i]
 		r.ConversationID = ConversationPrefix + r.ID
-		rs, err := msgs.Query(r.ID)
+		r.Participants = []string{}
+		byID[r.ID] = i
+		aggs[i] = agg{seen: map[string]bool{}, best: map[string]models.MessageLabel{}}
+		ids[i] = r.ID
+	}
+	for _, chunk := range chunks(ids, 500) {
+		rs, err := s.db.Query(`SELECT x.id, t.unread, t.starred, t.has_attachments, t.from_name, t.from_email, a.email
+			FROM messages x JOIN messages t ON `+sameThread+` JOIN accounts a ON a.id = t.account_id
+			WHERE x.id IN (`+placeholders(len(chunk))+`) ORDER BY x.id, t.date, t.id`, anySlice(chunk)...)
 		if err != nil {
 			return err
 		}
-		seen := map[string]bool{}
-		r.Participants = []string{}
-		count := 0
 		for rs.Next() {
 			var unread, starred, att int
-			var name, email, me string
-			if err := rs.Scan(&unread, &starred, &att, &name, &email, &me); err != nil {
+			var xid, name, email, me string
+			if err := rs.Scan(&xid, &unread, &starred, &att, &name, &email, &me); err != nil {
 				rs.Close()
 				return err
 			}
-			count++
+			r, a := &rows[byID[xid]], &aggs[byID[xid]]
+			a.count++
 			r.Unread = r.Unread || unread == 1
 			r.Starred = r.Starred || starred == 1
 			r.HasAttachments = r.HasAttachments || att == 1
@@ -209,39 +213,51 @@ func (s *Store) aggregateThreads(rows []models.MessageSummary) error {
 			if strings.EqualFold(email, me) {
 				p = "me"
 			}
-			if !seen[p] && len(r.Participants) < 6 {
-				seen[p] = true
+			if !a.seen[p] && len(r.Participants) < 6 {
+				a.seen[p] = true
 				r.Participants = append(r.Participants, p)
 			}
 		}
 		rs.Close()
-		r.ThreadCount = max(count, 1)
-		lr, err := labels.Query(r.ID)
+		if err := rs.Err(); err != nil {
+			return err
+		}
+		lr, err := s.db.Query(`SELECT x.id, ml.label_id, ml.source, max(ml.confidence)
+			FROM messages x JOIN messages t ON `+sameThread+` JOIN message_labels ml ON ml.message_id = t.id
+			WHERE x.id IN (`+placeholders(len(chunk))+`)`+s.labelCond()+`
+			GROUP BY x.id, ml.label_id, ml.source ORDER BY x.id, ml.label_id, ml.source`, anySlice(chunk)...)
 		if err != nil {
 			return err
 		}
-		best := map[string]models.MessageLabel{}
-		var order []string
 		for lr.Next() {
+			var xid string
 			var l models.MessageLabel
-			if err := lr.Scan(&l.LabelID, &l.Source, &l.Confidence); err != nil {
+			if err := lr.Scan(&xid, &l.LabelID, &l.Source, &l.Confidence); err != nil {
 				lr.Close()
 				return err
 			}
-			cur, ok := best[l.LabelID]
+			a := &aggs[byID[xid]]
+			cur, ok := a.best[l.LabelID]
 			if !ok {
-				order = append(order, l.LabelID)
+				a.order = append(a.order, l.LabelID)
 			}
 			if !ok || sourceRank[l.Source] > sourceRank[cur.Source] {
-				best[l.LabelID] = l
+				a.best[l.LabelID] = l
 			}
 		}
 		lr.Close()
-		if len(order) > 0 || len(r.Labels) > 0 {
+		if err := lr.Err(); err != nil {
+			return err
+		}
+	}
+	for i := range rows {
+		r, a := &rows[i], &aggs[i]
+		r.ThreadCount = max(a.count, 1)
+		if len(a.order) > 0 || len(r.Labels) > 0 {
 			ids, details := []string{}, []models.MessageLabel{}
-			for _, id := range sortedStrings(order) {
+			for _, id := range sortedStrings(a.order) {
 				ids = append(ids, id)
-				details = append(details, best[id])
+				details = append(details, a.best[id])
 			}
 			r.Labels, r.LabelDetails = ids, details
 		}

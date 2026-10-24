@@ -3,10 +3,12 @@ package store
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 )
@@ -492,4 +494,191 @@ func TestOutlookAllMail(t *testing.T) {
 	check("account kind", models.ListQuery{AccountID: "o1", FolderKind: models.FolderArchive}, want)
 	check("in:all", models.ListQuery{AccountID: "o1", Search: "in:all"}, want)
 	check("gmail untouched", models.ListQuery{FolderID: FolderID("g1", "ALL")}, "Gmail archived")
+}
+
+// A rare label's messages are looked up instead of checked along the date
+// order: both ways must find the same mail, count it the same and order it
+// the same.
+func TestLabelFilterLookupMatchesWalk(t *testing.T) {
+	s := openTest(t)
+	folders := [][]string{{"INBOX", "ALL"}, {"ALL"}, {"TRASH"}, {}, {"SPAM"}, {"INBOX", "ALL"}}
+	syncFolders := func(i int) []string {
+		if f := folders[i%len(folders)]; len(f) > 0 {
+			return f
+		}
+		return []string{"ALL"}
+	}
+	want := map[string]int{} // label -> visible messages carrying it
+	for _, acct := range []string{"a1", "a2"} {
+		seedAccount(t, s, acct)
+		var ms []mail.Message
+		for i := range 60 {
+			ms = append(ms, threadMsg(fmt.Sprint(acct, "-", i), fmt.Sprint("T", i%7), i%20, "Ann", syncFolders(i)...))
+			ms[i].Unread = i%2 == 0
+		}
+		if _, err := s.ApplySync(acct, mail.SyncResult{Upserts: ms}, nil); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 60 {
+			id := MessageID(acct, fmt.Sprint(acct, "-", i))
+			if len(folders[i%len(folders)]) == 0 { // being deleted: in no folder
+				if err := s.SetMessageFolders(map[string][]string{id: {}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for label, every := range map[string]int{"work": 3, "news": 4} {
+				if i%every != 0 {
+					continue
+				}
+				source := map[string]string{"work": "manual", "news": "provider"}[label]
+				if _, err := s.db.Exec(`INSERT INTO message_labels(message_id, label_id, source) VALUES(?, ?, ?)`, id, label, source); err != nil {
+					t.Fatal(err)
+				}
+				if len(folders[i%len(folders)]) > 0 {
+					want[label]++
+				}
+			}
+		}
+	}
+	s.SetLabels([]models.Label{{ID: "news", Name: "News", Source: config.LabelSourceProvider}})
+	inbox, _ := s.FolderByKind("a1", models.FolderInbox)
+	queries := []models.ListQuery{
+		{Labels: []string{"work"}},
+		{Labels: []string{"news"}},
+		{Labels: []string{"work", "news"}},
+		{FolderKind: models.FolderInbox, Labels: []string{"work"}},
+		{FolderKind: models.FolderTrash, Labels: []string{"work", "news"}},
+		{AccountID: "a1", FolderID: inbox.ID, Labels: []string{"news"}, UnreadOnly: true},
+		{AccountID: "a2", Labels: []string{"work"}, ExcludeLabels: []string{"news"}},
+		{Labels: []string{"work"}, Unlabeled: true},
+	}
+	defer func(n int) { fewLabels = n }(fewLabels)
+	type result struct {
+		total, convTotal int
+		page, convPage   []string
+		ids              []string
+	}
+	run := func(q models.ListQuery) result {
+		t.Helper()
+		var r result
+		for _, conv := range []bool{false, true} {
+			q := q
+			q.Limit = 4
+			total := -1
+			var ids []string
+			for {
+				p, err := s.ListMessages(q, ListOptions{Conversations: conv})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if total == -1 {
+					total = p.Total
+				}
+				for _, m := range p.Messages {
+					ids = append(ids, m.ID)
+				}
+				if p.NextCursor == "" {
+					break
+				}
+				q.Cursor = p.NextCursor
+			}
+			if conv {
+				r.convTotal, r.convPage = total, ids
+			} else {
+				r.total, r.page = total, ids
+			}
+		}
+		var err error
+		if r.ids, err = s.ResolveIDs(q, FilterOptions{}, 1000); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	for _, hide := range []bool{false, true} {
+		s.SetHideProviderLabels(hide)
+		for _, q := range queries {
+			fewLabels = 0 // walk
+			walk := run(q)
+			fewLabels = 1000 // look up
+			lookup := run(q)
+			if !reflect.DeepEqual(walk, lookup) {
+				t.Fatalf("hide=%v %+v:\n  walk %+v\nlookup %+v", hide, q, walk, lookup)
+			}
+			if len(walk.ids) != walk.total || len(walk.page) != walk.total || len(walk.convPage) != walk.convTotal {
+				t.Fatalf("hide=%v %+v: totals don't match the mail listed %+v", hide, q, walk)
+			}
+		}
+		if r := run(queries[0]); r.total != want["work"] {
+			t.Fatalf("work: %d, want %d", r.total, want["work"])
+		}
+		n := want["news"]
+		if hide {
+			n = 0
+		}
+		if r := run(queries[1]); r.total != n {
+			t.Fatalf("hide=%v news: %d, want %d", hide, r.total, n)
+		}
+	}
+	s.SetHideProviderLabels(false)
+}
+
+// Recipient autocomplete ignores case and accents in any script, matching
+// the start of the address or of a name word.
+func TestSearchContactsAnyScript(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	from := func(i int, name, email string) mail.Message {
+		m := msg(i, "hi", "x", "INBOX", "ALL")
+		m.From = models.Address{Name: name, Email: email}
+		return m
+	}
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{
+		from(1, "Иван Петров", "Ivan@Example.com"),
+		from(2, "Élodie Martin", "elodie@example.com"),
+		from(3, "Bob Smith", "bob@example.com"),
+		from(4, "ZOË ÅSTRÖM", "zoe@example.org"),
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	search := func(q string) string {
+		t.Helper()
+		cs, err := s.SearchContacts(q, 10, []string{"me@example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, c := range cs {
+			out = append(out, c.Email)
+		}
+		return strings.Join(out, ",")
+	}
+	for q, want := range map[string]string{
+		"Bob":     "bob@example.com",
+		"smi":     "bob@example.com",
+		"Иван":    "ivan@example.com",
+		"иван":    "ivan@example.com",
+		"ПЕТР":    "ivan@example.com",
+		"Élodie":  "elodie@example.com",
+		"élo":     "elodie@example.com",
+		"elo":     "elodie@example.com",
+		"ÉLO":     "elodie@example.com",
+		"mart":    "elodie@example.com",
+		"zoë åst": "zoe@example.org",
+		"astrom":  "zoe@example.org",
+		"ivan@":   "ivan@example.com",
+		"odie":    "",
+		"example": "",
+		"%":       "",
+	} {
+		if got := search(q); got != want {
+			t.Errorf("%q: %q, want %q", q, got, want)
+		}
+	}
+	// A newer name replaces the old one, for matching too.
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: []mail.Message{from(9, "Ivan Petrov", "ivan@example.com")}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if search("petrov") != "ivan@example.com" || search("петров") != "" {
+		t.Fatalf("renamed: %q %q", search("petrov"), search("петров"))
+	}
 }

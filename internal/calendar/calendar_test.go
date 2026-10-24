@@ -46,7 +46,7 @@ func TestRRules(t *testing.T) {
 		{models.EventRecurrence{Frequency: models.RepeatMonthly, Until: &until}, "", "FREQ=MONTHLY;UNTIL=20261231T235959Z", "Monthly, until Dec 31, 2026"},
 		{models.EventRecurrence{Frequency: models.RepeatYearly}, "", "FREQ=YEARLY", "Yearly"},
 	} {
-		got := BuildRRule(c.r, mon, c.tz)
+		got := BuildRRule(c.r, mon, c.tz, false)
 		if got != c.want || Summarize(got) != c.sum {
 			t.Errorf("%+v: %q (%q), want %q (%q)", c.r, got, Summarize(got), c.want, c.sum)
 		}

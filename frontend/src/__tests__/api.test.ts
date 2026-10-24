@@ -87,7 +87,7 @@ describe('calendar wire format', async () => {
     expect(w).toMatchObject({ start: '2026-11-05T00:00:00Z', end: '2026-11-09T00:00:00Z', allDay: true, reminderMinutes: [1440] })
     expect(w.attendees).toEqual([{ name: '', email: 'a@b.io', response: 'none', optional: false }])
     expect((w.recurrence as { frequency: string }).frequency).toBe('yearly')
-    expect((w.recurrence as { until: string }).until).toMatch(/^2030-12-3[01]T/)
+    expect((w.recurrence as { until: string }).until).toBe('2030-12-31T00:00:00Z')
     expect(w).toMatchObject({ description: 'Notes', meetingUrl: 'https://meet.example/x', addVideoCall: false })
     const timed = await toWireInput({ calendarId: '', title: '', start: '2026-10-20T09:00:00+02:00', end: '2026-10-20T10:00:00+02:00', allDay: false, timeZone: 'Europe/Amsterdam', location: '', description: '', attendees: [], meetingUrl: '', recurrence: '', reminders: [] })
     expect(timed).toMatchObject({ start: '2026-10-20T07:00:00.000Z', end: '2026-10-20T08:00:00.000Z', recurrence: { frequency: 'none', until: null, count: 0 } })

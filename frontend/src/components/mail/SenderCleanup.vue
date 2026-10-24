@@ -171,21 +171,19 @@ async function archive(s: SenderSummary) {
   try {
     await inChunks(ids, api.archive)
     announce(`Archived ${what}`)
-    toast(`Archived ${what}`, {
-      action: {
-        label: 'Undo',
-        onClick: async () => {
-          const inbox = accounts.folderOf(s.accountId, 'inbox')?.id
-          try {
-            if (inbox) await inChunks(ids, (c) => api.moveToFolder(c, inbox))
-          } catch (e) {
-            toast.error('Undo failed', { description: errorMessage(e) })
-          }
-          void mail.softRefresh()
-          accounts.refreshCounts()
-          void load()
-        },
-      },
+    mail.undoToast(`Archived ${what}`, async () => {
+      const inbox = accounts.folderOf(s.accountId, 'inbox')?.id
+      let ok = true
+      try {
+        if (inbox) await inChunks(ids, (c) => api.moveToFolder(c, inbox))
+      } catch (e) {
+        ok = false
+        toast.error('Undo failed', { description: errorMessage(e) })
+      }
+      void mail.softRefresh()
+      accounts.refreshCounts()
+      void load()
+      return ok
     })
   } catch (e) {
     toast.error('Archive failed', { description: errorMessage(e) })

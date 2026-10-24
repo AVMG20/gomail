@@ -106,19 +106,17 @@ function onKey(e: KeyboardEvent) {
   } else if ((e.key === ',' || e.key === ';') && insideQuoteOrAngle(text.value)) {
     // Part of a display name like "Doe, John": type it, don't split there.
   } else if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',' || e.key === ';') {
+    if (!text.value.trim()) return
     // A complete address that differs from the top suggestion is taken as typed (unless the
     // user arrowed to a suggestion).
     const typed = parseAddress(text.value.trim())
     const pick = suggestions.value[active.value]
     const takeSuggestion = pick && e.key !== ',' && e.key !== ';' && !(typed && active.value === 0 && typed.email.toLowerCase() !== pick.email.toLowerCase())
-    // Tab picks/commits and still moves on to the next field.
-    if (takeSuggestion) {
-      if (e.key !== 'Tab') e.preventDefault()
-      add(pick)
-    } else if (text.value.trim()) {
-      commit()
-      if (e.key !== 'Tab') e.preventDefault()
-    }
+    if (takeSuggestion) add(pick)
+    else commit()
+    // Tab picks/commits and still moves on to the next field; Ctrl/Cmd+Enter makes the same
+    // chip as Enter and goes on to send (the compose window handles it).
+    if (e.key !== 'Tab' && !(e.key === 'Enter' && (e.metaKey || e.ctrlKey))) e.preventDefault()
   } else if (e.key === 'Backspace' && !text.value && model.value.length) {
     model.value = model.value.slice(0, -1)
   } else if (e.key === 'Escape' && suggestions.value.length) {

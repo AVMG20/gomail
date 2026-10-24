@@ -239,8 +239,8 @@ func FromInput(in models.EventInput) Event {
 			ev.Description = strings.TrimRight("Join: "+in.MeetingURL+"\n\n"+ev.Description, "\n")
 		}
 	}
-	if r := BuildRRule(in.Recurrence, in.Start, in.TimeZone); r != "" {
-		ev.RRule, ev.IsRecurring, ev.Recurrence = r, true, Summarize(r)
+	if r := BuildRRule(in.Recurrence, in.Start, in.TimeZone, in.AllDay); r != "" {
+		ev.RRule, ev.IsRecurring, ev.Recurrence = r, true, SummarizeIn(r, in.TimeZone)
 	}
 	return ev
 }

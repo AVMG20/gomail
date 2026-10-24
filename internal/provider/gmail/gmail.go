@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AVMG20/gomail/internal/httpx"
@@ -29,7 +31,8 @@ const BaseURL = "https://gmail.googleapis.com"
 // it): every message that isn't in Spam or Trash.
 const AllMail = "ALL_MAIL"
 
-// Concurrency for metadata fetches.
+// Concurrency for one request per message (trash, and metadata when the
+// batch endpoint is unavailable).
 const workers = 8
 
 // Gmail allows 15,000 quota units per user per minute. Pacing at 200 units/s
@@ -54,11 +57,14 @@ var folderLabel = map[string]bool{"INBOX": true, "SENT": true, "DRAFT": true, "S
 
 // Client talks to one Gmail account.
 type Client struct {
-	api  *httpx.Client
-	base string
+	api     *httpx.Client
+	base    string
+	noBatch atomic.Bool // the batch endpoint failed: one request per call
 
 	mu       sync.Mutex
 	labels   map[string]gLabel // id -> user label
+	known    map[string]bool   // every label id seen (nil: not loaded yet)
+	meta     metaCache
 	fwdCache map[string][]mailmime.Attachment
 }
 
@@ -74,7 +80,11 @@ func New(tokens httpx.TokenSource, base string) *Client {
 	}
 	budget := httpx.NewBudget(quotaPerSecond, quotaBurst)
 	c.api.Throttle = func(ctx context.Context, r httpx.Request) error {
-		return budget.Take(ctx, quotaCost(r.Method, r.Path), c.api.Sleep)
+		cost, ok := ctx.Value(costKey{}).(float64) // a batch: the sum of its calls
+		if !ok {
+			cost = quotaCost(r.Method, r.Path)
+		}
+		return budget.Take(ctx, cost, c.api.Sleep)
 	}
 	return c
 }
@@ -139,13 +149,15 @@ func (c *Client) loadLabels(ctx context.Context) ([]gLabel, error) {
 		return nil, err
 	}
 	m := map[string]gLabel{}
+	known := map[string]bool{}
 	for _, l := range resp.Labels {
+		known[l.ID] = true
 		if l.Type == "user" {
 			m[l.ID] = l
 		}
 	}
 	c.mu.Lock()
-	c.labels = m
+	c.labels, c.known = m, known
 	c.mu.Unlock()
 	return resp.Labels, nil
 }
@@ -159,29 +171,42 @@ func (c *Client) Folders(ctx context.Context) ([]mail.Folder, []mail.Label, erro
 	for _, l := range all {
 		present[l.ID] = true
 	}
+	// Counts come from labels.get (labels.list has none) and the profile,
+	// all in one batch.
 	folders := make([]mail.Folder, len(systemFolders))
-	err = provider.Parallel(ctx, workers, indexes(len(systemFolders)), func(ctx context.Context, i int) error {
-		sf := systemFolders[i]
-		f := mail.Folder{RemoteID: sf.id, Name: sf.name, Kind: sf.kind}
+	var paths []string
+	var of []int // folder index per path
+	for i, sf := range systemFolders {
+		folders[i] = mail.Folder{RemoteID: sf.id, Name: sf.name, Kind: sf.kind}
 		switch {
 		case sf.id == AllMail:
-			var p gProfile
-			if err := c.api.JSON(ctx, http.MethodGet, "profile", nil, &p); err != nil {
-				return err
-			}
-			f.Total = p.MessagesTotal
+			paths, of = append(paths, "profile"), append(of, i)
 		case present[sf.id]:
-			var l gLabel
-			if err := c.api.JSON(ctx, http.MethodGet, "labels/"+sf.id, nil, &l); err != nil {
-				return err
-			}
-			f.Total, f.Unread = l.MessagesTotal, l.MessagesUnread
+			paths, of = append(paths, "labels/"+sf.id), append(of, i)
 		}
-		folders[i] = f
-		return nil
-	})
+	}
+	counts, err := c.getAll(ctx, paths, nil)
 	if err != nil {
 		return nil, nil, err
+	}
+	for k, r := range counts {
+		if r.err != nil {
+			return nil, nil, r.err
+		}
+		f := &folders[of[k]]
+		if f.RemoteID == AllMail {
+			var p gProfile
+			if err := json.Unmarshal(r.body, &p); err != nil {
+				return nil, nil, fmt.Errorf("unexpected response from Gmail: %w", err)
+			}
+			f.Total = p.MessagesTotal
+			continue
+		}
+		var l gLabel
+		if err := json.Unmarshal(r.body, &l); err != nil {
+			return nil, nil, fmt.Errorf("unexpected response from Gmail: %w", err)
+		}
+		f.Total, f.Unread = l.MessagesTotal, l.MessagesUnread
 	}
 	var labels []mail.Label
 	for _, l := range all {
@@ -342,36 +367,140 @@ func (c *Client) listIDs(ctx context.Context, labelID, q string, limit int) ([]s
 	return ids, nil
 }
 
-// fetchMetadata fetches message metadata with a bounded worker pool. Ids
-// that no longer exist are returned in gone.
-func (c *Client) fetchMetadata(ctx context.Context, ids []string, progress ...func(done, total int)) (msgs []mail.Message, gone []string, err error) {
-	var mu sync.Mutex
-	done := 0
-	err = provider.Parallel(ctx, workers, ids, func(ctx context.Context, id string) error {
-		var g gMessage
-		err := c.api.JSON(ctx, http.MethodGet, "messages/"+url.PathEscape(id)+"?"+metadataQuery, nil, &g)
-		mu.Lock()
-		defer mu.Unlock()
-		done++
-		for _, p := range progress {
-			p(done, len(ids))
-		}
-		if httpx.StatusOf(err) == http.StatusNotFound {
-			gone = append(gone, id)
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		msgs = append(msgs, c.toMessage(g))
-		return nil
-	})
+// fetchMetadata fetches message metadata in batches. Ids that no longer
+// exist are returned in gone.
+func (c *Client) fetchMetadata(ctx context.Context, ids []string, progress ...func(done, total int)) ([]mail.Message, []string, error) {
+	gs, gone, err := c.fetchRaw(ctx, ids, progress...)
+	if err != nil {
+		return nil, nil, err
+	}
+	msgs, err := c.messages(ctx, gs)
 	return msgs, gone, err
 }
 
+// messages converts fetched messages. When one carries a label id that
+// wasn't known (a label made since the labels were loaded), the labels are
+// loaded again first, so the message doesn't lose it.
+func (c *Client) messages(ctx context.Context, gs []gMessage) ([]mail.Message, error) {
+	unknown := func() []string {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		var out []string
+		for _, g := range gs {
+			for _, l := range g.LabelIDs {
+				if !c.known[l] {
+					out = append(out, l)
+				}
+			}
+		}
+		return out
+	}
+	if len(unknown()) > 0 {
+		if _, err := c.loadLabels(ctx); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		for _, g := range gs {
+			for _, l := range g.LabelIDs {
+				c.known[l] = true // not listed (yet): don't reload for it again
+			}
+		}
+		c.mu.Unlock()
+	}
+	msgs := make([]mail.Message, len(gs))
+	for i, g := range gs {
+		msgs[i] = c.toMessage(g)
+	}
+	return msgs, nil
+}
+
+// fetchRaw fetches message metadata in batches, in the order of ids. Ids
+// that no longer exist are returned in gone.
+func (c *Client) fetchRaw(ctx context.Context, ids []string, progress ...func(done, total int)) (msgs []gMessage, gone []string, err error) {
+	paths := make([]string, len(ids))
+	for i, id := range ids {
+		paths[i] = "messages/" + url.PathEscape(id) + "?" + metadataQuery
+	}
+	var mu sync.Mutex
+	done := 0
+	res, err := c.getAll(ctx, paths, func(n int) {
+		mu.Lock()
+		defer mu.Unlock()
+		done += n
+		for _, p := range progress {
+			p(done, len(ids))
+		}
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, r := range res {
+		if r.err != nil {
+			gone = append(gone, ids[i]) // getAll only leaves 404s
+			continue
+		}
+		var g gMessage
+		if err := json.Unmarshal(r.body, &g); err != nil {
+			return nil, nil, fmt.Errorf("unexpected response from Gmail: %w", err)
+		}
+		msgs = append(msgs, g)
+	}
+	return msgs, gone, nil
+}
+
+// metaCacheSize bounds the metadata kept for label changes (a few KB each).
+const metaCacheSize = 2000
+
+// metaCache keeps the metadata of recently synced messages (c.mu). Gmail
+// never changes a message's headers, snippet or date, only its labels, so a
+// history record that only changed labels is applied from here without
+// fetching the message again.
+type metaCache struct {
+	m     map[string]gMessage
+	order []string // ids in insertion order, oldest first (may hold removed ones)
+}
+
+func (mc *metaCache) get(id string) (gMessage, bool) {
+	g, ok := mc.m[id]
+	return g, ok
+}
+
+func (mc *metaCache) put(g gMessage) {
+	if mc.m == nil {
+		mc.m = map[string]gMessage{}
+	}
+	if _, ok := mc.m[g.ID]; !ok {
+		mc.order = append(mc.order, g.ID)
+	}
+	mc.m[g.ID] = g
+	for len(mc.m) > metaCacheSize {
+		delete(mc.m, mc.order[0])
+		mc.order = mc.order[1:]
+	}
+	if len(mc.order) > 2*metaCacheSize {
+		mc.order = slices.DeleteFunc(mc.order, func(id string) bool { _, ok := mc.m[id]; return !ok })
+	}
+}
+
+func (mc *metaCache) remove(id string) { delete(mc.m, id) }
+
+// remember caches the metadata of synced messages.
+func (c *Client) remember(gs []gMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, g := range gs {
+		c.meta.put(g)
+	}
+}
+
+// LazyFolders tells the sync engine that Sync doesn't need a fresh folder
+// list (history covers the whole mailbox) and that folder counts only move
+// with the mail changes it reports, so Folders needn't run every round.
+func (c *Client) LazyFolders() bool { return true }
+
 func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncResult, error) {
 	c.mu.Lock()
-	haveLabels := len(c.labels) > 0
+	haveLabels := c.known != nil
 	c.mu.Unlock()
 	if !haveLabels {
 		if _, err := c.loadLabels(ctx); err != nil {
@@ -420,7 +549,12 @@ func (c *Client) initial(ctx context.Context, req provider.SyncRequest) (mail.Sy
 			}
 		}
 	}
-	msgs, _, err := c.fetchMetadata(ctx, ids, func(done, total int) { req.Report("fetching", done, total) })
+	gs, _, err := c.fetchRaw(ctx, ids, func(done, total int) { req.Report("fetching", done, total) })
+	if err != nil {
+		return mail.SyncResult{}, err
+	}
+	c.remember(gs)
+	msgs, err := c.messages(ctx, gs)
 	if err != nil {
 		return mail.SyncResult{}, err
 	}
@@ -471,21 +605,23 @@ func (c *Client) initial(ctx context.Context, req provider.SyncRequest) (mail.Sy
 	return mail.SyncResult{Upserts: msgs, State: map[string]string{"historyId": p.HistoryID}, Initial: true, Complete: complete}, nil
 }
 
+// hMessage is a message in a history record: its id and labels after the
+// change.
+type hMessage struct {
+	ID       string   `json:"id"`
+	LabelIDs []string `json:"labelIds"`
+}
+
+type hChange struct {
+	Message hMessage `json:"message"`
+}
+
 type gHistory struct {
 	History []struct {
-		Messages      []struct{ ID string } `json:"messages"`
-		MessagesAdded []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"messagesAdded"`
-		MessagesDeleted []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"messagesDeleted"`
-		LabelsAdded []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"labelsAdded"`
-		LabelsRemoved []struct {
-			Message struct{ ID string } `json:"message"`
-		} `json:"labelsRemoved"`
+		MessagesAdded   []hChange `json:"messagesAdded"`
+		MessagesDeleted []hChange `json:"messagesDeleted"`
+		LabelsAdded     []hChange `json:"labelsAdded"`
+		LabelsRemoved   []hChange `json:"labelsRemoved"`
 	} `json:"history"`
 	NextPageToken string `json:"nextPageToken"`
 	HistoryID     string `json:"historyId"`
@@ -494,6 +630,10 @@ type gHistory struct {
 func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.SyncResult, error) {
 	changed := map[string]bool{}
 	deleted := map[string]bool{}
+	added := map[string]bool{}
+	// Labels after a message's latest label change (records come oldest
+	// first); nil when the record didn't carry them.
+	labels := map[string][]string{}
 	page := ""
 	newHistory := startHistoryID
 	for {
@@ -510,12 +650,11 @@ func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.S
 		for _, rec := range h.History {
 			for _, m := range rec.MessagesAdded {
 				changed[m.Message.ID] = true
+				added[m.Message.ID] = true
 			}
-			for _, m := range rec.LabelsAdded {
+			for _, m := range append(rec.LabelsAdded, rec.LabelsRemoved...) {
 				changed[m.Message.ID] = true
-			}
-			for _, m := range rec.LabelsRemoved {
-				changed[m.Message.ID] = true
+				labels[m.Message.ID] = m.Message.LabelIDs
 			}
 			for _, m := range rec.MessagesDeleted {
 				deleted[m.Message.ID] = true
@@ -536,7 +675,28 @@ func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.S
 		}
 	}
 	sort.Strings(ids)
-	msgs, gone, err := c.fetchMetadata(ctx, ids)
+	// A label change (read, star, archive, labels) of a message synced
+	// before is applied from the record; new mail and messages not cached
+	// here are fetched.
+	var relabeled []gMessage
+	var fetch []string
+	c.mu.Lock()
+	for _, id := range ids {
+		if g, ok := c.meta.get(id); ok && !added[id] && labels[id] != nil {
+			g.LabelIDs = labels[id]
+			relabeled = append(relabeled, g)
+		} else {
+			fetch = append(fetch, id)
+		}
+	}
+	c.mu.Unlock()
+	fetched, gone, err := c.fetchRaw(ctx, fetch)
+	if err != nil {
+		return mail.SyncResult{}, err
+	}
+	gs := append(relabeled, fetched...)
+	c.remember(gs)
+	msgs, err := c.messages(ctx, gs)
 	if err != nil {
 		return mail.SyncResult{}, err
 	}
@@ -546,6 +706,11 @@ func (c *Client) incremental(ctx context.Context, startHistoryID string) (mail.S
 	}
 	res.Deleted = append(res.Deleted, gone...)
 	sort.Strings(res.Deleted)
+	c.mu.Lock()
+	for _, id := range res.Deleted {
+		c.meta.remove(id)
+	}
+	c.mu.Unlock()
 	return res, nil
 }
 
@@ -817,6 +982,9 @@ func (c *Client) labelID(ctx context.Context, name string, create bool) (string,
 	}
 	c.mu.Lock()
 	c.labels[l.ID] = gLabel{ID: l.ID, Name: name, Type: "user"}
+	if c.known != nil {
+		c.known[l.ID] = true
+	}
 	c.mu.Unlock()
 	return l.ID, nil
 }

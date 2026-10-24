@@ -264,3 +264,15 @@ func TestAttachmentsCompleteReachesProvider(t *testing.T) {
 		t.Fatalf("%+v %v", out, err)
 	}
 }
+
+// A file loaded from a reopened draft keeps its server attachment id, which
+// the provider pairs it by.
+func TestAttachmentIDReachesProvider(t *testing.T) {
+	e := newEnv(t, "")
+	_, out, err := e.s.buildOutgoing(models.ComposeRequest{AccountID: demo.OutlookAccountID, Subject: "x", Attachments: []models.OutgoingAttachment{
+		{ID: "srv1", Filename: "a.pdf", DataBase64: "UERG"}, {Filename: "b.pdf", DataBase64: "UERG"},
+	}}, true)
+	if err != nil || len(out.Attachments) != 2 || out.Attachments[0].ID != "srv1" || out.Attachments[1].ID != "" {
+		t.Fatalf("%+v %v", out.Attachments, err)
+	}
+}

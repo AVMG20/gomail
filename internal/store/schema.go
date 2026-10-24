@@ -500,6 +500,13 @@ ALTER TABLE events ADD COLUMN reminders_off INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE calendars ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pending_calendars ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
 `,
+	// 21: recipient autocomplete matches names in any script and without
+	// accents ("élo", "elo" -> Élodie, "иван" -> Иван): SQLite's LIKE only
+	// folds ASCII, so a folded "email name" key is kept (see contactKey;
+	// goMigrations[21] fills it in).
+	`
+ALTER TABLE contacts ADD COLUMN match_key TEXT NOT NULL DEFAULT '';
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number
@@ -510,6 +517,36 @@ var goMigrations = map[int]func(ctx context.Context, tx *sql.Tx) error{
 			"calendar_enabled": "INTEGER NOT NULL DEFAULT 1",
 			"calendar_muted":   "INTEGER NOT NULL DEFAULT 0",
 		})
+	},
+	21: func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT email, name FROM contacts`)
+		if err != nil {
+			return err
+		}
+		var contacts [][2]string
+		for rows.Next() {
+			var c [2]string
+			if err := rows.Scan(&c[0], &c[1]); err != nil {
+				rows.Close()
+				return err
+			}
+			contacts = append(contacts, c)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		set, err := tx.PrepareContext(ctx, `UPDATE contacts SET match_key = ? WHERE email = ?`)
+		if err != nil {
+			return err
+		}
+		defer set.Close()
+		for _, c := range contacts {
+			if _, err := set.ExecContext(ctx, contactKey(c[0], c[1]), c[0]); err != nil {
+				return err
+			}
+		}
+		return nil
 	},
 }
 

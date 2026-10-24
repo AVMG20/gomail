@@ -138,9 +138,10 @@ const asked = ref<ReturnType<typeof sendWarnings>>([])
 function sendNow(force = false) {
   commitRecipients()
   if (d.value.sending || d.value.queued) return
+  // What must be fixed is said first: asking about the subject is pointless when an address is wrong.
+  if (!compose.canSend(d.value.id)) return
   const w = force ? [] : sendWarnings(d.value)
-  // Only once there are recipients: without them send() explains what is missing.
-  if (w.length && (d.value.to.length || d.value.cc.length || d.value.bcc.length)) {
+  if (w.length) {
     warnings.value = w
     asked.value = w
     return

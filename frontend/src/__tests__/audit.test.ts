@@ -1,7 +1,7 @@
 // Regression tests for the mail audit (compose, list and settings fixes).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia, getActivePinia, setActivePinia } from 'pinia'
 
 const toasts: { kind: string; msg: string; opts?: { action?: { onClick: () => unknown } } }[] = []
 vi.mock('vue-sonner', () => {
@@ -19,6 +19,8 @@ import type { Message, MessagePage, MessageSummary } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useComposeStore } from '@/stores/compose'
 import { ACTION_CHUNK, useMailStore } from '@/stores/mail'
+import ComposeDock from '@/components/compose/ComposeDock.vue'
+import ComposeWindow from '@/components/compose/ComposeWindow.vue'
 import RecipientField from '@/components/compose/RecipientField.vue'
 
 function deferred<T>() {
@@ -85,6 +87,81 @@ describe('recipients', () => {
     expect(value).toEqual([{ name: 'Anna Smith', email: 'anna@acme.com' }])
     app.unmount()
   })
+
+  it('Ctrl+Enter in the field makes the chip and reaches the window to send', async () => {
+    let value: { name: string; email: string }[] = []
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const seen: boolean[] = []
+    el.addEventListener('keydown', (e) => seen.push(e.defaultPrevented))
+    const app = createApp(RecipientField, { modelValue: value, label: 'To', 'onUpdate:modelValue': (v: typeof value) => (value = v) })
+    app.use(createPinia())
+    app.mount(el)
+    const input = el.querySelector('input')!
+    input.value = 'anna@acme.com'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+    expect(value.map((a) => a.email)).toEqual(['anna@acme.com'])
+    expect(seen).toEqual([false])
+    // A plain Enter only makes the chip.
+    input.value = 'bob@acme.com'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(seen).toEqual([false, true])
+    app.unmount()
+  })
+})
+
+describe('send checks', () => {
+  it('a wrong address is reported before the "no subject" question', async () => {
+    const compose = useComposeStore()
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockResolvedValue(undefined)
+    const d = compose.compose([{ name: '', email: 'bob' }])
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const app = createApp(ComposeWindow, { draft: d })
+    app.use(getActivePinia()!)
+    app.mount(el)
+    await nextTick()
+    const win = el.querySelector('[role="dialog"]')!
+    const ctrlEnter = () => win.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+    ctrlEnter()
+    await nextTick()
+    expect(toasts.map((t) => t.msg)).toEqual(['Check this address: bob'])
+    expect(document.body.textContent).not.toContain('Send anyway')
+    // Fixed: now the missing subject is asked about, and nothing is sent yet.
+    d.to = [{ name: '', email: 'bob@acme.com' }]
+    ctrlEnter()
+    await nextTick()
+    await nextTick()
+    expect(document.body.textContent).toContain('Send anyway')
+    expect(sendSpy).not.toHaveBeenCalled()
+    app.unmount()
+  })
+})
+
+describe('compose dock', () => {
+  it('the tab Esc parks focus on shows no focus ring until it is left and tabbed back to', async () => {
+    const compose = useComposeStore()
+    const d = compose.compose()
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const app = createApp(ComposeDock)
+    app.use(getActivePinia()!)
+    app.mount(el)
+    await nextTick()
+    compose.minimize(d.id)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 10))
+    const tab = el.querySelector<HTMLElement>(`[data-dock-tab="${d.id}"]`)!
+    expect(document.activeElement).toBe(tab)
+    expect(tab.hasAttribute('data-parked')).toBe(true)
+    tab.blur()
+    expect(tab.hasAttribute('data-parked')).toBe(false)
+    app.unmount()
+  })
 })
 
 describe('drafts', () => {
@@ -105,7 +182,28 @@ describe('drafts', () => {
     expect(data).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(5000)
     expect(save).toHaveBeenCalled()
-    expect(save.mock.calls[0][0].attachments).toEqual([{ filename: 'invoice.pdf', mimeType: 'application/pdf', dataBase64: 'UERG' }])
+    expect(save.mock.calls[0][0].attachments).toEqual([{ id: '2', filename: 'invoice.pdf', mimeType: 'application/pdf', dataBase64: 'UERG' }])
+  })
+
+  it('a reopened draft sends its loaded files with their server id, and a replacement without one', async () => {
+    vi.useFakeTimers()
+    const compose = useComposeStore()
+    const save = vi.spyOn(api, 'saveDraft').mockResolvedValue('draft:a:1')
+    vi.spyOn(api, 'getAttachmentData').mockResolvedValue({ filename: 'invoice.pdf', mimeType: 'application/pdf', size: 3, dataBase64: 'UERG' })
+    vi.spyOn(useMailStore(), 'softRefresh').mockResolvedValue(undefined as never)
+    const m = {
+      ...row('d1'), cc: [], bcc: [], replyTo: [], to: [{ name: '', email: 'to@x.io' }], bodyHtml: '<p>hi</p>', bodyText: 'hi',
+      attachments: [{ id: 'srv1', filename: 'invoice.pdf', mimeType: 'application/pdf', size: 3, inline: false, contentId: '' }],
+    } as unknown as Message
+    await compose.editDraft(m)
+    const d = compose.drafts[0]
+    d.attachments = [{ id: 'att-new', filename: 'invoice.pdf', mimeType: 'application/pdf', size: 2, dataBase64: 'UEQ=' }]
+    await vi.advanceTimersByTimeAsync(5000)
+    const req = save.mock.calls.at(-1)![0]
+    expect(req.attachmentsComplete).toBe(true)
+    expect(req.attachments).toHaveLength(1)
+    expect(req.attachments[0].id).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(req.attachments))).toEqual([{ filename: 'invoice.pdf', mimeType: 'application/pdf', dataBase64: 'UEQ=' }])
   })
 
   it('does not open (and overwrite) a draft whose attachments could not be loaded', async () => {
