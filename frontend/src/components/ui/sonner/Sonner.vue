@@ -30,6 +30,8 @@ const delegatedProps = reactiveOmit(props, 'class', 'toastOptions')
       '--gray4': 'var(--border)',
       '--gray5': 'var(--border)',
       '--gray12': 'var(--popover-foreground)',
+      // Above dialogs and the compose window (z-50), below open menus and popovers (see below).
+      zIndex: 55,
     }"
     :toast-options="props.toastOptions ?? {
       classes: {
@@ -60,3 +62,11 @@ const delegatedProps = reactiveOmit(props, 'class', 'toastOptions')
     </template>
   </Sonner>
 </template>
+
+<style>
+/* Open menus, popovers and selects go above toasts: an "Archived" toast must not cover the lower
+   items of a context menu. Reka copies the content's z-50 onto this wrapper inline. */
+[data-reka-popper-content-wrapper] {
+  z-index: 60 !important;
+}
+</style>

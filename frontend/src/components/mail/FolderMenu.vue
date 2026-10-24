@@ -89,6 +89,19 @@ async function resolve(search: string) {
 
 const plural = (n: number) => `${n.toLocaleString()} message${n === 1 ? '' : 's'}`
 
+/** Undo of a bulk move: every message back to the folder it came from. */
+async function moveBack(groups: { folderId: string; ids: string[] }[]) {
+  let ok = true
+  try {
+    for (const g of groups) await inChunks(g.ids, (c) => api.moveToFolder(c, g.folderId))
+  } catch (e) {
+    ok = false
+    toast.error('Undo failed', { description: errorMessage(e) })
+  }
+  refresh()
+  return ok
+}
+
 async function archive(search: string, what: string) {
   let groups: Awaited<ReturnType<typeof resolve>>
   try {
@@ -105,15 +118,7 @@ async function archive(search: string, what: string) {
     run: async () => {
       try {
         for (const g of groups) await inChunks(g.ids, api.archive)
-        toast(`Archived ${plural(n)}`, {
-          action: {
-            label: 'Undo',
-            onClick: async () => {
-              for (const g of groups) await inChunks(g.ids, (c) => api.moveToFolder(c, g.folderId))
-              refresh()
-            },
-          },
-        })
+        mail.undoToast(`Archived ${plural(n)}`, () => moveBack(groups))
       } catch (e) {
         toast.error('Archive failed', { description: errorMessage(e) })
       }
@@ -148,15 +153,7 @@ async function moveAll(to: 'spam' | 'inbox') {
             if (inbox) await inChunks(g.ids, (c) => api.moveToFolder(c, inbox))
           }
         }
-        toast(`Moved ${plural(n)} to ${dest}`, {
-          action: {
-            label: 'Undo',
-            onClick: async () => {
-              for (const g of groups) await inChunks(g.ids, (c) => api.moveToFolder(c, g.folderId))
-              refresh()
-            },
-          },
-        })
+        mail.undoToast(`Moved ${plural(n)} to ${dest}`, () => moveBack(groups))
       } catch (e) {
         toast.error('Move failed', { description: errorMessage(e) })
       }
@@ -186,10 +183,7 @@ function hide() {
   if (!props.folderId) return
   mb.setFolderShown(props.folderId, false)
   if (mail.mailbox.folderId === props.folderId) mail.goToKind('inbox')
-  toast(`${props.name} is hidden`, {
-    description: 'Show it again in this mailbox’s settings.',
-    action: { label: 'Undo', onClick: () => mb.setFolderShown(props.folderId, true) },
-  })
+  mail.undoToast(`${props.name} is hidden`, () => mb.setFolderShown(props.folderId, true), { description: 'Show it again in this mailbox’s settings.' })
 }
 
 async function junkToInbox() {

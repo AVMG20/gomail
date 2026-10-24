@@ -24,6 +24,10 @@ export interface LabelFilter {
 }
 
 const PAGE = 60
+/** How long after a read/star change was saved its messages:changed still counts as its echo. */
+const ECHO_MS = 1000
+/** Undo toasts stay long enough to reach the button (the calendar's do too). */
+export const UNDO_MS = 8000
 /** The backend's page size cap (store.MaxPageSize). */
 const MAX_PAGE = 200
 /** softRefresh re-fetches at most this many loaded rows. */
@@ -473,8 +477,12 @@ export const useMailStore = defineStore('mail', () => {
     if (!m.unread) return
     accounts.adjustUnread([m], -1)
     patchLocal([id], { unread: false })
-    api.markRead(actionIds([id]), true).catch(() => patchLocal([id], { unread: true }))
-    accounts.refreshCounts()
+    const settled = expectEcho([id], 'read')
+    api.markRead(actionIds([id]), true).then(() => settled(true), () => {
+      settled(false)
+      patchLocal([id], { unread: true })
+    })
+    accounts.refreshCounts(m.accountId)
   }
 
   /** Opened mail that isn't in the loaded list (⌘K, a notification): its own data says whether it is unread. */
@@ -492,7 +500,7 @@ export const useMailStore = defineStore('mail', () => {
     mutations++ // a list fetch in flight predates this
     patchLocal([id], { unread: false })
     api.markRead(actionIds([id]), true).catch(() => patchLocal([id], { unread: true }))
-    accounts.refreshCounts()
+    accounts.refreshCounts(m.accountId)
   }
 
   /** Open a message (marked read per Settings → Mail: immediately / after 2 s / manually). `auto`: opened for the user after archiving/deleting the previous one;
@@ -673,6 +681,47 @@ export const useMailStore = defineStore('mail', () => {
   }
 
   // ------------------------------------------------------------ local patches
+  /** The mailbox of these rows when they are all loaded rows of one ("" = several or unknown):
+   *  the counts to refresh after acting on them. */
+  function accountScope(ids: string[]): string {
+    const accts = new Set(ids.map((id) => byId.value.get(id)?.accountId ?? ''))
+    return accts.size === 1 ? [...accts][0] : ''
+  }
+
+  /** Per account: messages:changed events that are the backend's echo of a read/star change this
+   *  window already shows (the list needn't be fetched again for them), and until when. */
+  const echoes = new Map<string, { n: number; until: number }>()
+
+  /** A read/star change is going to the backend: its messages:changed needn't refetch the list,
+   *  when the change can't move rows in or out of the view and all rows are loaded. Call the
+   *  result once the backend answered; an echo is expected until shortly after that. */
+  function expectEcho(ids: string[], change: 'read' | 'star'): (ok: boolean) => void {
+    const q = query.value
+    const acct = accountScope(ids)
+    if (!acct || q.search || (change === 'read' ? q.unreadOnly : mailbox.value.kind === 'starred')) return () => {}
+    const e = echoes.get(acct) ?? { n: 0, until: 0 }
+    e.n++
+    e.until = Infinity
+    echoes.set(acct, e)
+    return (ok) => {
+      if (echoes.get(acct) !== e) return
+      if (ok) e.until = Date.now() + ECHO_MS
+      else if (--e.n <= 0) echoes.delete(acct)
+    }
+  }
+
+  /** messages:changed for accountId: whether it is an expected echo (and so used up). */
+  function takeEcho(accountId: string): boolean {
+    const e = echoes.get(accountId)
+    if (!e) return false
+    if (e.until < Date.now()) {
+      echoes.delete(accountId)
+      return false
+    }
+    if (--e.n <= 0) echoes.delete(accountId)
+    return true
+  }
+
   function patchLocal(ids: string[], patch: Partial<MessageSummary> | ((m: MessageSummary) => Partial<MessageSummary>)) {
     const set = new Set(ids)
     let changed = false
@@ -762,8 +811,13 @@ export const useMailStore = defineStore('mail', () => {
       }
       for (const m of items) add(origins.get(m.id), m.conversationId || m.id)
       for (const id of otherSet) add(origins.get(id), id)
-      await Promise.all([...groups].map(([f, ids]) => inChunks(ids, (c) => api.moveToFolder(c, f)))).catch((e) => toast.error('Undo failed', { description: errorMessage(e) }))
+      let ok = true
+      await Promise.all([...groups].map(([f, ids]) => inChunks(ids, (c) => api.moveToFolder(c, f)))).catch((e) => {
+        ok = false
+        toast.error('Undo failed', { description: errorMessage(e) })
+      })
       void softRefresh()
+      return ok
     }
   }
 
@@ -780,9 +834,57 @@ export const useMailStore = defineStore('mail', () => {
     return `${s[0].toUpperCase()}${s.slice(1)} ${what}`
   }
 
+  // ------------------------------------------------------------ undo
+  interface UndoEntry { what: string; run: () => Promise<unknown>; toastId?: string | number }
+  /** The latest action that can still be undone (z / mod+Z), until it runs, a newer one replaces
+   *  it or its toast closes. */
+  const lastUndo = shallowRef<UndoEntry | null>(null)
+
+  /** The toast of an action with Undo; z / mod+Z run the same undo while it shows. Whichever
+   *  comes first runs it, the other finds nothing left to do. `undo` resolves to false when it
+   *  failed (and said so). */
+  function undoToast(what: string, undo: () => unknown, opts: { description?: string } = {}) {
+    let ran = false
+    const entry: UndoEntry = {
+      what,
+      run: async () => {
+        if (ran) return false
+        ran = true
+        if (lastUndo.value === entry) lastUndo.value = null
+        return await undo()
+      },
+    }
+    const gone = () => {
+      if (lastUndo.value === entry) lastUndo.value = null
+    }
+    lastUndo.value = entry
+    entry.toastId = toast(what, {
+      description: opts.description,
+      duration: UNDO_MS,
+      action: { label: 'Undo', onClick: () => entry.run() },
+      onDismiss: gone,
+      onAutoClose: gone,
+    })
+  }
+
+  /** z / mod+Z: undo the latest action, if its toast is still up. */
+  async function undoLast() {
+    const entry = lastUndo.value
+    if (!entry) {
+      toast('Nothing to undo')
+      return
+    }
+    if (entry.toastId !== undefined) toast.dismiss(entry.toastId)
+    if ((await entry.run()) !== false) {
+      announce(`Undone: ${entry.what}`)
+      toast('Undone', { description: entry.what })
+    }
+  }
+
   async function archive(ids: string[]) {
     if (!ids.length) return
     const backendIds = actionIds(ids) // before the rows leave the list
+    const scope = accountScope(ids)
     const items = snapshot(ids)
     const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
     const removes = mailbox.value.kind !== 'archive'
@@ -790,15 +892,13 @@ export const useMailStore = defineStore('mail', () => {
     try {
       await inChunks(backendIds, api.archive)
       announce(`${rows(ids.length)} archived`)
-      toast(done(ids.length, 'archived'), {
-        action: { label: 'Undo', onClick: undo },
-      })
+      undoToast(done(ids.length, 'archived'), undo)
     } catch (e) {
       if (removes) restoreLocal(items)
       toast.error('Archive failed', { description: errorMessage(e) })
       void softRefresh() // earlier chunks may have gone through
     }
-    accounts.refreshCounts()
+    accounts.refreshCounts(scope)
   }
 
   async function trash(ids: string[]) {
@@ -808,21 +908,20 @@ export const useMailStore = defineStore('mail', () => {
       return
     }
     const backendIds = actionIds(ids) // before the rows leave the list
+    const scope = accountScope(ids)
     const items = snapshot(ids)
     const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
     removeLocal(ids)
     try {
       await inChunks(backendIds, api.trash)
       announce(`${rows(ids.length)} moved to Trash`)
-      toast(done(ids.length, 'moved to Trash'), {
-        action: { label: 'Undo', onClick: undo },
-      })
+      undoToast(done(ids.length, 'moved to Trash'), undo)
     } catch (e) {
       restoreLocal(items)
       toast.error('Delete failed', { description: errorMessage(e) })
       void softRefresh() // earlier chunks may have gone through
     }
-    accounts.refreshCounts()
+    accounts.refreshCounts(scope)
   }
 
   /** Move to each message's own account's Junk folder, with Undo (works across accounts, like Trash). */
@@ -833,21 +932,20 @@ export const useMailStore = defineStore('mail', () => {
       return
     }
     const backendIds = actionIds(ids) // before the rows leave the list
+    const scope = accountScope(ids)
     const items = snapshot(ids)
     const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
     removeLocal(ids)
     try {
       await inChunks(backendIds, api.moveToJunk)
       announce(`${rows(ids.length)} moved to Junk`)
-      toast(done(ids.length, 'moved to Junk'), {
-        action: { label: 'Undo', onClick: undo },
-      })
+      undoToast(done(ids.length, 'moved to Junk'), undo)
     } catch (e) {
       restoreLocal(items)
       toast.error('Move to Junk failed', { description: errorMessage(e) })
       void softRefresh() // earlier chunks may have gone through
     }
-    accounts.refreshCounts()
+    accounts.refreshCounts(scope)
   }
 
   /** "Not junk": back to the Inbox of each message's own account, with Undo. */
@@ -884,7 +982,7 @@ export const useMailStore = defineStore('mail', () => {
         })
       }
       announce(`${rows(moved.length)} moved to Inbox`)
-      toast(done(moved.length, 'moved to Inbox'), { action: { label: 'Undo', onClick: undo } })
+      undoToast(done(moved.length, 'moved to Inbox'), undo)
       rules.offerStopJunking([...new Map(stillJunked.map((r) => [r.id, r])).values()])
       if (viaNotJunk) void rules.afterNotJunk([...new Map(more.map((m) => [`${m.accountId} ${m.email}`, m])).values()])
     } catch (e) {
@@ -907,6 +1005,7 @@ export const useMailStore = defineStore('mail', () => {
       return
     }
     const backendIds = actionIds(ids)
+    const scope = accountScope(ids)
     const items = snapshot(ids)
     const undo = undoMove(items, ids.filter((id) => !byId.value.has(id)))
     const name = folder ? (folder.kind === 'spam' ? 'Junk' : folder.name) : 'folder'
@@ -914,32 +1013,35 @@ export const useMailStore = defineStore('mail', () => {
     try {
       await inChunks(backendIds, (c) => api.moveToFolder(c, folderId))
       announce(`${rows(ids.length)} moved to ${name}`)
-      toast(done(ids.length, `moved to ${name}`), {
+      undoToast(done(ids.length, `moved to ${name}`), undo, {
         description: skipped.length ? `${rows(skipped.length)} from another mailbox stayed where ${skipped.length === 1 ? 'it was' : 'they were'}.` : undefined,
-        action: { label: 'Undo', onClick: undo },
       })
     } catch (e) {
       restoreLocal(items)
       toast.error('Move failed', { description: errorMessage(e) })
       void softRefresh() // earlier chunks may have gone through
     }
-    accounts.refreshCounts()
+    accounts.refreshCounts(scope)
   }
 
   async function setRead(ids: string[], read: boolean) {
     if (!ids.length) return
     const snap = snapshot(ids)
     const before = snap.map((m) => [m.id, m.unread] as const)
+    const scope = accountScope(ids)
     accounts.adjustUnread(snap.filter((m) => m.unread === read), read ? -1 : 1)
     patchLocal(ids, { unread: !read })
+    const settled = expectEcho(ids, 'read')
     try {
       await inChunks(actionIds(ids), (c) => api.markRead(c, read))
+      settled(true)
       if (ids.length > 1 || !openId.value || ids[0] !== openId.value) announce(`${rows(ids.length)} marked as ${read ? 'read' : 'unread'}`)
     } catch (e) {
+      settled(false)
       for (const [id, unread] of before) patchLocal([id], { unread })
       toast.error('Could not update', { description: errorMessage(e) })
     }
-    accounts.refreshCounts()
+    accounts.refreshCounts(scope)
   }
 
   /** The concrete folders behind the view (one per account in the unified view). */
@@ -972,11 +1074,14 @@ export const useMailStore = defineStore('mail', () => {
     if (!ids.length) return
     const before = snapshot(ids).map((m) => [m.id, m.starred] as const)
     patchLocal(ids, { starred })
+    const settled = expectEcho(ids, 'star')
     try {
       await inChunks(actionIds(ids), (c) => api.setStarred(c, starred))
+      settled(true)
       announce(`${rows(ids.length)} ${starred ? 'starred' : 'unstarred'}`)
       if (mailbox.value.kind === 'starred' && !starred) removeLocal(ids)
     } catch (e) {
+      settled(false)
       for (const [id, was] of before) patchLocal([id], { starred: was })
       toast.error('Could not update', { description: errorMessage(e) })
     }
@@ -1013,9 +1118,8 @@ export const useMailStore = defineStore('mail', () => {
       if (moved) {
         const dest = label?.id === 'junk' || label?.then === 'junk' ? 'spam' : (label?.then ?? '')
         const place = ({ spam: 'Junk', archive: 'the archive', trash: 'Trash' } as Record<string, string>)[dest] ?? 'another folder'
-        toast(`Moved ${moved.toLocaleString()} message${moved === 1 ? '' : 's'} to ${place}`, {
+        undoToast(`Moved ${moved.toLocaleString()} message${moved === 1 ? '' : 's'} to ${place}`, () => undoLabelMove(ids, labelId, dest, was), {
           description: `Label “${name}” added.`,
-          action: { label: 'Undo', onClick: () => void undoLabelMove(ids, labelId, dest, was) },
         })
       }
       // Part of the selection is in a mailbox without this label: say so, never skip it silently.
@@ -1030,6 +1134,7 @@ export const useMailStore = defineStore('mail', () => {
 
   /** Undo of a label that moved mail: the label comes off and the mail goes back (unread again if it was). */
   async function undoLabelMove(ids: string[], labelId: string, dest: string, was: Map<string, { folderIds: string[]; unread: boolean }>) {
+    let ok = true
     try {
       await inChunks(actionIds(ids), (c) => api.removeLabel(c, labelId))
       const back = new Map<string, string[]>()
@@ -1044,10 +1149,12 @@ export const useMailStore = defineStore('mail', () => {
       for (const [folderId, list] of back) await inChunks(actionIds(list), (c) => api.moveToFolder(c, folderId))
       if (unread.length) await inChunks(actionIds(unread), (c) => api.markRead(c, false))
     } catch (e) {
+      ok = false
       toast.error('Couldn’t undo', { description: errorMessage(e) })
     }
     void softRefresh()
     accounts.refreshCounts()
+    return ok
   }
 
   async function removeLabel(ids: string[], labelId: string, quiet = false) {
@@ -1215,6 +1322,7 @@ export const useMailStore = defineStore('mail', () => {
     switchAccount, goToKind, reveal, revealNew, inboxOf, ensureValidMailbox, saveScroll, savedScroll,
     reload, softRefresh, loadMore, setMailbox, setLabelFilter, toggleLabelFilter, toggleHiddenLabel, toggleUnlabeledFilter, clearLabelFilter,
     actionIds, snapshot, undoMove, currentTargets, actOnTargets, markTargetsRead, hoveredId, pointAt, hoveredTarget, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
+    lastUndo, undoToast, undoLast, takeEcho,
     archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, threadsChanged, suggestAddresses,
   }
 })

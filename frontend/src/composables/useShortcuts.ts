@@ -88,6 +88,12 @@ export function useShortcuts() {
       mail.selectAllLoaded()
       return
     }
+    // Undo the latest archive/delete/move (like its toast's button); mod+shift+Z is left alone.
+    if (mod && !e.shiftKey && !e.altKey && key.toLowerCase() === 'z' && ui.mainView === 'mail') {
+      e.preventDefault()
+      void mail.undoLast()
+      return
+    }
     if (mod || e.altKey) return
 
     if (gPending) {
@@ -156,6 +162,9 @@ export function useShortcuts() {
       case '!':
         // Move to Junk (like Gmail); in Junk itself: Not junk (back to the Inbox).
         void bulk(mail.mailbox.kind === 'spam' ? mail.notJunk : mail.junk)
+        break
+      case 'z':
+        void mail.undoLast()
         break
       case 'x':
         {

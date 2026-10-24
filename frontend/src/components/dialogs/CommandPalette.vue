@@ -160,7 +160,7 @@ const actions = computed<Action[]>(() => {
   const open = mail.openSummary
   const list: Action[] = [
     { id: 'compose', title: 'Compose new message', icon: PencilIcon, shortcut: 'c', run: () => compose.compose() },
-    { id: 'sync', title: 'Sync now', icon: RefreshCwIcon, run: () => void accounts.sync(mail.mailbox.accountId).catch(() => {}) },
+    { id: 'sync', title: 'Sync now', icon: RefreshCwIcon, run: () => void accounts.sync(mail.mailbox.accountId) },
     { id: 'settings', title: 'Open settings', icon: SettingsIcon, shortcut: 'mod+,', run: () => ui.openSettings() },
     { id: 'labels', title: 'Manage labels', icon: TagIcon, run: () => openLabelSettings(mail.mailbox.accountId) },
     { id: 'theme', title: currentIsDark() ? 'Switch to light theme' : 'Switch to dark theme', icon: MoonIcon, run: () => settings.update({ theme: currentIsDark() ? 'light' : 'dark' }) },

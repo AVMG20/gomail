@@ -65,14 +65,15 @@ function go(r: Row) {
 
 // Only this mailbox's labels (one per name in the unified view, standing for that label in every
 // mailbox). The list is the same in every box (imported labels show when the mailbox uses them
-// anywhere); the counts are for the box on screen.
+// anywhere); the counts are for the box on screen. The built-in Junk label isn't listed: its mail
+// is in the Junk folder, so as a filter of any other box it always came up empty.
 function countOf(l: Label): LabelCount | undefined {
   const c = groupCount(settings.labels, accounts.labelCounts, l)
   return c && { labelId: l.id, ...c }
 }
 const labelRows = computed(() =>
   settings.labelsForAccount(account.value?.id ?? '')
-    .filter((l) => l.source === 'user' || !l.source || (groupCount(settings.labels, accounts.labelTotals, l)?.total ?? 0) > 0)
+    .filter((l) => l.source !== 'system' && (l.source === 'user' || !l.source || (groupCount(settings.labels, accounts.labelTotals, l)?.total ?? 0) > 0))
     .map((l) => ({ label: l, count: countOf(l) })),
 )
 
