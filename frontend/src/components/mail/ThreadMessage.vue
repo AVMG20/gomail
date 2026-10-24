@@ -59,12 +59,13 @@ const recipients = computed(() => {
     <button
       v-if="!expanded"
       type="button"
-      class="hover:bg-muted/40 flex w-full items-center gap-3 px-6 py-3 text-left outline-none focus-visible:bg-muted/40"
+      class="hover:bg-muted/40 @container flex w-full items-center gap-3 px-6 py-3 text-left outline-none focus-visible:bg-muted/40"
       @click="emit('toggle')"
     >
       <SenderAvatar :address="message.from" :size="28" />
-      <span class="w-40 shrink-0 truncate text-[13px] font-medium">{{ displayName(message.from) }}<span v-if="isDraft" class="text-destructive ml-1.5 font-normal">Draft</span></span>
-      <span class="text-muted-foreground min-w-0 flex-1 truncate text-[13px]">{{ message.snippet }}</span>
+      <!-- A narrow pane drops the snippet (a few letters of it say nothing) and gives the name the room. -->
+      <span class="w-40 min-w-0 truncate text-[13px] font-medium @max-[22rem]:w-auto @max-[22rem]:flex-1">{{ displayName(message.from) }}<span v-if="isDraft" class="text-destructive ml-1.5 font-normal">Draft</span></span>
+      <span class="text-muted-foreground min-w-0 flex-1 truncate text-[13px] @max-[22rem]:hidden">{{ message.snippet }}</span>
       <PaperclipIcon v-if="message.attachments.length" class="text-muted-foreground size-3.5 shrink-0" />
       <span class="text-muted-foreground shrink-0 text-xs">{{ listDate(message.date) }}</span>
     </button>
@@ -73,11 +74,12 @@ const recipients = computed(() => {
     <div v-else class="px-6 pt-4 pb-5">
       <div class="flex items-start gap-3">
         <SenderAvatar :address="message.from" :size="36" />
-        <div class="min-w-0 flex-1">
+        <div class="@container min-w-0 flex-1">
           <div class="flex items-baseline gap-2">
-            <span class="selectable truncate text-[14px] font-semibold">{{ displayName(message.from) }}</span>
+            <!-- The address gives way first (hidden in a narrow pane; the details below have it). -->
+            <span class="selectable min-w-0 truncate text-[14px] font-semibold">{{ displayName(message.from) }}</span>
             <span v-if="isDraft" class="text-destructive shrink-0 text-xs font-medium">Draft</span>
-            <span class="text-muted-foreground selectable truncate text-xs">{{ message.from.email }}</span>
+            <span class="text-muted-foreground selectable min-w-0 shrink-[1000] truncate text-xs @max-[14rem]:hidden">{{ message.from.email }}</span>
             <button
               v-if="message.unsubscribe && (message.unsubscribe.url || message.unsubscribe.mailto)"
               type="button"
