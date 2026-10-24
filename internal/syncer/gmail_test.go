@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -96,20 +97,20 @@ func TestGmailRoundRequests(t *testing.T) {
 			unread = append(unread, id)
 		}
 	}
-	first, _ := ge.round(t, true)
-	if first > 30 {
-		t.Fatalf("first sync made %d requests", first)
+	first, events := ge.round(t, true)
+	if first > 30 || events != 1 {
+		t.Fatalf("first sync made %d requests, %d accounts:changed", first, events)
 	}
-	if n, _ := ge.round(t, false); n != 1 {
-		t.Fatalf("idle round: %d requests", n)
+	if n, events := ge.round(t, false); n != 1 || events != 0 {
+		t.Fatalf("idle round: %d requests, %d accounts:changed", n, events)
 	}
 	// Read elsewhere: applied from history, then the counts are refreshed.
 	if err := ge.c.SetRead(ctx, unread[:10], true); err != nil {
 		t.Fatal(err)
 	}
 	before := ge.inboxUnread(t)
-	if n, _ := ge.round(t, false); n != 3 {
-		t.Fatalf("label change round: %d requests (want history + 2 for folders)", n)
+	if n, events := ge.round(t, false); n != 3 || events != 1 {
+		t.Fatalf("label change round: %d requests (want history + 2 for folders), %d accounts:changed", n, events)
 	}
 	if got := ge.inboxUnread(t); got != before-10 {
 		t.Fatalf("inbox unread %d, want %d", got, before-10)
@@ -123,8 +124,8 @@ func TestGmailRoundRequests(t *testing.T) {
 		t.Fatalf("inbox unread %d after new mail, want %d", got, before-9)
 	}
 	// "Sync now" and a stale folder list refresh the counts.
-	if n, _ := ge.round(t, true); n != 3 {
-		t.Fatalf("manual idle round: %d requests", n)
+	if n, events := ge.round(t, true); n != 3 || events != 0 {
+		t.Fatalf("manual idle round: %d requests, %d accounts:changed", n, events)
 	}
 	st := ge.e.state(gmailAcct)
 	st.foldersAt = time.Now().Add(-folderRefreshEvery)
@@ -155,5 +156,36 @@ func TestFoldersEveryRoundWithoutLazyFolders(t *testing.T) {
 	defer p.mu.Unlock()
 	if p.calls["folders"] != 3 {
 		t.Fatalf("folders fetched %d times in 3 rounds", p.calls["folders"])
+	}
+}
+
+// accounts:changed goes out when a round changes the account's error, and
+// not again while the same error repeats.
+func TestAccountsChangedOnlyWhenTheAccountChanged(t *testing.T) {
+	te := newTestEnv(t)
+	ctx := context.Background()
+	acct := demo.OutlookAccountID
+	if err := te.e.SyncNow(ctx, acct); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int { return te.rec.count(models.EventAccountsChanged) }
+	round := func() int {
+		n := count()
+		_ = te.e.syncAccount(ctx, acct, false)
+		return count() - n
+	}
+	if n := round(); n != 0 {
+		t.Fatalf("idle round: %d accounts:changed", n)
+	}
+	te.provs[acct].set("folders", errors.New("server said no"))
+	if n := round(); n != 1 {
+		t.Fatalf("failing round: %d accounts:changed", n)
+	}
+	if n := round(); n != 0 {
+		t.Fatalf("failing again: %d accounts:changed", n)
+	}
+	te.provs[acct].set("folders", nil)
+	if n := round(); n != 1 {
+		t.Fatalf("recovered round: %d accounts:changed", n)
 	}
 }

@@ -470,7 +470,6 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string, manual bool)
 	st.syncing, st.lastAttempt = true, time.Now()
 	e.mu.Unlock()
 	e.cfg.Emit.Emit(models.EventSyncStarted, models.SyncEvent{AccountID: accountID})
-	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 
 	newIDs, initial, changed, err := e.doSync(ctx, acct, manual)
 
@@ -512,11 +511,17 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string, manual bool)
 		e.cfg.BeforeAnnounce(accountID, newIDs, initial)
 	}
 	// A round that changed no mail (the usual periodic sync) doesn't make
-	// every window re-fetch its list; accounts:changed still refreshes counts.
+	// every window re-fetch its list. sync:finished makes the UI reload the
+	// accounts and counts; accounts:changed (which the tray also follows) is
+	// only for a round that changed the account's error, sign-in or unread
+	// count, and sync:started shows the spinner.
 	if changed {
 		e.cfg.Emit.Emit(models.EventMessagesChanged, models.AccountEvent{AccountID: accountID})
 	}
-	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
+	if now, aerr := e.cfg.Store.Account(accountID); aerr == nil &&
+		(now.SyncError != acct.SyncError || now.NeedsReauth != acct.NeedsReauth || now.UnreadCount != acct.UnreadCount) {
+		e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
+	}
 	// Queued changes the server refused while this round ran go with it.
 	shown := strings.Join(slices.DeleteFunc(append([]string{msg}, replayErrs...), func(s string) bool { return s == "" }), "; ")
 	e.cfg.Emit.Emit(models.EventSyncFinished, models.SyncEvent{AccountID: accountID, NewMessages: len(newIDs), Error: shown})
