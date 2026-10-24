@@ -54,7 +54,7 @@ const startTime = ref(s0.hm)
 const endDay = ref(e0.ymd)
 const endTime = ref(e0.hm)
 const recurrence0 = base.recurrence ?? ''
-const rule0 = parseRRule(recurrence0)
+const rule0 = parseRRule(recurrence0, base.timeZone)
 /** A rule the menu can't express ("every 2 weeks", "every weekday") is kept as is unless replaced. */
 const customRule = !!ev?.isRecurring && (!recurrence0 || !isSimpleRRule(recurrence0))
 const customLabel = ev?.recurrenceText || (recurrence0 ? describeRepeat(rule0) : 'Repeats (custom)')

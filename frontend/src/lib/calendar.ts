@@ -248,8 +248,22 @@ export function buildRRule(r: RepeatRule): string {
   return parts.join(';')
 }
 
-/** RRULE value (with or without the "RRULE:" prefix) → repeat rule. Unknown rules map to "none". */
-export function parseRRule(value: string): RepeatRule {
+/**
+ * The last day an RRULE UNTIL allows ("YYYY-MM-DD", "" if unreadable). A UTC time
+ * ("20261201T075959Z") is read in the event's zone ("" = local): the day of the last
+ * possible occurrence. A DATE or a floating time is taken as is.
+ */
+export function untilDay(value: string, timeZone = ''): string {
+  const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?/i.exec(value.trim())
+  if (!m) return ''
+  if (!m[7]) return `${m[1]}-${m[2]}-${m[3]}`
+  const at = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]))
+  return utcToZoned(at, isValidTimeZone(timeZone) ? timeZone : '').ymd
+}
+
+/** RRULE value (with or without the "RRULE:" prefix) → repeat rule. Unknown rules map to "none".
+ *  A UTC UNTIL is read in `timeZone`, the event's zone ("" = local). */
+export function parseRRule(value: string, timeZone = ''): RepeatRule {
   const raw = (value ?? '').replace(/^RRULE:/i, '').trim()
   const out: RepeatRule = { freq: 'none', until: '' }
   if (!raw) return out
@@ -257,10 +271,8 @@ export function parseRRule(value: string): RepeatRule {
     const [k, v = ''] = part.split('=')
     const key = k.toUpperCase()
     if (key === 'FREQ') out.freq = FREQS[v.toUpperCase()] ?? 'none'
-    else if (key === 'UNTIL') {
-      const m = /^(\d{4})(\d{2})(\d{2})/.exec(v)
-      if (m) out.until = `${m[1]}-${m[2]}-${m[3]}`
-    } else if (key === 'INTERVAL') out.interval = Math.max(1, Number(v) || 1)
+    else if (key === 'UNTIL') out.until = untilDay(v, timeZone)
+    else if (key === 'INTERVAL') out.interval = Math.max(1, Number(v) || 1)
     else if (key === 'COUNT') out.count = Math.max(1, Number(v) || 1)
     else if (key === 'BYDAY') out.byDay = v.split(',').map((d) => DAYS.indexOf(d.slice(-2).toUpperCase())).filter((d) => d >= 0)
   }
@@ -384,8 +396,19 @@ export function eventToInput(ev: CalendarEvent): EventInput {
     // (resending it would make the backend copy it into the location/description).
     meetingUrl: '',
     // A custom rule goes out as "" (the backend then keeps the provider's rule as is).
-    recurrence: isSimpleRRule(ev.recurrence) ? ev.recurrence : '', reminders: [...ev.reminders],
+    recurrence: isSimpleRRule(ev.recurrence) ? dateUntil(ev.recurrence, ev.timeZone) : '', reminders: [...ev.reminders],
   }
+}
+
+/**
+ * A rule with its UNTIL as a date ("UNTIL=20261130"), read in the event's zone: what the
+ * editor and the backend input use. Resaving a series ("all events") then keeps its end.
+ */
+export function dateUntil(rule: string, timeZone = ''): string {
+  return rule.replace(/(^|[;:])UNTIL=([^;]*)/i, (all, sep: string, v: string) => {
+    const day = untilDay(v, timeZone)
+    return day ? `${sep}UNTIL=${day.replace(/-/g, '')}` : all
+  })
 }
 
 /** Shift an event's times by a drag/resize delta. `startDelta` moves the start; `endDelta` the end (ms, or days for all-day). */

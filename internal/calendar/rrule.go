@@ -13,16 +13,17 @@ var byDay = []string{"SU", "MO", "TU", "WE", "TH", "FR", "SA"}
 
 // BuildRRule returns the RRULE (without "RRULE:") for a simple recurrence,
 // or "" for none. Weekly repeats on the start's weekday, monthly on its day
-// of the month, yearly on its date (all in the event's zone).
-func BuildRRule(r models.EventRecurrence, start time.Time, tz string) string {
+// of the month, yearly on its date (all in the event's zone). Until is the
+// last day as a calendar date (00:00 UTC, like all-day dates).
+func BuildRRule(r models.EventRecurrence, start time.Time, tz string, allDay bool) string {
 	freq := map[string]string{models.RepeatDaily: "DAILY", models.RepeatWeekly: "WEEKLY",
 		models.RepeatMonthly: "MONTHLY", models.RepeatYearly: "YEARLY"}[r.Frequency]
 	if freq == "" {
 		return ""
 	}
-	loc := time.UTC
-	if l, err := time.LoadLocation(tz); err == nil && tz != "" {
-		loc = l
+	loc := ZoneLoc(tz)
+	if allDay {
+		loc = time.UTC // all-day dates are 00:00 UTC
 	}
 	parts := []string{"FREQ=" + freq}
 	if freq == "WEEKLY" {
@@ -32,18 +33,64 @@ func BuildRRule(r models.EventRecurrence, start time.Time, tz string) string {
 	case r.Count > 0:
 		parts = append(parts, "COUNT="+strconv.Itoa(r.Count))
 	case r.Until != nil && !r.Until.IsZero():
-		// UNTIL is inclusive; use the end of that day in UTC.
-		u := DateUTC(*r.Until).Add(24*time.Hour - time.Second)
-		parts = append(parts, "UNTIL="+u.Format("20060102T150405Z"))
+		parts = append(parts, "UNTIL="+UntilValue(*r.Until, loc, allDay))
 	}
 	return strings.Join(parts, ";")
+}
+
+// ZoneLoc loads an IANA (or Windows) zone; UTC when empty or unknown.
+func ZoneLoc(tz string) *time.Location {
+	if z := IANAZone(tz); z != "" {
+		if l, err := time.LoadLocation(z); err == nil {
+			return l
+		}
+	}
+	return time.UTC
+}
+
+// UntilValue renders the inclusive last day of a series (the calendar date
+// of day) as an RRULE UNTIL: the end of that day in the event's zone, in
+// UTC, or a DATE for all-day events (RFC 5545: UNTIL takes DTSTART's type).
+func UntilValue(day time.Time, loc *time.Location, allDay bool) string {
+	y, m, d := day.Date()
+	if allDay {
+		return fmt.Sprintf("%04d%02d%02d", y, int(m), d)
+	}
+	end := time.Date(y, m, d+1, 0, 0, 0, 0, loc).Add(-time.Second)
+	return end.UTC().Format("20060102T150405Z")
+}
+
+// UntilDay returns the last day an RRULE UNTIL allows, at 00:00 UTC: a UTC
+// time is read in the event's zone (the day of the last possible
+// occurrence), a DATE or a floating time is taken as is. UntilDay of
+// UntilValue gives the same day back.
+func UntilDay(v string, loc *time.Location) (time.Time, bool) {
+	v = strings.ToUpper(strings.TrimSpace(v))
+	if strings.HasSuffix(v, "Z") {
+		t, err := time.Parse("20060102T150405Z", v)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return DateUTC(t.In(loc)), true
+	}
+	if len(v) < 8 {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("20060102", v[:8])
+	return t, err == nil
 }
 
 var dayNames = map[string]string{"MO": "Monday", "TU": "Tuesday", "WE": "Wednesday", "TH": "Thursday", "FR": "Friday", "SA": "Saturday", "SU": "Sunday"}
 
 // Summarize renders an RRULE as text, e.g. "Weekly on Monday, 10 times".
-// Unknown rules give "Repeats".
+// Unknown rules give "Repeats". A UTC UNTIL is read in UTC; SummarizeIn
+// reads it in the event's zone.
 func Summarize(rule string) string {
+	return SummarizeIn(rule, "")
+}
+
+// SummarizeIn is Summarize for an event in zone tz (IANA or Windows).
+func SummarizeIn(rule, tz string) string {
 	rule = strings.TrimPrefix(strings.TrimSpace(rule), "RRULE:")
 	if rule == "" {
 		return ""
@@ -80,8 +127,8 @@ func Summarize(rule string) string {
 	}
 	if c := kv["COUNT"]; c != "" {
 		s += ", " + c + " times"
-	} else if u := kv["UNTIL"]; len(u) >= 8 {
-		if t, err := time.Parse("20060102", u[:8]); err == nil {
+	} else if u := kv["UNTIL"]; u != "" {
+		if t, ok := UntilDay(u, ZoneLoc(tz)); ok {
 			s += ", until " + t.Format("Jan 2, 2006")
 		}
 	}

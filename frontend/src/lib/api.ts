@@ -252,7 +252,7 @@ const WIRE_RESPONSES = new Set(['accepted', 'tentative', 'declined'])
 export async function toWireInput(i: EventInput & { accountId?: string }): Promise<Record<string, unknown>> {
   // Lazy: calendar helpers stay out of the mail bundle.
   const { parseRRule } = await import('./calendar')
-  const rule = parseRRule(i.recurrence)
+  const rule = parseRRule(i.recurrence, i.timeZone)
   const day = (ymd: string) => `${ymd.slice(0, 10)}T00:00:00Z`
   return {
     accountId: i.accountId ?? '',
@@ -272,7 +272,9 @@ export async function toWireInput(i: EventInput & { accountId?: string }): Promi
     attendees: i.attendees.map((a) => ({ name: a.name, email: a.email, response: WIRE_RESPONSES.has(a.response) ? a.response : 'none', optional: false })),
     recurrence: {
       frequency: rule.freq,
-      until: rule.until ? new Date(`${rule.until}T23:59:59`).toISOString() : null,
+      // The last day as a calendar date, like all-day dates: the backend ends the
+      // series at the end of that day in the event's zone.
+      until: rule.until ? day(rule.until) : null,
       count: rule.count ?? 0,
     },
     reminderMinutes: i.reminders,

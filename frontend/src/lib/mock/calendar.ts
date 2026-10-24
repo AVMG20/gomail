@@ -337,7 +337,7 @@ export function fromWireInput(w: Record<string, unknown> & Partial<EventInput>):
   const rec = (w.recurrence ?? {}) as { frequency?: string; until?: string | null; count?: number } | string
   const recurrence = typeof rec === 'string'
     ? rec
-    : buildRRule({ freq: (rec.frequency as RepeatFreq) || 'none', until: rec.until ? toYmd(new Date(rec.until)) : '', count: rec.count || undefined })
+    : buildRRule({ freq: (rec.frequency as RepeatFreq) || 'none', until: rec.until ? rec.until.slice(0, 10) : '', count: rec.count || undefined })
   const description = String(w.description ?? '')
   const meetingUrl = String(w.meetingUrl ?? '')
   const attendees = ((w.attendees as { name: string; email: string; response: string }[] | null) ?? []).map((a) => ({ name: a.name, email: a.email, response: a.response === 'none' ? 'needsAction' : a.response }))
