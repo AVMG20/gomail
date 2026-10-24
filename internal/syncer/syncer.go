@@ -70,7 +70,17 @@ const (
 	backoffBase = 30 * time.Second
 	backoffMax  = 30 * time.Minute
 	tickEvery   = 30 * time.Second
+	// folderRefreshEvery bounds how long the folder counts of a provider
+	// with lazy folders go unrefreshed while no round changes mail.
+	folderRefreshEvery = 30 * time.Minute
 )
+
+// lazyFolders is implemented by providers whose Sync doesn't need a fresh
+// folder list and whose folder counts only move with the mail changes Sync
+// reports (Gmail: one history for the whole mailbox). Their folders are
+// fetched on the first and on manual rounds, after a round that changed
+// mail and every folderRefreshEvery, instead of before every round.
+type lazyFolders interface{ LazyFolders() bool }
 
 type acctState struct {
 	mu          sync.Mutex // held while syncing
@@ -91,6 +101,10 @@ type acctState struct {
 	// replayErrs are refused queued changes to report with the running
 	// sync round (e.mu).
 	replayErrs []string
+	// The last Folders result and when it was fetched (mu; see lazyFolders).
+	folders    []mail.Folder
+	provLabels []mail.Label
+	foldersAt  time.Time
 }
 
 // lockApply takes the apply locks of the accounts (in a fixed order).
@@ -294,7 +308,7 @@ func (e *Engine) syncDue(all bool) {
 			go func() {
 				defer e.wg.Done()
 				defer safe.Recover("sync " + id)
-				_ = e.syncAccount(e.ctx, id)
+				_ = e.syncAccount(e.ctx, id, false)
 			}()
 		}
 	}
@@ -346,7 +360,7 @@ func (e *Engine) SyncNow(ctx context.Context, accountID string) error {
 	defer e.wg.Done()
 	ctx, cancel := mergeCancel(ctx, e.ctx)
 	defer cancel()
-	return safe.Call("sync "+accountID, func() error { return e.syncAccount(ctx, accountID) })
+	return safe.Call("sync "+accountID, func() error { return e.syncAccount(ctx, accountID, true) })
 }
 
 func dedupe(errs []string) string {
@@ -439,7 +453,9 @@ func HumanError(acct models.Account, err error) string {
 	return err.Error()
 }
 
-func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
+// syncAccount runs one round; manual is a requested sync (SyncNow) rather
+// than a periodic one.
+func (e *Engine) syncAccount(ctx context.Context, accountID string, manual bool) error {
 	st := e.state(accountID)
 	st.mu.Lock() // one sync at a time per account
 	defer st.mu.Unlock()
@@ -456,7 +472,7 @@ func (e *Engine) syncAccount(ctx context.Context, accountID string) error {
 	e.cfg.Emit.Emit(models.EventSyncStarted, models.SyncEvent{AccountID: accountID})
 	e.cfg.Emit.Emit(models.EventAccountsChanged, models.AccountEvent{AccountID: accountID})
 
-	newIDs, initial, changed, err := e.doSync(ctx, acct)
+	newIDs, initial, changed, err := e.doSync(ctx, acct, manual)
 
 	e.mu.Lock()
 	st.syncing = false
@@ -540,8 +556,8 @@ func (e *Engine) progressReporter(accountID string) func(phase string, done, tot
 }
 
 // doSync runs one sync round: the new message ids, whether it was the
-// initial sync, and whether any mail changed.
-func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, bool, bool, error) {
+// initial sync, and whether any mail changed. The caller holds st.mu.
+func (e *Engine) doSync(ctx context.Context, acct models.Account, manual bool) ([]string, bool, bool, error) {
 	p, err := e.cfg.Provider(acct.ID)
 	if err != nil {
 		return nil, false, false, err
@@ -555,17 +571,26 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 		report = e.progressReporter(acct.ID)
 		report("folders", 0, 1)
 	}
-	folders, labels, err := p.Folders(ctx)
-	if err != nil {
-		return nil, false, false, err
-	}
-	if err := e.cfg.Store.ReplaceFolders(acct.ID, folders); err != nil {
-		return nil, false, false, err
+	st := e.state(acct.ID)
+	lf, lazy := p.(lazyFolders)
+	lazy = lazy && lf.LazyFolders()
+	fresh := !lazy || manual || report != nil || st.folders == nil || time.Since(st.foldersAt) >= folderRefreshEvery
+	folders, labels := st.folders, st.provLabels
+	if fresh {
+		if folders, labels, err = e.refreshFolders(ctx, p, acct.ID, st); err != nil {
+			return nil, false, false, err
+		}
 	}
 	started := time.Now()
 	res, err := p.Sync(ctx, provider.SyncRequest{State: state, Folders: folders, Limits: e.cfg.Limits, Progress: report})
 	if err != nil {
 		return nil, false, false, err
+	}
+	if !fresh && (len(res.Upserts) > 0 || len(res.Deleted) > 0 || len(res.Removed) > 0) {
+		// Mail changed, so the counts did too.
+		if folders, labels, err = e.refreshFolders(ctx, p, acct.ID, st); err != nil {
+			return nil, false, false, err
+		}
 	}
 	if report != nil {
 		report("saving", 0, len(res.Upserts))
@@ -579,6 +604,20 @@ func (e *Engine) doSync(ctx context.Context, acct models.Account) ([]string, boo
 		report("saving", len(res.Upserts), len(res.Upserts))
 	}
 	return applied.New, res.Initial, applied.Changed, nil
+}
+
+// refreshFolders fetches the provider's folders (with counts) and labels,
+// stores the folders and keeps both for rounds that skip them.
+func (e *Engine) refreshFolders(ctx context.Context, p provider.Provider, accountID string, st *acctState) ([]mail.Folder, []mail.Label, error) {
+	folders, labels, err := p.Folders(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := e.cfg.Store.ReplaceFolders(accountID, folders); err != nil {
+		return nil, nil, err
+	}
+	st.folders, st.provLabels, st.foldersAt = folders, labels, time.Now()
+	return folders, labels, nil
 }
 
 // applyFetched stores a sync round whose fetch started at started. Local

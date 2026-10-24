@@ -171,29 +171,42 @@ func (c *Client) Folders(ctx context.Context) ([]mail.Folder, []mail.Label, erro
 	for _, l := range all {
 		present[l.ID] = true
 	}
+	// Counts come from labels.get (labels.list has none) and the profile,
+	// all in one batch.
 	folders := make([]mail.Folder, len(systemFolders))
-	err = provider.Parallel(ctx, workers, indexes(len(systemFolders)), func(ctx context.Context, i int) error {
-		sf := systemFolders[i]
-		f := mail.Folder{RemoteID: sf.id, Name: sf.name, Kind: sf.kind}
+	var paths []string
+	var of []int // folder index per path
+	for i, sf := range systemFolders {
+		folders[i] = mail.Folder{RemoteID: sf.id, Name: sf.name, Kind: sf.kind}
 		switch {
 		case sf.id == AllMail:
-			var p gProfile
-			if err := c.api.JSON(ctx, http.MethodGet, "profile", nil, &p); err != nil {
-				return err
-			}
-			f.Total = p.MessagesTotal
+			paths, of = append(paths, "profile"), append(of, i)
 		case present[sf.id]:
-			var l gLabel
-			if err := c.api.JSON(ctx, http.MethodGet, "labels/"+sf.id, nil, &l); err != nil {
-				return err
-			}
-			f.Total, f.Unread = l.MessagesTotal, l.MessagesUnread
+			paths, of = append(paths, "labels/"+sf.id), append(of, i)
 		}
-		folders[i] = f
-		return nil
-	})
+	}
+	counts, err := c.getAll(ctx, paths, nil)
 	if err != nil {
 		return nil, nil, err
+	}
+	for k, r := range counts {
+		if r.err != nil {
+			return nil, nil, r.err
+		}
+		f := &folders[of[k]]
+		if f.RemoteID == AllMail {
+			var p gProfile
+			if err := json.Unmarshal(r.body, &p); err != nil {
+				return nil, nil, fmt.Errorf("unexpected response from Gmail: %w", err)
+			}
+			f.Total = p.MessagesTotal
+			continue
+		}
+		var l gLabel
+		if err := json.Unmarshal(r.body, &l); err != nil {
+			return nil, nil, fmt.Errorf("unexpected response from Gmail: %w", err)
+		}
+		f.Total, f.Unread = l.MessagesTotal, l.MessagesUnread
 	}
 	var labels []mail.Label
 	for _, l := range all {
@@ -480,9 +493,14 @@ func (c *Client) remember(gs []gMessage) {
 	}
 }
 
+// LazyFolders tells the sync engine that Sync doesn't need a fresh folder
+// list (history covers the whole mailbox) and that folder counts only move
+// with the mail changes it reports, so Folders needn't run every round.
+func (c *Client) LazyFolders() bool { return true }
+
 func (c *Client) Sync(ctx context.Context, req provider.SyncRequest) (mail.SyncResult, error) {
 	c.mu.Lock()
-	haveLabels := len(c.labels) > 0
+	haveLabels := c.known != nil
 	c.mu.Unlock()
 	if !haveLabels {
 		if _, err := c.loadLabels(ctx); err != nil {
