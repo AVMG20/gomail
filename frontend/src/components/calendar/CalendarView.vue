@@ -17,7 +17,7 @@ import Tip from '@/components/common/Tip.vue'
 import type { AnchorRect } from '@/components/common/FloatingCard.vue'
 import { api, errorMessage } from '@/lib/api'
 import {
-  addDays, addMinutes, needsScopeChoice, relativeDay, startOfDay, uses12h, toRfc3339, toYmd, type CalendarViewKind,
+  addDays, addMinutes, daysBetween, needsScopeChoice, relativeDay, startOfDay, uses12h, toRfc3339, toYmd, type CalendarViewKind,
 } from '@/lib/calendar'
 import { escapeHtml } from '@/lib/format'
 import { isEditableTarget } from '@/lib/platform'
@@ -113,7 +113,7 @@ function onSelect(arg: DateSelectArg) {
   }
   // In month view a click selects whole days; offer a timed event at the usual hour.
   let { start, end, allDay } = arg
-  const oneDay = allDay && end.getTime() - start.getTime() === 86_400_000
+  const oneDay = allDay && daysBetween(start, end) === 1 // calendar days: a DST change day has 23 or 25 hours
   if (oneDay && arg.view.type === 'dayGridMonth') {
     allDay = false
     start = new Date(start)
