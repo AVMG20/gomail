@@ -8,7 +8,7 @@ import timeGridPlugin from '@fullcalendar/timegrid'
 import listPlugin from '@fullcalendar/list'
 import interactionPlugin from '@fullcalendar/interaction'
 import allLocales from '@fullcalendar/core/locales-all'
-import type { CalendarApi, CalendarOptions, DateSelectArg, DatesSetArg, EventClickArg, EventContentArg, EventDropArg, EventMountArg, DayHeaderContentArg } from '@fullcalendar/core'
+import type { AllDayContentArg, CalendarApi, CalendarOptions, DateSelectArg, DatesSetArg, EventClickArg, EventContentArg, EventDropArg, EventMountArg, DayHeaderContentArg } from '@fullcalendar/core'
 import type { EventResizeDoneArg } from '@fullcalendar/interaction'
 import { ChevronLeftIcon, ChevronRightIcon, CalendarOffIcon, LoaderIcon, PanelLeftIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
@@ -284,7 +284,8 @@ const options = computed<CalendarOptions>(() => ({
   // FullCalendar labels day cells by their number only; the cell's own content is richer.
   dayCellDidMount: (arg: { el: HTMLElement }) => arg.el.removeAttribute('aria-labelledby'),
   noEventsContent: () => ({ html: '<div class="gm-cal-empty">Nothing scheduled in this period.</div>' }),
-  allDayContent: () => ({ html: '' }),
+  // No label on the week/day grid's all-day row; the agenda's time column says "All day".
+  allDayContent: (arg: AllDayContentArg) => ({ html: arg.view.type.startsWith('list') ? '<span class="gm-list-allday">All day</span>' : '' }),
 }))
 
 // ------------------------------------------------------------ navigation
