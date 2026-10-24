@@ -131,9 +131,10 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 			sentFolders[rid] = kind == "sent"
 		}
 		rows.Close()
-		contact, err := tx.Prepare(`INSERT INTO contacts(email, name, count, last_seen) VALUES(?, ?, ?, ?)
+		contact, err := tx.Prepare(`INSERT INTO contacts(email, name, count, last_seen, match_key) VALUES(?, ?, ?, ?, ?)
 			ON CONFLICT(email) DO UPDATE SET count = count + excluded.count, last_seen = max(last_seen, excluded.last_seen),
-				name = CASE WHEN excluded.name != '' AND (name = '' OR excluded.last_seen >= last_seen) THEN excluded.name ELSE name END`)
+				name = CASE WHEN excluded.name != '' AND (name = '' OR excluded.last_seen >= last_seen) THEN excluded.name ELSE name END,
+				match_key = CASE WHEN excluded.name != '' AND (name = '' OR excluded.last_seen >= last_seen) THEN excluded.match_key ELSE match_key END`)
 		if err != nil {
 			return err
 		}
@@ -322,7 +323,7 @@ func (s *Store) ApplySyncKeeping(accountID string, r mail.SyncResult, labelIDs m
 			}
 		}
 		for email, c := range contacts {
-			if _, err := contact.Exec(email, c.name, c.weight, c.last); err != nil {
+			if _, err := contact.Exec(email, c.name, c.weight, c.last, contactKey(email, c.name)); err != nil {
 				return err
 			}
 		}

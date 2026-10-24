@@ -2,10 +2,13 @@ package store
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/config"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
 )
@@ -254,5 +257,163 @@ func TestViewLabelCounts(t *testing.T) {
 	// The list's own filters don't change the counts.
 	if c := count(models.ListQuery{AccountID: "a1", FolderID: inbox.ID, Labels: []string{"other"}, Search: "zzz", UnreadOnly: true}); c.Total != 1 {
 		t.Fatalf("filtered inbox %+v", c)
+	}
+}
+
+// aggregateThreadsPerRow is the reference for aggregateThreads: two queries
+// per conversation row.
+func aggregateThreadsPerRow(s *Store, rows []models.MessageSummary) error {
+	for i := range rows {
+		r := &rows[i]
+		r.ConversationID = ConversationPrefix + r.ID
+		rs, err := s.db.Query(`SELECT t.unread, t.starred, t.has_attachments, t.from_name, t.from_email, a.email
+			FROM messages x JOIN messages t ON `+sameThread+` JOIN accounts a ON a.id = t.account_id
+			WHERE x.id = ? ORDER BY t.date, t.id`, r.ID)
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		r.Participants = []string{}
+		count := 0
+		for rs.Next() {
+			var unread, starred, att int
+			var name, email, me string
+			if err := rs.Scan(&unread, &starred, &att, &name, &email, &me); err != nil {
+				rs.Close()
+				return err
+			}
+			count++
+			r.Unread = r.Unread || unread == 1
+			r.Starred = r.Starred || starred == 1
+			r.HasAttachments = r.HasAttachments || att == 1
+			p := displayName(models.Address{Name: name, Email: email})
+			if strings.EqualFold(email, me) {
+				p = "me"
+			}
+			if !seen[p] && len(r.Participants) < 6 {
+				seen[p] = true
+				r.Participants = append(r.Participants, p)
+			}
+		}
+		rs.Close()
+		r.ThreadCount = max(count, 1)
+		lr, err := s.db.Query(`SELECT ml.label_id, ml.source, max(ml.confidence)
+			FROM messages x JOIN messages t ON `+sameThread+` JOIN message_labels ml ON ml.message_id = t.id
+			WHERE x.id = ?`+s.labelCond()+` GROUP BY ml.label_id, ml.source`, r.ID)
+		if err != nil {
+			return err
+		}
+		best := map[string]models.MessageLabel{}
+		var order []string
+		for lr.Next() {
+			var l models.MessageLabel
+			if err := lr.Scan(&l.LabelID, &l.Source, &l.Confidence); err != nil {
+				lr.Close()
+				return err
+			}
+			cur, ok := best[l.LabelID]
+			if !ok {
+				order = append(order, l.LabelID)
+			}
+			if !ok || sourceRank[l.Source] > sourceRank[cur.Source] {
+				best[l.LabelID] = l
+			}
+		}
+		lr.Close()
+		if len(order) > 0 || len(r.Labels) > 0 {
+			ids, details := []string{}, []models.MessageLabel{}
+			for _, id := range sortedStrings(order) {
+				ids = append(ids, id)
+				details = append(details, best[id])
+			}
+			r.Labels, r.LabelDetails = ids, details
+		}
+	}
+	return nil
+}
+
+// A page's conversation rows are aggregated in two queries for the whole
+// page; they must come out exactly as thread by thread.
+func TestAggregateThreadsMatchesPerRow(t *testing.T) {
+	s := openTest(t)
+	r := rand.New(rand.NewPCG(1, 2))
+	folders := [][]string{{"INBOX", "ALL"}, {"ALL"}, {"TRASH"}, {"SPAM"}, {"INBOX", "ALL"}, {"INBOX", "ALL"}}
+	senders := []string{"Ann", "Bob", "Cid", "Dee", "Eve", "Fay", "Gus", "Hal", "A1", "A2"}
+	sources := []string{"manual", "provider", "system", "ai", "rule", "import"} // the last two tie
+	for _, acct := range []string{"a1", "a2"} {
+		seedAccount(t, s, acct)
+		var ms []mail.Message
+		for i := range 150 {
+			thread := fmt.Sprint("T", r.IntN(30))
+			if r.IntN(8) == 0 {
+				thread = "" // its own conversation
+			}
+			// Few distinct hours: equal dates exercise the id tie-break.
+			m := threadMsg(fmt.Sprint(acct, "-", i), thread, r.IntN(60), senders[r.IntN(len(senders))], folders[r.IntN(len(folders))]...)
+			if r.IntN(10) == 0 {
+				m.From.Name = "" // shown by the email's user part
+			}
+			m.Unread, m.Starred, m.HasAttachments = r.IntN(3) == 0, r.IntN(7) == 0, r.IntN(5) == 0
+			ms = append(ms, m)
+		}
+		if _, err := s.ApplySync(acct, mail.SyncResult{Upserts: ms}, nil); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 150 {
+			for _, label := range []string{"work", "news", "travel"} {
+				if r.IntN(4) == 0 {
+					if _, err := s.db.Exec(`INSERT INTO message_labels(message_id, label_id, source, confidence) VALUES(?, ?, ?, ?)`,
+						MessageID(acct, fmt.Sprint(acct, "-", i)), label, sources[r.IntN(len(sources))], float64(r.IntN(100))/100); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+	}
+	s.SetLabels([]models.Label{{ID: "travel", Name: "Travel", Source: config.LabelSourceProvider}})
+	for _, hide := range []bool{false, true} {
+		s.SetHideProviderLabels(hide)
+		for _, q := range []models.ListQuery{{}, {FolderKind: models.FolderInbox}, {FolderKind: models.FolderTrash}, {AccountID: "a2", Labels: []string{"news"}}} {
+			q.Limit = 7
+			pages := 0
+			for {
+				p, err := s.ListMessages(q, ListOptions{Conversations: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ids := make([]string, len(p.Messages))
+				for i, m := range p.Messages {
+					ids[i] = m.ID
+				}
+				sums, err := s.Summaries(ids)
+				if err != nil {
+					t.Fatal(err)
+				}
+				byID := map[string]models.MessageSummary{}
+				for _, m := range sums {
+					byID[m.ID] = m
+				}
+				want := make([]models.MessageSummary, len(ids))
+				for i, id := range ids {
+					want[i] = byID[id]
+				}
+				if err := aggregateThreadsPerRow(s, want); err != nil {
+					t.Fatal(err)
+				}
+				for i := range want {
+					if !reflect.DeepEqual(p.Messages[i], want[i]) {
+						t.Fatalf("hide=%v %+v page %d row %d:\n got %+v\nwant %+v", hide, q, pages, i, p.Messages[i], want[i])
+					}
+				}
+				pages++
+				if p.NextCursor == "" {
+					break
+				}
+				q.Cursor = p.NextCursor
+			}
+			if pages < 2 {
+				t.Fatalf("%+v: only %d page", q, pages)
+			}
+		}
 	}
 }

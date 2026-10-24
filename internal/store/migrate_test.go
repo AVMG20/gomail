@@ -204,3 +204,38 @@ func TestUpgradeFromV7(t *testing.T) {
 		})
 	}
 }
+
+// Contacts saved before autocomplete folded names are matched like new ones.
+func TestMigrateFoldsContacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range migrations[:20] {
+		tx, _ := db.Begin()
+		if err := applyMigration(context.Background(), tx, i); err != nil {
+			t.Fatalf("migration %d: %v", i+1, err)
+		}
+		tx.Commit()
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 20`,
+		`INSERT INTO contacts(email, name, count, last_seen) VALUES('ivan@example.com', 'Иван Петров', 1, 1), ('elodie@example.com', 'Élodie Martin', 1, 1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for q, want := range map[string]string{"петров": "ivan@example.com", "elo": "elodie@example.com", "ivan": "ivan@example.com"} {
+		if cs, err := s.SearchContacts(q, 5, nil); err != nil || len(cs) != 1 || cs[0].Email != want {
+			t.Errorf("%q: %+v %v", q, cs, err)
+		}
+	}
+}

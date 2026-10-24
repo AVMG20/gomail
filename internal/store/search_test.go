@@ -3,6 +3,7 @@ package store
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/models"
@@ -218,5 +219,63 @@ func TestListSearchTypo(t *testing.T) {
 	}
 	if p, _ := s.ListMessages(models.ListQuery{Search: "zzzzqqq"}, ListOptions{}); p.Total != 0 || p.Similar {
 		t.Fatalf("garbage matched: %+v", p)
+	}
+}
+
+// The search pool is the most recent hits (newest first, by id on equal
+// dates), whether there are few hits (read by rowid) or more than the pool
+// (date-order walk).
+func TestSearchPoolIsMostRecentHits(t *testing.T) {
+	s := openTest(t)
+	seedAccount(t, s, "a1")
+	var ms []mail.Message
+	for i := range ftsPool + 100 {
+		subject := "invoice"
+		if i%150 == 0 {
+			subject = "invoice overdue"
+		}
+		m := msg(i, subject, "Acme", "ALL")
+		if i%4 == 0 {
+			m.FolderRemoteIDs = []string{"INBOX", "ALL"}
+		}
+		m.Date = base.Add(time.Duration(i/3) * time.Hour) // equal dates: ordered by id
+		ms = append(ms, m)
+	}
+	if _, err := s.ApplySync("a1", mail.SyncResult{Upserts: ms}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{{"invo", ftsPool}, {"invoice in:inbox", (ftsPool + 100) / 4}, {"overdue", 5}, {"zebra", 0}} {
+		ps := ParseSearch(tc.query)
+		w := &where{}
+		s.addSearchFilters(w, ps)
+		w.add(visible("m"))
+		cands, err := s.ftsCandidates(ps.FTSQuery(), w, ps.highlightTerms(), now().UnixMilli())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, c := range cands {
+			got = append(got, c.sum.ID)
+		}
+		rows, err := s.db.Query(`SELECT m.id FROM messages m WHERE m.rid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?) AND `+
+			strings.Join(w.conds, " AND ")+` ORDER BY m.date DESC, m.id DESC LIMIT ?`, append(append([]any{ps.FTSQuery()}, w.args...), ftsPool)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			want = append(want, id)
+		}
+		rows.Close()
+		if len(want) != tc.want || strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%q: got %d hits, want %d of %d (in the same order)", tc.query, len(got), tc.want, len(want))
+		}
 	}
 }
