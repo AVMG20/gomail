@@ -180,6 +180,15 @@ func parseTime(t gTime, fallbackTZ string) (time.Time, bool, string) {
 	return ts.UTC(), false, tz
 }
 
+// ruleZone is the zone an RRULE's UTC UNTIL is read in: the event's, or
+// the calendar's for all-day events (which have none).
+func ruleZone(ev calendar.Event, cal calendar.Calendar) string {
+	if ev.TimeZone != "" {
+		return ev.TimeZone
+	}
+	return cal.TimeZone
+}
+
 var gResponse = map[string]string{"needsAction": models.ResponseNone, "accepted": models.ResponseAccepted,
 	"tentative": models.ResponseTentative, "declined": models.ResponseDeclined}
 
@@ -265,7 +274,7 @@ func (c *Client) toEvent(g gEvent, cal calendar.Calendar) calendar.Event {
 	}
 	ev.IsRecurring = ev.SeriesRemoteID != "" || ev.RRule != ""
 	if ev.RRule != "" {
-		ev.Recurrence = calendar.Summarize(ev.RRule)
+		ev.Recurrence = calendar.SummarizeIn(ev.RRule, ruleZone(ev, cal))
 	}
 	ev.CanEdit = cal.CanEdit && (ev.IsOrganizer || g.GuestsCanModify || g.Organizer == nil)
 	ev.ETag = g.Etag
@@ -364,7 +373,7 @@ func (c *Client) collect(ctx context.Context, cal calendar.Calendar, items []gEv
 				for _, r := range m.Recurrence {
 					if strings.HasPrefix(r, "RRULE:") {
 						ev.RRule = strings.TrimPrefix(r, "RRULE:")
-						ev.Recurrence = calendar.Summarize(ev.RRule)
+						ev.Recurrence = calendar.SummarizeIn(ev.RRule, ruleZone(ev, cal))
 					}
 				}
 			}
