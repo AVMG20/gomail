@@ -214,7 +214,7 @@ func TestCompleteAttachmentListDeletesRemoved(t *testing.T) {
 			}
 		})
 		out.Subject, out.Text = "s", "t"
-		out.Attachments = []mail.OutgoingAttachment{{Filename: "keep.pdf", Data: make([]byte, 300)}}
+		out.Attachments = []mail.OutgoingAttachment{{ID: "keep", Filename: "keep.pdf", Data: make([]byte, 300)}}
 		if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
 			t.Fatal(err)
 		}

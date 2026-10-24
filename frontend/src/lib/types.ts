@@ -307,6 +307,8 @@ export interface MessagePage {
 }
 
 export interface OutgoingAttachment {
+  /** The server attachment id of a file loaded from a reopened draft (Attachment.id). */
+  id?: string
   filename: string
   mimeType: string
   dataBase64: string

@@ -132,6 +132,70 @@ func TestReplacingAttachmentWithSameNameKeepsIt(t *testing.T) {
 	}
 }
 
+// A reopened draft (or one restored after a restart, so nothing was
+// uploaded this session) has invoice.pdf; the user removes it and attaches
+// a newer, smaller invoice.pdf. The new file was paired with the old one
+// by name, never uploaded, and the old file was sent.
+func TestReopenedDraftReplacedFileIsUploaded(t *testing.T) {
+	c, d := newDraftServer(t)
+	d.atts = []gAttachment{{ID: "old", Name: "invoice.pdf", Size: 1000 + sizeOverhead}}
+	out := mail.Outgoing{Subject: "s", Text: "t", Mode: "new", AttachmentsComplete: true,
+		Attachments: []mail.OutgoingAttachment{{Filename: "invoice.pdf", Data: make([]byte, 900)}}}
+	if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.list(); len(got) != 1 || got[0].ID == "old" || got[0].Size != 900+sizeOverhead {
+		t.Fatalf("draft attachments %+v, want only the new 900-byte invoice.pdf", got)
+	}
+}
+
+// Files loaded from a reopened draft come back with their attachment id:
+// they stay on the draft as they are (no upload), next to a new file of
+// the same name, and a removed one is deleted.
+func TestReopenedDraftFilesPairedByID(t *testing.T) {
+	c, d := newDraftServer(t)
+	d.atts = []gAttachment{
+		{ID: "a", Name: "invoice.pdf", Size: 1000 + sizeOverhead},
+		{ID: "b", Name: "notes.txt", Size: 50 + sizeOverhead},
+	}
+	out := mail.Outgoing{Subject: "s", Text: "t", Mode: "new", AttachmentsComplete: true,
+		Attachments: []mail.OutgoingAttachment{
+			{ID: "a", Filename: "invoice.pdf", Data: make([]byte, 1000)},
+			{Filename: "invoice.pdf", Data: make([]byte, 1000)},
+		}}
+	if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+		t.Fatal(err)
+	}
+	got := d.list()
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID == "b" || got[1].Name != "invoice.pdf" {
+		t.Fatalf("draft attachments %+v, want a and one new invoice.pdf", got)
+	}
+	// Saving again uploads nothing.
+	n := d.n
+	if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+		t.Fatal(err)
+	}
+	if d.n != n || len(d.list()) != 2 {
+		t.Fatalf("second save re-uploaded: %+v", d.list())
+	}
+}
+
+// Without ids or the whole file list (an older client), a file of the same
+// name is taken for the draft's copy only when its size fits Graph's
+// overhead: a clearly different file is uploaded.
+func TestNameMatchWithoutIDIsBounded(t *testing.T) {
+	c, d := newDraftServer(t)
+	d.atts = []gAttachment{{ID: "old", Name: "report.pdf", Size: 50000 + sizeOverhead}}
+	out := mail.Outgoing{Subject: "s", Text: "t", Mode: "new",
+		Attachments: []mail.OutgoingAttachment{{Filename: "report.pdf", Data: make([]byte, 1000)}}}
+	if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.list(); len(got) != 2 {
+		t.Fatalf("draft attachments %+v, want the old file kept and the new one uploaded", got)
+	}
+}
+
 // A file added through an upload session (over 3 MB) can be removed again:
 // its id was looked up by exact size, which Graph's overhead never
 // matches, so an empty id was stored and the removal failed or did nothing.

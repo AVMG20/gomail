@@ -155,6 +155,9 @@ func (q SearchQuery) Empty() bool {
 }
 
 type OutgoingAttachment struct {
+	// ID is the draft's attachment id for a file loaded from the server
+	// draft ("" for a file the user added).
+	ID       string
 	Filename string
 	MimeType string
 	Data     []byte
