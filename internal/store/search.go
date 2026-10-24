@@ -324,9 +324,38 @@ func (s *Store) ftsCandidates(expr string, w *where, terms []hlTerm, nowMs int64
 	if len(w.conds) > 0 {
 		filter = " AND " + strings.Join(w.conds, " AND ")
 	}
+	// Up to a pool of hits are read by rowid. With more, reading them all
+	// to sort by date is slow (20k hits: 70 ms): walk the list index in
+	// date order instead, checking each message against the hits ("+",
+	// see buildFilter), which stops at the pool (13 ms). The walk would
+	// read the whole index for a word that matches nothing (8 ms).
+	hits, err := s.db.Query(`SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? LIMIT ?`, expr, ftsPool+1)
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+	var rids []any
+	for hits.Next() {
+		var rid int64
+		if err := hits.Scan(&rid); err != nil {
+			hits.Close()
+			return nil, err
+		}
+		rids = append(rids, rid)
+	}
+	hits.Close()
+	if err := hits.Err(); err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+	if len(rids) == 0 {
+		return nil, nil
+	}
+	match, args := `m.rid IN (`+placeholders(len(rids))+`)`, rids
+	if len(rids) > ftsPool {
+		match, args = `+m.rid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)`, []any{expr}
+	}
 	rows, err := s.db.Query(`SELECT m.id, m.date, m.subject, m.from_name, m.from_email, m.to_json, m.snippet
-		FROM messages m WHERE m.rid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)`+filter+`
-		ORDER BY m.date DESC LIMIT `+fmt.Sprint(ftsPool), append([]any{expr}, w.args...)...)
+		FROM messages m WHERE `+match+filter+`
+		ORDER BY m.date DESC, m.id DESC LIMIT `+fmt.Sprint(ftsPool), append(args, w.args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
