@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AVMG20/gomail/internal/fakes"
 	"github.com/AVMG20/gomail/internal/httpx"
 	"github.com/AVMG20/gomail/internal/mail"
 	"github.com/AVMG20/gomail/internal/mailmime"
@@ -185,7 +186,7 @@ func (f *fakeGmail) handler(t *testing.T) http.HandlerFunc {
 
 func newTest(t *testing.T) (*Client, *fakeGmail) {
 	f := &fakeGmail{}
-	srv := httptest.NewServer(f.handler(t))
+	srv := httptest.NewServer(fakes.GoogleBatch(fakes.GmailBatchPath, f.handler(t)))
 	t.Cleanup(srv.Close)
 	c := New(httpx.StaticToken("tok"), srv.URL)
 	c.SetSleep(func(context.Context, time.Duration) error { return nil })
