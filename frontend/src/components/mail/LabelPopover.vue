@@ -74,15 +74,12 @@ async function create() {
       <CmdRoot>
         <CmdInput v-model="q" placeholder="Add or find a label…" auto-focus @keydown.enter="canCreate && !items.length && create()" />
         <CmdList class="max-h-80">
-          <CmdItem v-for="l in items" :key="l.id" :value="l.id" class="py-2" @select="toggle(l.id)">
-            <span class="flex size-4 items-center justify-center rounded border" :class="labels.includes(l.id) ? 'border-transparent' : 'border-border'" :style="labels.includes(l.id) ? { background: l.color } : {}">
-              <CheckIcon v-if="labels.includes(l.id)" class="size-3 text-white" />
-            </span>
+          <CmdItem v-for="l in items" :key="l.id" :value="l.id" @select="toggle(l.id)">
+            <span class="mt-[5px] size-2.5 shrink-0 self-start rounded-full" :style="{ background: l.color }" />
             <span class="min-w-0 flex-1">
               <span class="flex items-center gap-1.5">
                 <span class="truncate">{{ l.name }}</span>
                 <span v-if="details.get(l.id)?.source === 'ai'" title="Added by AI" class="inline-flex"><SparklesIcon class="size-3 text-violet-500" aria-label="Added by AI" /></span>
-                <span v-if="l.source && l.source !== 'user'" class="text-muted-foreground text-[10px]">{{ l.source === 'system' ? 'built-in' : l.provider === 'outlook' ? 'Outlook' : l.provider === 'gmail' ? 'Gmail' : 'imported' }}</span>
               </span>
               <span v-if="scoreOf(l.id) !== null" class="mt-1 flex items-center gap-1.5" :title="`AI score ${Math.round(scoreOf(l.id)! * 100)}%`">
                 <span class="bg-muted h-1 flex-1 overflow-hidden rounded-full">
@@ -91,6 +88,7 @@ async function create() {
                 <span class="text-muted-foreground w-8 text-right text-[10px] tabular-nums">{{ Math.round(scoreOf(l.id)! * 100) }}%</span>
               </span>
             </span>
+            <CheckIcon v-if="labels.includes(l.id)" class="mt-0.5 size-4 self-start" aria-label="On this message" />
           </CmdItem>
           <CmdItem v-if="canCreate" value="__create" @select="create">
             <PlusIcon class="text-muted-foreground size-4" />
