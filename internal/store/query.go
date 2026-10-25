@@ -121,6 +121,10 @@ func visible(alias string) string { return alias + `.folder_kinds != 0` }
 // mailbox except Junk and Trash, like Gmail's.
 const allMailCond = `(m.folder_kinds != 0 AND (m.folder_kinds & 48) = 0)`
 
+// starredCond is the Starred view: starred mail outside Junk and Trash, like
+// Gmail's, so trashing a starred message takes it out of Starred.
+const starredCond = `(m.starred = 1 AND (m.folder_kinds & 48) = 0)`
+
 // outlookAccounts are the ids of the Outlook mailboxes.
 func (s *Store) outlookAccounts() []string {
 	rows, err := s.db.Query(`SELECT id FROM accounts WHERE provider = ?`, models.ProviderOutlook)
@@ -160,7 +164,7 @@ func (s *Store) buildFilter(q models.ListQuery, opt FilterOptions) (*where, erro
 		}
 		switch f.Kind {
 		case models.FolderStarred:
-			w.add(`m.account_id = ? AND m.starred = 1`, f.AccountID)
+			w.add(`m.account_id = ? AND `+starredCond, f.AccountID)
 		case models.FolderCustom:
 			inFolder = true
 			w.add(`m.account_id = ? AND (m.folder_kinds & 64) != 0`, f.AccountID)
@@ -266,7 +270,7 @@ func (s *Store) addKindFilter(w *where, kinds []string) {
 	var parts []string
 	var args []any
 	if starred {
-		parts = append(parts, `m.starred = 1`)
+		parts = append(parts, starredCond)
 	}
 	if outlook := s.outlookAccounts(); archive && len(outlook) > 0 {
 		parts = append(parts, `(m.account_id IN (`+placeholders(len(outlook))+`) AND `+allMailCond+`)`)

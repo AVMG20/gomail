@@ -180,6 +180,20 @@ func TestUnreadCountersAndMove(t *testing.T) {
 	if p.Total != 1 {
 		t.Fatalf("starred list %d", p.Total)
 	}
+	// trashed starred mail leaves Starred, like Gmail's
+	trash, _ := s.FolderByKind("a1", models.FolderTrash)
+	if err := s.SetMessageFolders(map[string][]string{id: {trash.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = s.FolderByKind("a1", models.FolderStarred)
+	if st.Total != 0 {
+		t.Fatalf("starred total after trash %d", st.Total)
+	}
+	for _, q := range []models.ListQuery{{FolderID: st.ID}, {FolderKind: models.FolderStarred}} {
+		if p, _ := s.ListMessages(q, ListOptions{}); p.Total != 0 {
+			t.Fatalf("starred list after trash %+v: %d", q, p.Total)
+		}
+	}
 }
 
 func TestLabels(t *testing.T) {

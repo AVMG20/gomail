@@ -266,7 +266,7 @@ func (s *Store) ReplaceFolders(accountID string, folders []mail.Folder) error {
 }
 
 // recountStarred sets the counters of the virtual starred folder from the
-// messages it lists: starred and visible (emptied ones in no folder don't count).
+// messages it lists: starred, visible and outside Junk and Trash.
 // ReorderAccounts puts the accounts in the order of ids; accounts missing
 // from ids keep their order after the listed ones. Unknown ids are ignored.
 func (s *Store) ReorderAccounts(ids []string) error {
@@ -303,8 +303,8 @@ func (s *Store) ReorderAccounts(ids []string) error {
 
 func recountStarred(tx *sql.Tx, accountID string) error {
 	_, err := tx.Exec(`UPDATE folders SET
-		total  = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND m.starred = 1 AND `+visible("m")+`),
-		unread = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND m.starred = 1 AND m.unread = 1 AND `+visible("m")+`)
+		total  = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND `+starredCond+` AND `+visible("m")+`),
+		unread = (SELECT count(*) FROM messages m WHERE m.account_id = folders.account_id AND `+starredCond+` AND m.unread = 1 AND `+visible("m")+`)
 		WHERE account_id = ? AND kind = 'starred'`, accountID)
 	return err
 }
