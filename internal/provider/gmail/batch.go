@@ -97,6 +97,7 @@ func (c *Client) batch(ctx context.Context, paths []string, idx []int, out []get
 			}
 		}
 		refreshNow := false
+		quota := false // a per-minute quota: wait the window out
 		for _, i := range pending {
 			p, ok := parts[i]
 			if !ok {
@@ -123,6 +124,7 @@ func (c *Client) batch(ctx context.Context, paths []string, idx []int, out []get
 				}
 			case transient(apiErr) && attempt+1 < batchAttempts:
 				wait = max(wait, apiErr.RetryAfter)
+				quota = quota || apiErr.RateQuota()
 			default:
 				report()
 				return apiErr
@@ -138,7 +140,11 @@ func (c *Client) batch(ctx context.Context, paths []string, idx []int, out []get
 		if attempt+1 >= batchAttempts {
 			return last
 		}
-		if wait == 0 {
+		if wait == 0 && quota {
+			// Like httpx: retries a second apart all land in the same
+			// minute (a 1,400-message catch-up failed every round).
+			wait = httpx.QuotaBackoff(attempt)
+		} else if wait == 0 {
 			d := min(time.Second<<attempt, 30*time.Second)
 			wait = d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 		}

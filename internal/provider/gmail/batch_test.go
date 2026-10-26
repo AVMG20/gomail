@@ -54,6 +54,11 @@ func newBatchServer(t *testing.T, status func(id string, attempt int) int) (*Cli
 		case 0:
 			writeJSON(w, map[string]any{"id": id, "threadId": "t" + id, "labelIds": []string{"INBOX"}, "internalDate": "1790000000000",
 				"payload": map[string]any{"mimeType": "text/plain", "headers": []map[string]string{{"name": "Subject", "value": "About " + id}}}})
+		case quota403:
+			w.WriteHeader(403)
+			writeJSON(w, map[string]any{"error": map[string]any{"code": 403, "status": "PERMISSION_DENIED",
+				"message": "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com'",
+				"errors":  []map[string]string{{"reason": "rateLimitExceeded"}}}})
 		case 429:
 			w.Header().Set("Retry-After", "7")
 			w.WriteHeader(429)
@@ -98,6 +103,9 @@ func newBatchServer(t *testing.T, status func(id string, attempt int) int) (*Cli
 	})
 	return c, b
 }
+
+// quota403 makes newBatchServer answer Gmail's per-minute quota error.
+const quota403 = -403
 
 // readAll reads a request body and puts it back for the next handler.
 func readAll(r *http.Request) string {
@@ -155,6 +163,29 @@ func TestBatchMixedStatuses(t *testing.T) {
 	}
 	if len(progress) == 0 || progress[len(progress)-1] != 5 {
 		t.Fatalf("progress %v", progress)
+	}
+}
+
+// Gmail's per-minute quota (a 403 without Retry-After) is waited out like
+// httpx does, not retried a second later in the same minute: a catch-up
+// that kept hitting it failed every round.
+func TestBatchWaitsOutPerMinuteQuota(t *testing.T) {
+	c, b := newBatchServer(t, func(id string, attempt int) int {
+		if id == "b" && attempt < 4 {
+			return quota403
+		}
+		return 0
+	})
+	msgs, _, err := c.fetchMetadata(context.Background(), []string{"a", "b"})
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("%d messages, err %v", len(msgs), err)
+	}
+	var total time.Duration
+	for _, d := range b.sleeps {
+		total += d
+	}
+	if len(b.sleeps) != 4 || b.sleeps[0] < 5*time.Second || total < time.Minute {
+		t.Fatalf("sleeps %v (total %v): want the per-minute window waited out", b.sleeps, total)
 	}
 }
 

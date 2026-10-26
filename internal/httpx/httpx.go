@@ -72,12 +72,12 @@ var retryableReasons = map[string]bool{
 
 // Retryable reports whether the error is a transient quota/rate error.
 func (e *Error) Retryable() bool {
-	return retryableReasons[e.Reason] || e.rateQuota() || (e.Status == http.StatusForbidden && strings.EqualFold(e.Code, "ApplicationThrottled"))
+	return retryableReasons[e.Reason] || e.RateQuota() || (e.Status == http.StatusForbidden && strings.EqualFold(e.Code, "ApplicationThrottled"))
 }
 
-// rateQuota reports a Google per-minute/per-user quota error. Its window is
+// RateQuota reports a Google per-minute/per-user quota error. Its window is
 // a minute, so it needs a longer backoff than a transient server error.
-func (e *Error) rateQuota() bool {
+func (e *Error) RateQuota() bool {
 	switch e.Reason {
 	case "rateLimitExceeded", "userRateLimitExceeded", "RATE_LIMIT_EXCEEDED":
 		return true
@@ -248,8 +248,8 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, error) {
 			(apiErr.Retryable() && resp.StatusCode < 500)
 		if (retryable(resp.StatusCode) || apiErr.Retryable()) && safeToRetry && attempt < maxRetries {
 			d := backoff(attempt, apiErr.RetryAfter)
-			if apiErr.rateQuota() && apiErr.RetryAfter == 0 {
-				d = quotaBackoff(attempt)
+			if apiErr.RateQuota() && apiErr.RetryAfter == 0 {
+				d = QuotaBackoff(attempt)
 			}
 			slog.Debug("retrying request", "service", c.service(), "status", resp.StatusCode, "wait", d)
 			if serr := sleep(ctx, d); serr != nil {
@@ -277,9 +277,9 @@ func backoff(attempt int, retryAfter time.Duration) time.Duration {
 	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 }
 
-// quotaBackoff waits out a per-minute quota window: 5-10s, 10-20s, 20-40s,
+// QuotaBackoff waits out a per-minute quota window: 5-10s, 10-20s, 20-40s,
 // then 30-60s, so five retries span well over a minute.
-func quotaBackoff(attempt int) time.Duration {
+func QuotaBackoff(attempt int) time.Duration {
 	d := min(10*time.Second<<attempt, time.Minute)
 	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 }
