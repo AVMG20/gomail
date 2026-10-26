@@ -28,6 +28,8 @@ type batchServer struct {
 	sleeps   []time.Duration
 	status   func(id string, attempt int) int
 	noBatch  bool // answer the batch endpoint with 404
+	inFlight int  // batch requests being answered
+	maxBatch int  // most batch requests in flight at once
 }
 
 func newBatchServer(t *testing.T, status func(id string, attempt int) int) (*Client, *batchServer) {
@@ -75,6 +77,14 @@ func newBatchServer(t *testing.T, status func(id string, attempt int) int) (*Cli
 		if noBatch && r.URL.Path == fakes.GmailBatchPath {
 			http.NotFound(w, r)
 			return
+		}
+		if r.URL.Path == fakes.GmailBatchPath {
+			b.mu.Lock()
+			b.inFlight++
+			b.maxBatch = max(b.maxBatch, b.inFlight)
+			b.mu.Unlock()
+			defer func() { b.mu.Lock(); b.inFlight--; b.mu.Unlock() }()
+			time.Sleep(5 * time.Millisecond) // let a second batch overlap if one is sent
 		}
 		batch.ServeHTTP(w, r)
 	}))
@@ -148,8 +158,9 @@ func TestBatchMixedStatuses(t *testing.T) {
 	}
 }
 
-// More ids than one batch holds are split into batches of 50, with all
-// results and the progress complete.
+// More ids than one batch holds are split into batches of 25, sent one at
+// a time (Gmail refuses calls past ~50 in flight), with all results and the
+// progress complete.
 func TestBatchSplitsLargeFetches(t *testing.T) {
 	c, b := newBatchServer(t, func(string, int) int { return 0 })
 	var mu sync.Mutex
@@ -166,8 +177,11 @@ func TestBatchSplitsLargeFetches(t *testing.T) {
 		t.Fatalf("%d messages, gone %v, err %v", len(msgs), gone, err)
 	}
 	sort.Ints(b.batches)
-	if fmt.Sprint(b.batches) != "[20 50 50]" || b.singles != 0 || last != 120 {
+	if fmt.Sprint(b.batches) != "[20 25 25 25 25]" || b.singles != 0 || last != 120 {
 		t.Fatalf("batches %v singles %d progress %d", b.batches, b.singles, last)
+	}
+	if b.maxBatch != 1 {
+		t.Fatalf("%d batches in flight at once", b.maxBatch)
 	}
 }
 

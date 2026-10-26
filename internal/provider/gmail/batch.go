@@ -22,12 +22,15 @@ import (
 )
 
 // Batch requests: https://developers.google.com/workspace/gmail/api/guides/batch.
-// A batch holds up to 100 calls, but Google advises at most 50 to avoid
-// rateLimitExceeded; each call still costs its own quota.
+// A batch holds up to 100 calls and Google advises at most 50, but Gmail
+// runs a batch's calls at once and answers some with "Too many concurrent
+// requests for user" (429) from about 50 in flight: two batches of 50 failed
+// every retry of a 1,400-message catch-up. 25 at a time never got one;
+// each call still costs its own quota.
 const (
 	batchPath    = "/batch/gmail/v1"
-	batchSize    = 50
-	batchWorkers = 2
+	batchSize    = 25
+	batchWorkers = 1
 	// batchAttempts bounds how often a throttled or failing call is retried.
 	batchAttempts = 6
 	// maxPartBytes caps one answer (metadata is a few KB).
