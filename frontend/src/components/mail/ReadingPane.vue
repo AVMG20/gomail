@@ -288,6 +288,8 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
         </template>
         <Tip label="Archive" shortcut="e"><Button variant="ghost" size="icon-sm" aria-label="Archive" @click="mail.archive(ids())"><ArchiveIcon /></Button></Tip>
         <Tip label="Delete" shortcut="#"><Button variant="ghost" size="icon-sm" aria-label="Delete" @click="mail.trash(ids())"><Trash2Icon /></Button></Tip>
+        <Tip v-if="mail.mailbox.kind !== 'spam'" label="Move to Junk" shortcut="!"><Button variant="ghost" size="icon-sm" aria-label="Move to Junk" @click="mail.junk(ids())"><OctagonAlertIcon /></Button></Tip>
+        <Tip v-else label="Not junk" shortcut="!"><Button variant="ghost" size="icon-sm" aria-label="Not junk" @click="mail.notJunk(ids())"><InboxIcon /></Button></Tip>
         <Tip :label="current?.unread ? 'Mark as read' : 'Mark as unread'" :shortcut="current?.unread ? 'shift+i' : 'u'">
           <Button variant="ghost" size="icon-sm" :aria-label="current?.unread ? 'Mark as read' : 'Mark as unread'" @click="current && mail.setRead(ids(), current.unread)">
             <MailOpenIcon v-if="current?.unread" /><MailIcon v-else />
@@ -326,8 +328,6 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
               <DropdownMenuSeparator />
             </template>
             <DropdownMenuItem v-if="settings.aiReady" @click="summarize"><TextQuoteIcon /> Summarize</DropdownMenuItem>
-            <DropdownMenuItem v-if="mail.mailbox.kind !== 'spam'" @click="mail.junk(ids())"><OctagonAlertIcon /> Move to Junk <DropdownMenuShortcut>!</DropdownMenuShortcut></DropdownMenuItem>
-            <DropdownMenuItem v-else @click="mail.notJunk(ids())"><InboxIcon /> Not junk <DropdownMenuShortcut>!</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuSub v-if="moveTargets.length">
               <DropdownMenuSubTrigger class="gap-2"><FolderInputIcon class="size-4" /> Move to</DropdownMenuSubTrigger>
               <DropdownMenuSubContent class="w-48">
