@@ -56,6 +56,26 @@ export const UNIFIED_NAMES: Record<string, string> = {
   all: 'All mail', inbox: 'All inboxes', starred: 'Starred', sent: 'Sent', drafts: 'Drafts', archive: 'Archive', spam: 'Junk', trash: 'Trash',
 }
 
+/** Id prefix of a reply on its way (shown in its conversation until the real message syncs in). */
+export const OUTGOING_PREFIX = 'outgoing:'
+
+/** A reply being sent: `message` stands in for it in its conversation. */
+export interface Outgoing {
+  draftId: string
+  message: Message
+  /** The conversation row's message count with it (null: the row wasn't loaded). */
+  count: number | null
+  /** Messages the conversation had at Send, minus the reply's own drafts (Outlook sends a draft
+   *  under its id): the real one is none of them. */
+  known: Set<string>
+  /** The send went through (ms); it waits for sync from then on. */
+  sent?: number
+  /** Bumped when the account's mail changed: the conversation is fetched again. */
+  checks?: number
+}
+/** An outgoing reply whose real message never showed up goes after this long. */
+const OUTGOING_MAX_MS = 5 * 60_000
+
 export function mailboxKey(m: Mailbox): string {
   return `${m.accountId}|${m.folderId || m.kind}`
 }
@@ -127,6 +147,10 @@ export const useMailStore = defineStore('mail', () => {
   /** Conversations shown in their original colors (experimental dark designed mail turned off for them), this session. */
   const originalColors = shallowRef<Set<string>>(new Set())
   const addressBook = shallowRef<Map<string, Address>>(new Map())
+  /** Replies on their way, shown in their conversation from Send on. */
+  const outbox = shallowRef<Outgoing[]>([])
+  /** Drafts sent or discarded here: hidden until the server and sync have caught up. */
+  const goneDrafts = shallowRef<Set<string>>(new Set())
 
   const labelFilter = computed<Required<LabelFilter>>(() => {
     const f = filters.value[mailboxKey(mailbox.value)]
@@ -245,7 +269,7 @@ export const useMailStore = defineStore('mail', () => {
     try {
       const page = await api.listMessages(query.value)
       if (t !== token) return
-      messages.value = page.messages
+      messages.value = withLocal(page.messages)
       nextCursor.value = page.nextCursor
       hasMoreRemote.value = !!page.hasMoreRemote
       olderBeyondDepth.value = !!page.olderBeyondDepth
@@ -291,7 +315,7 @@ export const useMailStore = defineStore('mail', () => {
       }
       // Keep object identity for unchanged rows so only changed rows re-render.
       const prev = byId.value
-      messages.value = page.messages.map((m) => {
+      messages.value = withLocal(page.messages).map((m) => {
         const old = prev.get(m.id)
         return old && JSON.stringify(old) === JSON.stringify(m) ? old : m
       })
@@ -324,7 +348,7 @@ export const useMailStore = defineStore('mail', () => {
       const page = await api.listMessages({ ...query.value, cursor: nextCursor.value })
       if (t !== token) return
       const seen = new Set(messages.value.map((m) => m.id))
-      messages.value = [...messages.value, ...page.messages.filter((m) => !seen.has(m.id))]
+      messages.value = [...messages.value, ...withLocal(page.messages).filter((m) => !seen.has(m.id))]
       nextCursor.value = page.nextCursor
       hasMoreRemote.value = !!page.hasMoreRemote
       olderBeyondDepth.value = !!page.olderBeyondDepth
@@ -1200,7 +1224,10 @@ export const useMailStore = defineStore('mail', () => {
     if (cached) return Promise.resolve(cached)
     const pending = threadLoads.get(id)
     if (pending) return pending
-    const p: Promise<Message[]> = fetchThread(id).then((thread) => {
+    const p: Promise<Message[]> = fetchThread(id).then((all) => {
+      const thread = all.filter((m) => !isGoneDraft(m))
+      if (!thread.length) thread.push(...all) // opened on its own: say what it is
+      settleOutgoing(thread)
       // Invalidated while loading (its entry is gone): return it, but don't cache what may be stale.
       if (threadLoads.get(id) === p) {
         threadCache.set(id, thread)
@@ -1273,6 +1300,7 @@ export const useMailStore = defineStore('mail', () => {
    *  checked against the list, so its threads go now. */
   function threadsChanged(change: { accountId?: string; ids?: string[] } = {}) {
     const acct = change.accountId ?? ''
+    checkOutgoing(acct)
     if (change.ids?.length) {
       const set = new Set(change.ids)
       for (const [key, t] of [...threadCache]) {
@@ -1303,6 +1331,148 @@ export const useMailStore = defineStore('mail', () => {
     }
   }
 
+  /** The cached conversation holding message `id`. */
+  function threadOf(id: string): Message[] | undefined {
+    for (const t of threadCache.values()) if (t.some((m) => m.id === id)) return t
+    return undefined
+  }
+
+  /** The cached conversation `threadId` of an account. */
+  function conversation(accountId: string, threadId: string): Message[] | undefined {
+    for (const t of threadCache.values()) if (t[0]?.accountId === accountId && t[0]?.threadId === threadId) return t
+    return undefined
+  }
+
+  /** Still a draft (flagged, or in a Drafts folder). A sent Outlook draft keeps its id as the sent
+   *  message: that one must show. */
+  function isDraftCopy(m: MessageSummary & { isDraft?: boolean }): boolean {
+    return !!m.isDraft || (m.folderIds ?? []).some((f) => accounts.folderMap.get(f)?.kind === 'drafts')
+  }
+
+  /** A draft sent or discarded here that the server or sync hasn't caught up with. */
+  function isGoneDraft(m: MessageSummary & { isDraft?: boolean }): boolean {
+    return goneDrafts.value.has(m.id) && isDraftCopy(m)
+  }
+
+  /** Drafts that were sent or discarded: out of the list and their conversations right away. */
+  function dropDrafts(ids: string[]) {
+    if (!ids.length) return
+    const set = new Set(ids)
+    goneDrafts.value = new Set([...goneDrafts.value, ...ids])
+    // A row that is only the draft goes (a conversation's row stays: it has other mail).
+    const rows = ids.filter((id) => { const r = byId.value.get(id); return !!r && (r.threadCount ?? 1) <= 1 && isDraftCopy(r) })
+    if (rows.length) removeLocal(rows)
+    for (const [key, t] of [...threadCache]) {
+      if (!t.some((m) => set.has(m.id) && isDraftCopy(m))) continue
+      const rest = t.filter((m) => !(set.has(m.id) && isDraftCopy(m)))
+      if (rest.length) threadCache.set(key, rest)
+      else threadCache.delete(key)
+    }
+    threadRev.value++
+  }
+
+  /** Deleting them failed (they are still on the server): they show again. */
+  function restoreDrafts(ids: string[]) {
+    const next = new Set([...goneDrafts.value].filter((id) => !ids.includes(id)))
+    if (next.size === goneDrafts.value.size) return
+    goneDrafts.value = next
+    invalidateThread()
+    threadRev.value++
+    void softRefresh()
+  }
+
+  // ------------------------------------------------------------ outgoing replies
+  /** Fetched rows with what changed here and the server doesn't know yet: drafts sent or discarded
+   *  are left out, and conversations with a reply on its way count it. */
+  function withLocal(rows: MessageSummary[]): MessageSummary[] {
+    const out = goneDrafts.value.size ? rows.filter((m) => !isGoneDraft(m)) : rows
+    if (!outbox.value.length) return out
+    const patched = out.map((row) => {
+      const o = outgoingOf(row)
+      return o ? withOutgoing(row, o) : row
+    })
+    return viewShowsSent() ? byDate(patched) : patched
+  }
+
+  function outgoingOf(row: MessageSummary): Outgoing | undefined {
+    return outbox.value.find((x) => x.count !== null && x.message.accountId === row.accountId && x.message.threadId === row.threadId)
+  }
+
+  /** A conversation row counting a reply on its way (and showing it, where sent mail is listed). A
+   *  count that already has it (synced, or its autosaved draft counted) stays. */
+  function withOutgoing(row: MessageSummary, o: Outgoing): MessageSummary {
+    const participants = row.participants ?? []
+    const patched = { ...row, threadCount: Math.max(row.threadCount ?? 1, o.count ?? 0), participants: participants.includes('me') || participants.length >= 6 ? participants : [...participants, 'me'] }
+    if (!viewShowsSent()) return patched
+    return { ...patched, date: o.message.date, snippet: o.message.snippet, from: o.message.from, to: o.message.to }
+  }
+
+  function byDate(list: MessageSummary[]): MessageSummary[] {
+    return [...list].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  }
+
+  /** The view lists sent mail (Sent, All mail): a conversation's row is its newest message there. */
+  function viewShowsSent(): boolean {
+    const mb = mailbox.value
+    if (mb.folderId) return accounts.folderMap.get(mb.folderId)?.kind === 'sent'
+    return mb.kind === 'sent' || mb.kind === 'all'
+  }
+
+  /** Send pressed on a reply (the undo delay may still run): it shows in its conversation and row.
+   *  `copies`: its own drafts there (sending replaces them, so they don't add to the count). */
+  function addOutgoing(draftId: string, message: Message, copies: string[] = []) {
+    const row = messages.value.find((m) => m.accountId === message.accountId && m.threadId === message.threadId)
+    const thread = conversation(message.accountId, message.threadId) ?? []
+    const own = thread.filter((m) => copies.includes(m.id)).length
+    const o: Outgoing = { draftId, message, count: row ? (row.threadCount ?? 1) - own + 1 : null, known: new Set(thread.map((m) => m.id).filter((id) => !copies.includes(id))) }
+    outbox.value = [...outbox.value.filter((x) => x.draftId !== draftId), o]
+    if (!row) return
+    mutations++ // a list fetch in flight predates it
+    const list = messages.value.map((m) => (m === row ? withOutgoing(m, o) : m))
+    messages.value = viewShowsSent() ? byDate(list) : list
+  }
+
+  /** Undone, or the send failed: it goes again. */
+  function removeOutgoing(draftId: string) {
+    if (!outbox.value.some((o) => o.draftId === draftId)) return
+    outbox.value = outbox.value.filter((o) => o.draftId !== draftId)
+    mutations++
+    void softRefresh()
+  }
+
+  /** The send went through: it stays until the real message syncs in. */
+  function outgoingSent(draftId: string) {
+    const o = outbox.value.find((x) => x.draftId === draftId)
+    if (!o) return
+    o.sent = Date.now()
+    outbox.value = [...outbox.value]
+    setTimeout(() => {
+      if (outbox.value.includes(o)) outbox.value = outbox.value.filter((x) => x !== o)
+    }, OUTGOING_MAX_MS)
+  }
+
+  /** Mail of an account changed (a sync): conversations waiting for a sent reply are fetched again. */
+  function checkOutgoing(accountId: string) {
+    const waiting = outbox.value.filter((o) => o.sent && (!accountId || o.message.accountId === accountId))
+    if (!waiting.length) return
+    for (const o of waiting) {
+      for (const [key, t] of [...threadCache]) if (t[0]?.accountId === o.message.accountId && t[0]?.threadId === o.message.threadId) invalidateThread(key)
+      o.checks = (o.checks ?? 0) + 1
+    }
+    outbox.value = [...outbox.value]
+  }
+
+  /** A fetched conversation: the replies sent into it that it now has are done. That is a message
+   *  from the account that isn't a draft, wasn't there at Send and is dated since. */
+  function settleOutgoing(thread: Message[]) {
+    const first = thread[0]
+    if (!first || !outbox.value.length) return
+    const own = accounts.accountMap.get(first.accountId)?.email.toLowerCase()
+    const done = outbox.value.filter((o) => o.sent && o.message.accountId === first.accountId && o.message.threadId === first.threadId &&
+      thread.some((m) => !o.known.has(m.id) && !isDraftCopy(m) && m.from.email.toLowerCase() === own && Date.parse(m.date) >= Date.parse(o.message.date) - 120_000))
+    if (done.length) outbox.value = outbox.value.filter((o) => !done.includes(o))
+  }
+
   function suggestAddresses(q: string, limit = 6): Address[] {
     const s = q.trim().toLowerCase()
     if (!s) return []
@@ -1325,5 +1495,6 @@ export const useMailStore = defineStore('mail', () => {
     actionIds, snapshot, undoMove, currentTargets, actOnTargets, markTargetsRead, hoveredId, pointAt, hoveredTarget, shouldStar, open, move, moveToFolder, clearSelection, toggleSelect, selectAllLoaded, targetIds, targetIdsForQuery, patchLocal, removeLocal,
     lastUndo, undoToast, undoLast, takeEcho,
     archive, trash, junk, notJunk, setRead, markAllRead, viewFolderIds, setStarred, addLabel, removeLabel, loadThread, cachedThread, updateCachedBodies, invalidateThread, threadsChanged, suggestAddresses,
+    outbox, goneDrafts, isGoneDraft, threadOf, conversation, dropDrafts, restoreDrafts, addOutgoing, removeOutgoing, outgoingSent,
   }
 })

@@ -161,4 +161,6 @@ type OutgoingAttachment struct {
 	Filename string
 	MimeType string
 	Data     []byte
+	// ContentID is set for an inline part (an image shown in the body, cid:).
+	ContentID string
 }

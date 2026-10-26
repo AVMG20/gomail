@@ -605,3 +605,71 @@ func TestLoadOlderStopsAtSyncDepth(t *testing.T) {
 		t.Fatalf("oldest with all mail %v", oldest)
 	}
 }
+
+// A draft reopened from Drafts and autosaved is discarded by its handle: the
+// cached copy goes right away (it stayed in its thread until the next sync).
+func TestDiscardingReopenedDraftDropsCachedCopy(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	if _, err := s.SaveDraft(models.ComposeRequest{AccountID: demo.GmailAccountID, Subject: "Reopen me"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNow(demo.GmailAccountID)
+	res, _ := s.SearchMessages(models.SearchQuery{Query: `subject:"Reopen me"`})
+	if len(res) != 1 {
+		t.Fatal("draft not synced")
+	}
+	h, err := s.SaveDraft(models.ComposeRequest{AccountID: demo.GmailAccountID, Subject: "Reopen me", BodyHTML: "<p>more</p>"}, res[0].Message.ID)
+	if err != nil || !strings.HasPrefix(h, draftPrefix) {
+		t.Fatalf("%q %v", h, err)
+	}
+	if err := s.DeleteDraft(h); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.store.Message(res[0].Message.ID); err == nil {
+		t.Fatal("cached draft still there after discarding it")
+	}
+}
+
+// Images in the body arrive as attachments with a Content-ID and go out as
+// inline parts; an id that can't go into a header is attached instead.
+func TestInlineImagesKeepTheirContentID(t *testing.T) {
+	e := newEnv(t, "")
+	png := "iVBORw0KGgo="
+	_, out, err := e.s.buildOutgoing(models.ComposeRequest{AccountID: demo.GmailAccountID, To: []models.Address{{Email: "x@example.com"}},
+		BodyHTML: `<p><img src="cid:img-1@gomail"></p>`, Attachments: []models.OutgoingAttachment{
+			{Filename: "image.png", MimeType: "image/png", DataBase64: png, ContentID: "<img-1@gomail>"},
+			{Filename: "bad.png", MimeType: "image/png", DataBase64: png, ContentID: "a\r\nBcc: evil@example.com"},
+		}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Attachments[0].ContentID != "img-1@gomail" || out.Attachments[1].ContentID != "" {
+		t.Fatalf("content ids %q %q", out.Attachments[0].ContentID, out.Attachments[1].ContentID)
+	}
+}
+
+// Outlook keeps a sent draft's (immutable) id for the sent message: a send
+// must not drop the cached message with the draft's id, only a discard does.
+func TestSentDraftKeepsMessageWithItsID(t *testing.T) {
+	e := newEnv(t, "")
+	s := e.s
+	if _, err := s.SaveDraft(models.ComposeRequest{AccountID: demo.OutlookAccountID, Subject: "Same id"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNow(demo.OutlookAccountID)
+	res, _ := s.SearchMessages(models.SearchQuery{Query: `subject:"Same id"`})
+	if len(res) != 1 {
+		t.Fatal("draft not synced")
+	}
+	m, _, _ := s.store.Message(res[0].Message.ID)
+	h := draftHandle{demo.OutlookAccountID, m.RemoteID}
+	s.dropLocalDraft(h, h.String(), true)
+	if _, _, err := s.store.Message(m.ID); err != nil {
+		t.Fatal("a send dropped the message that keeps the draft's id")
+	}
+	s.dropLocalDraft(h, h.String(), false)
+	if _, _, err := s.store.Message(m.ID); err == nil {
+		t.Fatal("a discard kept the cached draft")
+	}
+}

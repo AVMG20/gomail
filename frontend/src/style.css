@@ -232,6 +232,8 @@
   font-size: 13px;
 }
 .compose-editor .ProseMirror .gm-signature img { max-width: 100%; height: auto; }
+.compose-editor .ProseMirror img.gm-inline-image { max-width: 100%; height: auto; vertical-align: bottom; border-radius: 2px; }
+.compose-editor .ProseMirror img.gm-inline-image.ProseMirror-selectednode { outline: 2px solid var(--ring); outline-offset: 1px; }
 .compose-editor .ProseMirror .gm-signature.ProseMirror-selectednode { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
 .compose-editor .ProseMirror blockquote {
   border-left: 2px solid var(--border);

@@ -312,6 +312,8 @@ export interface OutgoingAttachment {
   filename: string
   mimeType: string
   dataBase64: string
+  /** An inline part (an image in the body), referenced as cid:<contentId> in the HTML. */
+  contentId?: string
 }
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward'

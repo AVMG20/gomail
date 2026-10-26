@@ -191,7 +191,8 @@ func TestReopenedDraftAttachmentsNotDuplicated(t *testing.T) {
 }
 
 // With the complete file list (a reopened draft whose files were loaded),
-// files the user removed are deleted from the server draft; without it
+// files the user removed are deleted from the server draft, and so are
+// inline images the body no longer shows; one it shows stays. Without it
 // (or for forwards) unknown files stay.
 func TestCompleteAttachmentListDeletesRemoved(t *testing.T) {
 	run := func(out mail.Outgoing) []string {
@@ -200,7 +201,10 @@ func TestCompleteAttachmentListDeletesRemoved(t *testing.T) {
 		c := auditClient(t, func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/attachments"):
-				w.Write([]byte(`{"value":[{"id":"old","name":"old.pdf","size":500},{"id":"logo","name":"logo.png","size":90,"isInline":true},{"id":"keep","name":"keep.pdf","size":400}]}`))
+				w.Write([]byte(`{"value":[{"id":"old","name":"old.pdf","size":500},{"id":"logo","name":"logo.png","size":90,"isInline":true},{"id":"image001","name":"image001.png","size":90,"isInline":true},{"id":"keep","name":"keep.pdf","size":400}]}`))
+			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/attachments/"):
+				id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+				w.Write([]byte(`{"id":"` + id + `","contentId":"<` + id + `@x>"}`))
 			case r.Method == http.MethodDelete:
 				mu.Lock()
 				deleted = append(deleted, r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
@@ -213,7 +217,7 @@ func TestCompleteAttachmentListDeletesRemoved(t *testing.T) {
 				w.Write([]byte(`{}`))
 			}
 		})
-		out.Subject, out.Text = "s", "t"
+		out.Subject, out.HTML = "s", `<p>t</p><img src="cid:logo@x">`
 		out.Attachments = []mail.OutgoingAttachment{{ID: "keep", Filename: "keep.pdf", Data: make([]byte, 300)}}
 		if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
 			t.Fatal(err)
@@ -222,7 +226,7 @@ func TestCompleteAttachmentListDeletesRemoved(t *testing.T) {
 		defer mu.Unlock()
 		return deleted
 	}
-	if got := run(mail.Outgoing{Mode: "new", AttachmentsComplete: true}); fmt.Sprint(got) != "[old]" {
+	if got := run(mail.Outgoing{Mode: "new", AttachmentsComplete: true}); fmt.Sprint(got) != "[old image001]" {
 		t.Fatalf("complete list: deleted %v", got)
 	}
 	if got := run(mail.Outgoing{Mode: "new"}); len(got) != 0 {

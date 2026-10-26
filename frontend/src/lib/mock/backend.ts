@@ -62,6 +62,14 @@ function words(s: string): string[] {
   return s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
 }
 
+/** Like the backend shows them: inline parts (cid:) as data: URLs in the body. */
+function withInlineParts(req: ComposeRequest): string {
+  return req.bodyHtml.replace(/cid:([^"'\s)>]+)/gi, (m, id: string) => {
+    const a = req.attachments.find((x) => x.contentId?.toLowerCase() === id.toLowerCase())
+    return a ? `data:${a.mimeType};base64,${a.dataBase64}` : m
+  })
+}
+
 class MockBackend {
   private accounts: Account[] = clone(SEED_ACCOUNTS)
   private folders = new Map<string, Folder[]>()
@@ -564,9 +572,13 @@ class MockBackend {
     const id = draftId || `draft_${Date.now().toString(36)}`
     const acc = this.accounts.find((a) => a.id === req.accountId)
     if (!acc) return id
-    const msgId = this.drafts.get(id)
+    // Like the backend, draftId may be the id of a message in Drafts (Edit draft).
+    const msgId = this.drafts.get(id) ?? (this.messages.get(id)?.isDraft ? id : undefined)
+    const prev = msgId ? this.messages.get(msgId) : undefined
     if (msgId) this.messages.delete(msgId)
-    const m = buildMessage({ acc: acc.id, from: { name: 'Alex Morgan', email: acc.email }, to: req.to, subject: req.subject || '(no subject)', html: req.bodyHtml, text: req.bodyText, folder: 'drafts', read: true }, Date.now(), undefined, { isDraft: true })
+    const orig = req.replyToId && req.mode !== 'forward' && req.mode !== 'new' ? this.messages.get(req.replyToId) : undefined
+    const m = buildMessage({ acc: acc.id, from: { name: 'Alex Morgan', email: acc.email }, to: req.to, subject: req.subject || '(no subject)', html: withInlineParts(req), text: req.bodyText, folder: 'drafts', read: true },
+      Date.now(), prev?.threadId ?? orig?.threadId, { isDraft: true, inReplyTo: orig?.messageId ?? prev?.inReplyTo ?? '' })
     this.messages.set(m.id, m)
     this.drafts.set(id, m.id)
     this.changed(acc.id)
@@ -575,7 +587,7 @@ class MockBackend {
 
   async DeleteDraft(id: string): Promise<void> {
     await latency(40, 100)
-    const msgId = this.drafts.get(id)
+    const msgId = this.drafts.get(id) ?? (this.messages.get(id)?.isDraft ? id : undefined)
     if (msgId) this.messages.delete(msgId)
     this.drafts.delete(id)
     this.changed()
@@ -976,12 +988,12 @@ class MockBackend {
     const orig = req.replyToId ? this.messages.get(req.replyToId) : undefined
     const m = buildMessage({
       acc: acc.id, from: { name: 'Alex Morgan', email: acc.email }, to: req.to, cc: req.cc, subject: req.subject || '(no subject)',
-      html: req.bodyHtml, text: req.bodyText, folder: 'sent', read: true,
-      att: req.attachments.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: Math.round(a.dataBase64.length * 0.75) })),
+      html: withInlineParts(req), text: req.bodyText, folder: 'sent', read: true,
+      att: req.attachments.filter((a) => !a.contentId).map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: Math.round(a.dataBase64.length * 0.75) })),
     }, Date.now(), orig && req.mode !== 'forward' ? orig.threadId : undefined)
     this.messages.set(m.id, m)
     if (req.draftId) {
-      const dm = this.drafts.get(req.draftId)
+      const dm = this.drafts.get(req.draftId) ?? (this.messages.get(req.draftId)?.isDraft ? req.draftId : undefined)
       if (dm) this.messages.delete(dm)
       this.drafts.delete(req.draftId)
     }

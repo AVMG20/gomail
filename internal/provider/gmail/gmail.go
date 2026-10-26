@@ -1048,7 +1048,7 @@ func (c *Client) build(ctx context.Context, out mail.Outgoing) ([]byte, string, 
 		Subject: out.Subject, Text: out.Text, HTML: out.HTML,
 	}
 	for _, a := range out.Attachments {
-		m.Attachments = append(m.Attachments, mailmime.Attachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data})
+		m.Attachments = append(m.Attachments, mailmime.Attachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data, ContentID: a.ContentID})
 	}
 	threadID := ""
 	if o := out.Original; o != nil {

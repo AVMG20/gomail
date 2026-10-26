@@ -617,6 +617,10 @@ func (p *Provider) outgoing(out mail.Outgoing) (template, *message, []mailmime.A
 	}
 	t := template{fromName: p.me.Name, fromEmail: p.me.Email, subject: out.Subject, rawHTML: html}
 	for _, a := range out.Attachments {
+		if a.ContentID != "" { // an image in the body
+			extra = append(extra, mailmime.Attachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data, ContentID: a.ContentID})
+			continue
+		}
 		data := a.Data
 		t.attachments = append(t.attachments, tmplAttachment{a.Filename, a.MimeType, func() []byte { return data }})
 	}

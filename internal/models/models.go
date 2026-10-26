@@ -240,6 +240,8 @@ type OutgoingAttachment struct {
 	Filename   string `json:"filename"`
 	MimeType   string `json:"mimeType"`
 	DataBase64 string `json:"dataBase64"`
+	// ContentID makes it an inline part, referenced as cid:<id> in the HTML.
+	ContentID string `json:"contentId,omitempty"`
 }
 
 type ComposeRequest struct {

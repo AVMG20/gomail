@@ -16,6 +16,7 @@ import (
 	"github.com/AVMG20/gomail/internal/fakes"
 	"github.com/AVMG20/gomail/internal/httpx"
 	"github.com/AVMG20/gomail/internal/mail"
+	"github.com/AVMG20/gomail/internal/mailmime"
 	"github.com/AVMG20/gomail/internal/models"
 	"github.com/AVMG20/gomail/internal/provider"
 )
@@ -196,5 +197,23 @@ func TestTrashPartialFailure(t *testing.T) {
 	}
 	if len(pe.Failed) != 1 || pe.Failed[0] != "bad" {
 		t.Fatalf("failed ids %v", pe.Failed)
+	}
+}
+
+// An image in the body goes out as an inline part (multipart/related with
+// its Content-ID), not as an attachment.
+func TestInlineImageIsARelatedPart(t *testing.T) {
+	c := New(httpx.StaticToken("tok"), "http://127.0.0.1:1")
+	raw, _, err := c.build(context.Background(), mail.Outgoing{Subject: "s", HTML: `<p><img src="cid:img-1@gomail"></p>`,
+		Attachments: []mail.OutgoingAttachment{{Filename: "image.png", MimeType: "image/png", Data: []byte("PNG!"), ContentID: "img-1@gomail"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := mailmime.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Attachments) != 1 || !p.Attachments[0].Inline || p.Attachments[0].ContentID != "img-1@gomail" || !strings.Contains(string(raw), "multipart/related") {
+		t.Fatalf("parts %+v", p.Attachments)
 	}
 }

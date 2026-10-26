@@ -4,10 +4,11 @@ import { toast } from 'vue-sonner'
 import { api, errorMessage, hasMethod } from '@/lib/api'
 import { displayName, escapeHtml, formatAddress, htmlHasText, htmlToText, isEmail, longDate, signatureBlock, textToHtml } from '@/lib/format'
 import { deleteDraftFiles, loadDraftFiles, pruneDraftFiles, saveDraftFiles } from '@/lib/draftFiles'
+import { extractDataImages, inlineParts, withDataImages } from '@/lib/inlineImages'
 import { uid } from '@/lib/platform'
 import type { Address, ComposeMode, Message } from '@/lib/types'
 import { useAccountsStore } from './accounts'
-import { useMailStore } from './mail'
+import { OUTGOING_PREFIX, useMailStore } from './mail'
 import { useSettingsStore } from './settings'
 import { useUiStore } from './ui'
 
@@ -19,6 +20,8 @@ export interface DraftAttachment {
   dataBase64: string
   /** Loaded from a reopened draft: its attachment id on the server draft (pairs the file there). */
   remoteId?: string
+  /** An image in the body (cid:<contentId> in html), not a file of the attachment list. */
+  contentId?: string
 }
 
 export interface Draft {
@@ -55,6 +58,13 @@ export interface Draft {
   filesPending?: boolean
   /** Restored after a restart: files whose bytes couldn't be read back (they must be re-added). */
   missingFiles?: string[]
+  /** Edit draft: the Drafts message this was opened from (hidden in its thread while open, gone when discarded). */
+  messageId?: string
+  /** The conversation it is in (a reply, Edit draft): its server copies there are hidden while it is
+   *  open, and leave when it is sent or discarded. */
+  threadId?: string
+  /** When the window opened (ms): server copies of the draft saved since then are its autosaves. */
+  openedAt?: number
 }
 
 const DRAFTS_KEY = 'gomail.drafts.v1'
@@ -87,11 +97,27 @@ function contentSig(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' | 'html' | 'a
   return JSON.stringify([d.to, d.cc, d.bcc, d.subject, text, d.attachments?.length ?? 0])
 }
 
+/** The draft's files (the attachment list), without the images in its body. */
+export function fileAttachments(d: Pick<Draft, 'attachments'>): DraftAttachment[] {
+  return d.attachments.filter((a) => !a.contentId)
+}
+
+/** What a send carries: the files plus the images still in the body (deleted ones don't go). */
+export function sentBytes(d: Pick<Draft, 'attachments' | 'html'>): number {
+  return [...fileAttachments(d), ...inlineParts(d.html, d.attachments).parts].reduce((n, a) => n + (a.size || 0), 0)
+}
+
+/** Plain text as editor HTML: a paragraph per line (Enter makes paragraphs, so quote and lists act per line). */
+export function textToParagraphs(text: string): string {
+  return text.replace(/\r\n?/g, '\n').split('\n').map((l) => `<p>${escapeHtml(l)}</p>`).join('')
+}
+
 /** Recipients, subject, attachments or typed body text (the auto-inserted signature doesn't count).
  *  A reply or forward the user hasn't changed has nothing of their own in it. */
 export function draftHasContent(d: Pick<Draft, 'to' | 'cc' | 'bcc' | 'subject' | 'html' | 'attachments'> & { pristine?: string }): boolean {
   if (d.pristine !== undefined && d.pristine === contentSig(d)) return false
-  return !!(d.to?.length || d.cc?.length || d.bcc?.length || d.subject?.trim() || d.attachments?.length || htmlHasText(d.html ?? '', true))
+  // Images count while they are in the body (htmlHasText), not once deleted from it.
+  return !!(d.to?.length || d.cc?.length || d.bcc?.length || d.subject?.trim() || fileAttachments({ attachments: d.attachments ?? [] }).length || htmlHasText(d.html ?? '', true))
 }
 
 /** The words people use for "see the attached file" (English, Dutch, German, French, Spanish). */
@@ -112,7 +138,8 @@ export function sendWarnings(d: Pick<Draft, 'subject' | 'html' | 'attachments' |
   const out: ('subject' | 'attachment')[] = []
   if (!d.subject.trim()) out.push('subject')
   // Not the subject: a reply's "Re: Attached invoice" mentions the original's file.
-  if (!d.attachments.length && !d.forwarded?.length && ATTACH_WORDS.test(ownText(d.html))) out.push('attachment')
+  // Images in the body aren't the file the text talks about.
+  if (!fileAttachments(d).length && !d.forwarded?.length && ATTACH_WORDS.test(ownText(d.html))) out.push('attachment')
   return out
 }
 
@@ -255,7 +282,7 @@ export const useComposeStore = defineStore('compose', () => {
       id: uid('draft'), mode: 'new',
       accountId: mail.mailbox.accountId || accounts.accounts[0]?.id || '',
       to: [], cc: [], bcc: [], showCc: false, subject: '', html: '', attachments: [], replyToId: '',
-      minimized: false, expanded: false, sending: false, version: 0,
+      minimized: false, expanded: false, sending: false, version: 0, openedAt: Date.now(),
       ...partial,
     }
     // New messages start with the From account's signature.
@@ -287,7 +314,7 @@ export const useComposeStore = defineStore('compose', () => {
     // From: the given mailbox (e.g. the calendar event's), else the one being viewed.
     const accountId = (p.accountId && accounts.accountMap.has(p.accountId) ? p.accountId : '') || mail.mailbox.accountId || accounts.accounts[0]?.id || ''
     const sig = accounts.accountMap.get(accountId)?.signature ?? ''
-    const body = p.body ? textToHtml(p.body) : '<p></p>'
+    const body = p.body ? textToParagraphs(p.body) : '<p></p>'
     const cc = p.cc ?? []
     const bcc = p.bcc ?? []
     return create({ accountId, to: p.to ?? [], cc, bcc, showCc: cc.length + bcc.length > 0, subject: p.subject ?? '', html: `${body}${sig ? signatureBlock(sig) : ''}` })
@@ -323,6 +350,8 @@ export const useComposeStore = defineStore('compose', () => {
     const d = create({
       mode, accountId: m.accountId, to, cc, showCc: cc.length > 0,
       subject: prefixSubject(mode === 'forward' ? 'Fwd' : 'Re', m.subject), html, replyToId: m.id, forwarded,
+      // A forward starts a conversation of its own: the drafts of this one aren't its copies.
+      threadId: mode === 'forward' ? undefined : m.threadId,
     })
     d.pristine = contentSig(d)
     return d
@@ -350,7 +379,7 @@ export const useComposeStore = defineStore('compose', () => {
   /** Continue editing a draft from the Drafts folder. Its files are loaded first: the next
    *  autosave replaces the server draft, which would otherwise lose them. */
   async function editDraft(m: Message) {
-    const existing = drafts.value.find((d) => d.remoteId === m.id)
+    const existing = drafts.value.find((d) => d.remoteId === m.id || d.messageId === m.id)
     if (existing) return focus(existing.id)
     const files = (m.attachments ?? []).filter((a) => !(a.inline && a.contentId))
     let attachments: DraftAttachment[] = []
@@ -363,11 +392,15 @@ export const useComposeStore = defineStore('compose', () => {
       toast.error('Couldn’t open the draft', { description: `Its attachments couldn’t be loaded: ${errorMessage(e)}` })
       return
     }
-    if (drafts.value.some((d) => d.remoteId === m.id)) return // opened meanwhile
+    if (drafts.value.some((d) => d.remoteId === m.id || d.messageId === m.id)) return // opened meanwhile
+    // Its images come back as data: URLs: they become the draft's inline images again.
+    const body = extractDataImages(m.bodyHtml || textToParagraphs(m.bodyText))
+    // A reply stays one (threaded when saved and sent): the message it answers is in its conversation.
+    const parent = m.inReplyTo ? useMailStore().threadOf(m.id)?.find((x) => x.messageId === m.inReplyTo && !isDraftMessage(x)) : undefined
     create({
-      mode: 'new', accountId: m.accountId, to: m.to, cc: m.cc, bcc: m.bcc, showCc: m.cc.length + m.bcc.length > 0,
-      subject: m.subject === '(no subject)' ? '' : m.subject, html: m.bodyHtml || textToHtml(m.bodyText), remoteId: m.id, remoteAccountId: m.accountId,
-      attachments,
+      mode: parent ? 'reply' : 'new', replyToId: parent?.id ?? '', accountId: m.accountId, to: m.to, cc: m.cc, bcc: m.bcc, showCc: m.cc.length + m.bcc.length > 0,
+      subject: m.subject === '(no subject)' ? '' : m.subject, html: body.html, remoteId: m.id, remoteAccountId: m.accountId,
+      attachments: [...attachments, ...body.images], messageId: m.id, threadId: m.threadId,
     })
   }
 
@@ -423,10 +456,12 @@ export const useComposeStore = defineStore('compose', () => {
       const byId = new Map((stored ?? []).map((f) => [f.id, f]))
       const missing: string[] = []
       const back = cur.attachments.flatMap((a) => {
+        // Images deleted from the body go; one whose bytes are lost just isn't sent (it can't be re-added).
+        if (a.contentId && !cur.html.includes(`cid:${a.contentId}`)) return []
         if (a.dataBase64) return [a]
         const f = byId.get(a.id)
         if (f?.dataBase64) return [{ ...a, dataBase64: f.dataBase64 }]
-        missing.push(a.filename)
+        if (!a.contentId) missing.push(a.filename)
         return []
       })
       cur.attachments = back
@@ -492,9 +527,35 @@ export const useComposeStore = defineStore('compose', () => {
     const t = remoteTimers.get(id)
     if (t) clearTimeout(t)
     remoteTimers.delete(id)
+    const saving = remoteInflight.has(id)
     close(id)
+    // Its copies leave the thread now, not when the server delete and a sync have gone through.
+    const mail = useMailStore()
+    const copies = d ? draftCopies(d, saving) : []
+    mail.dropDrafts(copies)
     await remoteInflight.get(id)
-    if (d?.remoteId && hasMethod('DeleteDraft')) void api.deleteDraft(d.remoteId).catch(() => {})
+    if (!d?.remoteId || !hasMethod('DeleteDraft')) return
+    try {
+      await api.deleteDraft(d.remoteId)
+    } catch (e) {
+      mail.restoreDrafts(copies)
+      toast.error('Couldn’t delete the draft', { description: `${errorMessage(e)} It is still in Drafts.` })
+    }
+  }
+
+  /** The draft's copies in its conversation: the Drafts message it was opened from, and (once it was
+   *  saved to the server) its autosaves. Where the server draft is a message (Outlook) that is the one
+   *  with its id; a Gmail draft gets a new message per save, so there it is the drafts saved since
+   *  the window opened. */
+  function draftCopies(d: Draft, saved = false): string[] {
+    const ids = d.messageId ? [d.messageId] : []
+    if (!d.threadId || !(d.remoteId || saved)) return ids
+    const thread = (useMailStore().conversation(d.accountId, d.threadId) ?? []).filter(isDraftMessage)
+    const rid = d.remoteId?.split(':').pop()
+    const exact = rid ? thread.filter((m) => m.remoteId === rid || m.id === rid) : []
+    const since = (d.openedAt ?? Date.now()) - 60_000 // server clocks differ a little
+    for (const m of exact.length ? exact : thread.filter((x) => Date.parse(x.date) >= since)) if (!ids.includes(m.id)) ids.push(m.id)
+    return ids
   }
 
   function focus(id: string) {
@@ -502,12 +563,17 @@ export const useComposeStore = defineStore('compose', () => {
   }
 
   function toRequest(d: Draft) {
+    // Images in the body go as inline parts the HTML references by Content-ID.
+    const { html, parts } = inlineParts(d.html, d.attachments)
     return {
       accountId: d.accountId, to: d.to, cc: d.cc, bcc: d.bcc, subject: d.subject,
-      bodyHtml: d.html, bodyText: htmlToText(d.html), replyToId: d.replyToId, mode: d.mode,
-      // Files loaded from the server draft go back with their id there: a new file of the same
-      // name (a newer version) is uploaded instead of being taken for the old one.
-      attachments: d.attachments.map(({ remoteId, filename, mimeType, dataBase64 }) => ({ id: remoteId, filename, mimeType, dataBase64 })),
+      bodyHtml: html, bodyText: htmlToText(html), replyToId: d.replyToId, mode: d.mode,
+      attachments: [
+        // Files loaded from the server draft go back with their id there: a new file of the same
+        // name (a newer version) is uploaded instead of being taken for the old one.
+        ...fileAttachments(d).map(({ remoteId, filename, mimeType, dataBase64 }) => ({ id: remoteId, filename, mimeType, dataBase64 })),
+        ...parts.map(({ filename, mimeType, dataBase64, contentId }) => ({ filename, mimeType, dataBase64, contentId })),
+      ],
       draftId: d.remoteId ?? '',
       // This is the whole file list (saves and sends wait until restored files are back), so
       // files removed here are removed from the server draft too.
@@ -565,8 +631,7 @@ export const useComposeStore = defineStore('compose', () => {
       toast.error(`Check ${invalid.length === 1 ? 'this address' : 'these addresses'}: ${invalid.map((a) => a.email).join(', ')}`)
       return false
     }
-    const bytes = d.attachments.reduce((n, a) => n + (a.size || 0), 0)
-    if (bytes > MAX_ATTACH_BYTES) {
+    if (sentBytes(d) > MAX_ATTACH_BYTES) {
       toast.error('Attachments are larger than 25 MB', { description: 'Remove some files or share them with a link instead.' })
       return false
     }
@@ -590,6 +655,7 @@ export const useComposeStore = defineStore('compose', () => {
     if (delaySeconds > 0) {
       const visible = !d.minimized
       d.queued = true
+      echo(d)
       if (visible) afterStepAway() // the window disappears like a close: focus back to the list
       const toastId = toast('Sending…', {
         description: d.subject || '(no subject)',
@@ -604,13 +670,35 @@ export const useComposeStore = defineStore('compose', () => {
       return
     }
     d.sending = true
+    echo(d)
     await reallySend(id)
+  }
+
+  /** A reply shows in its conversation (and the list) from Send on, as it will once sent. */
+  function echo(d: Draft) {
+    if (d.mode !== 'reply' && d.mode !== 'replyAll') return
+    const mail = useMailStore()
+    const accounts = useAccountsStore()
+    const orig = mail.threadOf(d.replyToId)?.find((m) => m.id === d.replyToId)
+    const acct = accounts.accountMap.get(d.accountId)
+    if (!orig || !acct) return
+    const html = withDataImages(d.html, d.attachments)
+    const text = htmlToText(html)
+    const sent = accounts.folderOf(d.accountId, 'sent')
+    mail.addOutgoing(d.id, {
+      id: `${OUTGOING_PREFIX}${d.id}`, accountId: d.accountId, remoteId: '', threadId: orig.threadId, folderIds: sent ? [sent.id] : [],
+      from: { name: acct.displayName, email: acct.email }, to: d.to, cc: d.cc, bcc: d.bcc, replyTo: [],
+      subject: d.subject, snippet: ownText(html).slice(0, 140), date: new Date().toISOString(),
+      unread: false, starred: false, hasAttachments: fileAttachments(d).length > 0, labels: [],
+      bodyHtml: html, bodyText: text, attachments: [], messageId: '', inReplyTo: '', references: '',
+    }, draftCopies(d, true))
   }
 
   function undoSend(id: string) {
     const t = timers.get(id)
     if (t) clearTimeout(t)
     timers.delete(id)
+    useMailStore().removeOutgoing(id)
     const d = drafts.value.find((x) => x.id === id)
     if (d) {
       d.queued = false
@@ -623,12 +711,17 @@ export const useComposeStore = defineStore('compose', () => {
     const d = drafts.value.find((x) => x.id === id)
     if (!d) return
     d.sending = true
+    const mail = useMailStore()
     try {
       await deliver(d)
+      const copies = draftCopies(d)
       close(id)
+      mail.outgoingSent(id)
+      mail.dropDrafts(copies)
       toast.success('Message sent')
-      void useMailStore().softRefresh()
+      void mail.softRefresh()
     } catch (e) {
+      mail.removeOutgoing(id)
       d.sending = false
       d.queued = false
       d.minimized = false

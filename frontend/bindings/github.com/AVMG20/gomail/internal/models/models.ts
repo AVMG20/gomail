@@ -1087,6 +1087,11 @@ export interface OutgoingAttachment {
     "filename": string;
     "mimeType": string;
     "dataBase64": string;
+
+    /**
+     * ContentID makes it an inline part, referenced as cid:<id> in the HTML.
+     */
+    "contentId"?: string;
 }
 
 /**

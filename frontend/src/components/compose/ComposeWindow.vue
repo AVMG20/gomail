@@ -22,9 +22,10 @@ import {
 import Tip from '@/components/common/Tip.vue'
 import { api, errorMessage } from '@/lib/api'
 import { formatBytes } from '@/lib/format'
+import { contentIdFor, imageSrc, INLINE_IMAGE } from '@/lib/inlineImages'
 import { shortcutLabel, uid } from '@/lib/platform'
 import { useAccountsStore } from '@/stores/accounts'
-import { draftHasContent, sendWarnings, useComposeStore, type Draft } from '@/stores/compose'
+import { draftHasContent, fileAttachments, sendWarnings, sentBytes, useComposeStore, type Draft } from '@/stores/compose'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import RecipientField from './RecipientField.vue'
@@ -78,35 +79,58 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
+/** A file's bytes as base64 (null, with a toast, when it can't be read). */
+async function readFile(f: File): Promise<string | null> {
+  if (totalSize.value + f.size > LIMIT) toast.warning('Attachments now exceed 25 MB', { description: 'The message can’t be sent like this: remove a file or share it with a link.' })
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(String(r.result))
+      r.onerror = () => reject(r.error)
+      r.readAsDataURL(f)
+    })
+    return dataUrl.slice(dataUrl.indexOf(',') + 1)
+  } catch (e) {
+    toast.error(`Couldn’t attach ${f.name}`, { description: errorMessage(e) })
+    return null
+  }
+}
+
 /** Attach files (the file picker, drag and drop, pasted files). */
 async function attachFiles(files: File[]) {
   for (const f of files) {
-    if (totalSize.value + f.size > LIMIT) toast.warning('Attachments now exceed 25 MB', { description: 'The message can’t be sent like this: remove a file or share it with a link.' })
-    let dataUrl: string
-    try {
-      dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader()
-        r.onload = () => resolve(String(r.result))
-        r.onerror = () => reject(r.error)
-        r.readAsDataURL(f)
-      })
-    } catch (e) {
-      toast.error(`Couldn’t attach ${f.name}`, { description: errorMessage(e) })
-      continue
-    }
-    d.value.attachments.push({ id: uid('att'), filename: f.name || 'pasted-file', mimeType: f.type || 'application/octet-stream', size: f.size, dataBase64: dataUrl.slice(dataUrl.indexOf(',') + 1) })
+    const data = await readFile(f)
+    if (data === null) continue
+    d.value.attachments.push({ id: uid('att'), filename: f.name || 'pasted-file', mimeType: f.type || 'application/octet-stream', size: f.size, dataBase64: data })
     compose.resolveMissing(d.value.id, f.name)
   }
 }
+
+/** An image dropped or pasted into the text: kept with the draft's files, shown in the text as cid:. */
+async function addImage(f: File): Promise<string | null> {
+  const data = await readFile(f)
+  if (data === null) return null
+  const contentId = contentIdFor(data)
+  if (!d.value.attachments.some((a) => a.contentId === contentId)) {
+    const ext = f.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+    d.value.attachments.push({ id: uid('att'), filename: f.name || `image.${ext}`, mimeType: f.type, size: f.size, dataBase64: data, contentId })
+  }
+  return `cid:${contentId}`
+}
+const resolveImage = (src: string) => imageSrc(src, d.value.attachments)
 
 async function onFiles(e: Event) {
   await attachFiles(Array.from((e.target as HTMLInputElement).files ?? []))
   if (fileInput.value) fileInput.value.value = ''
 }
 
-// Drag files onto the window to attach them. dragenter/leave fire per child: count them.
+// Drag files onto the window to attach them; images dropped on the text go in it (the editor
+// handles that drop). dragenter/leave fire per child: count them.
 const dragDepth = ref(0)
+/** Over the text with images: no overlay, the editor's drop cursor shows where they go. */
+const dropInText = ref(false)
 const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files')
+const inText = (e: Event) => !!(e.target as Element | null)?.closest?.('.ProseMirror')
 function onDragEnter(e: DragEvent) {
   if (!hasFiles(e)) return
   e.preventDefault()
@@ -116,15 +140,28 @@ function onDragOver(e: DragEvent) {
   if (!hasFiles(e)) return
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  dropInText.value = inText(e) && Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === 'file' && INLINE_IMAGE.test(i.type))
 }
 function onDragLeave(e: DragEvent) {
   if (hasFiles(e)) dragDepth.value = Math.max(0, dragDepth.value - 1)
 }
+/** Bubble phase, after the editor saw the event: the Wails runtime's own listeners on <html> must
+ *  not see file drags. File drops are off for the window, so on Windows they set dropEffect to
+ *  "none" (the 🚫 cursor) over the "copy" set above, and the drop never fired. */
+function keepFileDrag(e: DragEvent) {
+  if (!hasFiles(e)) return
+  e.stopPropagation()
+  if (e.type !== 'drop' || e.defaultPrevented) return
+  // A drop on the text the editor didn't take (no position under the pointer): attach.
+  e.preventDefault()
+  void attachFiles(Array.from(e.dataTransfer?.files ?? []))
+}
 function onDrop(e: DragEvent) {
   dragDepth.value = 0
+  dropInText.value = false
   const files = Array.from(e.dataTransfer?.files ?? [])
   if (!files.length) return
-  // Files are attached, never dropped into the text as inline content.
+  if (inText(e)) return // the editor puts images where they're dropped and attaches the rest
   e.preventDefault()
   e.stopPropagation()
   void attachFiles(files)
@@ -167,7 +204,8 @@ function discard() {
   else compose.discard(d.value.id)
 }
 
-const totalSize = computed(() => d.value.attachments.reduce((n, a) => n + a.size, 0))
+const files = computed(() => fileAttachments(d.value))
+const totalSize = computed(() => sentBytes(d.value))
 const LIMIT = 25 * 1024 * 1024
 
 // ---------------------------------------------------------------- subject context menu + grammar
@@ -258,10 +296,14 @@ watch(() => d.value.accountId, (id, prev) => {
     @dragover.capture="onDragOver"
     @dragleave.capture="onDragLeave"
     @drop.capture="onDrop"
+    @dragenter="keepFileDrag"
+    @dragover="keepFileDrag"
+    @drop="keepFileDrag"
   >
     <!-- Drop target while files are dragged over the window -->
-    <div v-if="dragDepth > 0" class="border-primary bg-background/90 text-primary pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed text-sm font-medium">
+    <div v-if="dragDepth > 0 && !dropInText" class="border-primary bg-background/90 text-primary pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed text-sm font-medium">
       <PaperclipIcon class="size-5" /> Drop files to attach them
+      <span class="text-muted-foreground text-xs font-normal">Drop images on the text to put them in the message</span>
     </div>
     <!-- Title bar -->
     <div class="bg-muted/60 border-border flex h-10 shrink-0 cursor-default items-center gap-1 border-b pr-1.5 pl-4" @dblclick="d.expanded = !d.expanded">
@@ -348,7 +390,7 @@ watch(() => d.value.accountId, (id, prev) => {
     <div class="border-border/70 mx-4 border-t" />
 
     <!-- Body -->
-    <RichEditor ref="editorRef" v-model="d.html" :version="d.version" @submit="sendNow()" @files="attachFiles">
+    <RichEditor ref="editorRef" v-model="d.html" :version="d.version" :add-image="addImage" :resolve-image="resolveImage" @submit="sendNow()" @files="attachFiles">
       <template #start>
         <Button size="sm" class="gap-1.5 px-3" :disabled="d.sending" @click="sendNow()">
           <LoaderIcon v-if="d.sending" class="animate-spin" /><SendIcon v-else />
@@ -387,15 +429,15 @@ watch(() => d.value.accountId, (id, prev) => {
       </span>
       <span class="text-muted-foreground ml-auto text-[11px]">Forwarded with the original</span>
     </div>
-    <div v-if="d.attachments.length" class="border-border flex shrink-0 flex-wrap items-center gap-1.5 border-t px-4 py-2">
-      <span v-for="a in d.attachments" :key="a.id" class="bg-muted inline-flex h-7 max-w-56 items-center gap-1.5 rounded-md pr-1 pl-2 text-xs">
+    <div v-if="files.length" class="border-border flex shrink-0 flex-wrap items-center gap-1.5 border-t px-4 py-2">
+      <span v-for="a in files" :key="a.id" class="bg-muted inline-flex h-7 max-w-56 items-center gap-1.5 rounded-md pr-1 pl-2 text-xs">
         <PaperclipIcon class="text-muted-foreground size-3.5" />
         <span class="truncate">{{ a.filename }}</span>
         <span class="text-muted-foreground">{{ formatBytes(a.size) }}</span>
         <button type="button" class="text-muted-foreground hover:text-foreground rounded p-0.5" :aria-label="`Remove ${a.filename}`" @click="d.attachments = d.attachments.filter((x) => x.id !== a.id)"><XIcon class="size-3" /></button>
       </span>
       <span :class="['ml-auto text-[11px] tabular-nums', totalSize > LIMIT ? 'text-destructive font-medium' : 'text-muted-foreground']">
-        {{ d.attachments.length }} file{{ d.attachments.length === 1 ? '' : 's' }} · {{ formatBytes(totalSize) }}<template v-if="totalSize > LIMIT"> · over 25 MB</template>
+        {{ files.length }} file{{ files.length === 1 ? '' : 's' }} · {{ formatBytes(totalSize) }}<template v-if="totalSize > LIMIT"> · over 25 MB</template>
       </span>
     </div>
 

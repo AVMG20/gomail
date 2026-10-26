@@ -20,6 +20,14 @@ describe('draft content', () => {
   })
 })
 
+describe('images deleted from the body', () => {
+  it('don’t count as content', () => {
+    const img = { id: 'i', filename: 'image.png', mimeType: 'image/png', size: 4, dataBase64: 'AAAA', contentId: 'img-1@gomail' }
+    expect(draftHasContent(base({ html: '<p></p>', attachments: [img] }))).toBe(false)
+    expect(draftHasContent(base({ html: '<p><img src="cid:img-1@gomail"></p>', attachments: [img] }))).toBe(true)
+  })
+})
+
 describe('startup draft restore', () => {
   beforeEach(() => localStorage.clear())
 
@@ -34,6 +42,18 @@ describe('startup draft restore', () => {
     expect(compose.drafts.map((x) => x.id)).toEqual(['real'])
     expect(compose.drafts[0]).toMatchObject({ minimized: true, expanded: false, sending: false, queued: false })
     expect(JSON.parse(localStorage.getItem(DRAFTS_KEY)!).map((x: { id: string }) => x.id)).toEqual(['real'])
+  })
+
+  it('drops images no longer in the body and never asks to re-add an image', async () => {
+    const att = (id: string, contentId?: string) => ({ id, filename: `${id}.png`, mimeType: 'image/png', size: 4, dataBase64: '', contentId })
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify([{ id: 'r', mode: 'new', accountId: 'a', to: [], cc: [], bcc: [], showCc: false, subject: 'Pics', html: '<p><img src="cid:kept@gomail"></p>',
+      attachments: [att('kept', 'kept@gomail'), att('deleted', 'deleted@gomail'), att('file')], replyToId: '', minimized: true, expanded: false, sending: false, version: 0 }]))
+    setActivePinia(createPinia())
+    const compose = useComposeStore()
+    await compose.restoreFiles()
+    // Nothing is in IndexedDB here: the file must be re-added, the lost image just isn't sent.
+    expect(compose.drafts[0].attachments).toEqual([])
+    expect(compose.drafts[0].missingFiles).toEqual(['file.png'])
   })
 
   it('survives corrupt storage', () => {

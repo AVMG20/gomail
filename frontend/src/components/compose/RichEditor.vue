@@ -17,12 +17,24 @@ import {
 } from '@/components/ui/context-menu'
 import Tip from '@/components/common/Tip.vue'
 import { api, errorMessage } from '@/lib/api'
+import { htmlToText } from '@/lib/format'
+import { INLINE_IMAGE } from '@/lib/inlineImages'
 import { shortcutLabel } from '@/lib/platform'
 import { useSettingsStore } from '@/stores/settings'
 import { AiPending, clearArrived, clearPending, markArrived, pendingRange, setPending } from './aiPending'
+import { InlineImage } from './inlineImage'
+import { LineBlocks, splitLines } from './lines'
 import { Signature, setSignature } from './signature'
 
-const props = defineProps<{ modelValue: string; version: number; placeholder?: string }>()
+const props = defineProps<{
+  modelValue: string
+  version: number
+  placeholder?: string
+  /** Stores a dropped or pasted image with the draft; returns the src to put in the text (null: it couldn't be read). */
+  addImage?: (file: File) => Promise<string | null>
+  /** What the editor shows for an image's src (cid: images: their bytes). */
+  resolveImage?: (src: string) => string
+}>()
 const emit = defineEmits<{ 'update:modelValue': [html: string]; submit: []; files: [files: File[]] }>()
 const settings = useSettingsStore()
 function openAiSettings() {
@@ -39,6 +51,8 @@ const editor = useEditor({
     Placeholder.configure({ placeholder: props.placeholder ?? 'Write your message…' }),
     AiPending,
     Signature,
+    InlineImage.configure({ resolve: (src) => props.resolveImage?.(src) ?? src }),
+    LineBlocks,
   ],
   editorProps: {
     attributes: { class: 'compose-editor-content', spellcheck: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Message body' },
@@ -55,12 +69,20 @@ const editor = useEditor({
       }
       return false
     },
-    // Pasted files (a screenshot, files copied in the file manager) are attached: the editor
-    // can't hold images. Rich text that comes with a picture of itself (Word) pastes as text.
+    // Pasted images (a screenshot, an image copied in the browser) go in the text; other files are
+    // attached. Rich text that comes with a picture of itself (Word) pastes as text.
     handlePaste(_view, e) {
       const files = Array.from(e.clipboardData?.files ?? [])
-      if (!files.length || e.clipboardData?.types.includes('text/html')) return false
-      emit('files', files)
+      const html = e.clipboardData?.getData('text/html') ?? ''
+      if (!files.length || (html && htmlToText(html).trim())) return false
+      void addFiles(files)
+      return true
+    },
+    // Files dropped on the text: images where they are dropped, other files attached.
+    handleDrop(view, e) {
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      if (!files.length) return false
+      void addFiles(files, view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos)
       return true
     },
   },
@@ -75,6 +97,34 @@ watch(() => props.version, () => {
 })
 
 onBeforeUnmount(() => editor.value?.destroy())
+
+/** Images go in the text (at `pos`, else the caret), other files are attached. */
+async function addFiles(files: File[], pos?: number) {
+  const images = props.addImage ? files.filter((f) => INLINE_IMAGE.test(f.type)) : []
+  const rest = files.filter((f) => !images.includes(f))
+  if (rest.length) emit('files', rest)
+  if (!images.length) return
+  const srcs = (await Promise.all(images.map((f) => props.addImage!(f)))).filter((s): s is string => !!s)
+  const ed = editor.value
+  if (!ed || ed.isDestroyed || !srcs.length) return
+  const at = Math.min(pos ?? ed.state.selection.from, ed.state.doc.content.size)
+  ed.chain().focus().insertContentAt(at, srcs.map((src) => ({ type: 'image', attrs: { src } }))).run()
+}
+
+/** Plain text as editor content: one paragraph per line (a "\n" in a text node is only a space in mail). */
+function textContent(text: string) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  if (lines.length === 1) return { type: 'text', text }
+  return lines.map((l) => (l ? { type: 'paragraph', content: [{ type: 'text', text: l }] } : { type: 'paragraph' }))
+}
+
+/** Quote / lists: only the selected lines, also when they are <br> lines of one paragraph. */
+function toggleBlock(kind: 'blockquote' | 'bulletList' | 'orderedList') {
+  const c = editor.value?.chain().focus().command(splitLines)
+  if (kind === 'blockquote') c?.toggleBlockquote().run()
+  else if (kind === 'bulletList') c?.toggleBulletList().run()
+  else c?.toggleOrderedList().run()
+}
 
 // ---------------------------------------------------------------- link popover
 const linkOpen = ref(false)
@@ -150,7 +200,7 @@ async function paste() {
   const text = await api.clipboardGet()
   if (!text) return
   const range = snap.value ?? ed.state.selection
-  ed.chain().focus().insertContentAt({ from: range.from, to: range.to }, { type: 'text', text }).run()
+  ed.chain().focus().insertContentAt({ from: range.from, to: range.to }, textContent(text)).run()
 }
 function selectAll() {
   editor.value?.chain().focus().selectAll().run()
@@ -238,7 +288,7 @@ async function improveGrammar() {
     } else {
       const startSize = ed.state.doc.content.size
       if (rich) ed.chain().insertContentAt(range, result).run()
-      else ed.chain().insertContentAt(range, { type: 'text', text: result }).run()
+      else ed.chain().insertContentAt(range, textContent(result)).run()
       const end = range.to + (ed.state.doc.content.size - startSize)
       ed.view.dispatch(markArrived(ed.state.tr, range.from, Math.max(range.from, end)))
     }
@@ -270,7 +320,7 @@ function applySignature(html: string) {
   emit('update:modelValue', editor.value.getHTML())
 }
 
-defineExpose({ editor, improveGrammar, applySignature })
+defineExpose({ editor, improveGrammar, applySignature, addFiles })
 </script>
 
 <template>
@@ -327,13 +377,13 @@ defineExpose({ editor, improveGrammar, applySignature })
         </PopoverContent>
       </Popover>
       <Tip label="Bulleted list">
-        <button type="button" :class="['tb', editor?.isActive('bulletList') && 'tb-on']" aria-label="Bulleted list" @click="editor?.chain().focus().toggleBulletList().run()"><ListIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('bulletList') && 'tb-on']" aria-label="Bulleted list" @click="toggleBlock('bulletList')"><ListIcon class="size-4" /></button>
       </Tip>
       <Tip label="Numbered list">
-        <button type="button" :class="['tb', editor?.isActive('orderedList') && 'tb-on']" aria-label="Numbered list" @click="editor?.chain().focus().toggleOrderedList().run()"><ListOrderedIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('orderedList') && 'tb-on']" aria-label="Numbered list" @click="toggleBlock('orderedList')"><ListOrderedIcon class="size-4" /></button>
       </Tip>
       <Tip label="Quote">
-        <button type="button" :class="['tb', editor?.isActive('blockquote') && 'tb-on']" aria-label="Quote" @click="editor?.chain().focus().toggleBlockquote().run()"><QuoteIcon class="size-4" /></button>
+        <button type="button" :class="['tb', editor?.isActive('blockquote') && 'tb-on']" aria-label="Quote" @click="toggleBlock('blockquote')"><QuoteIcon class="size-4" /></button>
       </Tip>
       <div class="flex-1" />
       <slot name="end" />

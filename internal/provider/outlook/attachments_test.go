@@ -45,14 +45,24 @@ func newDraftServer(t *testing.T) (*Client, *draftServer) {
 			json.NewEncoder(w).Encode(map[string]any{"value": d.atts})
 		case r.Method == http.MethodPost && strings.HasSuffix(p, "/attachments"):
 			var in struct {
-				Name, ContentBytes string
+				Name, ContentBytes, ContentID string
+				IsInline                      bool
 			}
 			json.NewDecoder(r.Body).Decode(&in)
 			data, _ := base64.StdEncoding.DecodeString(in.ContentBytes)
 			d.n++
-			a := gAttachment{ID: fmt.Sprint("att", d.n), Name: in.Name, Size: int64(len(data) + sizeOverhead)}
+			a := gAttachment{ID: fmt.Sprint("att", d.n), Name: in.Name, Size: int64(len(data) + sizeOverhead), IsInline: in.IsInline, ContentID: in.ContentID}
 			d.atts = append(d.atts, a)
 			json.NewEncoder(w).Encode(a)
+		case r.Method == http.MethodGet && strings.Contains(p, "/attachments/"):
+			id := p[strings.LastIndex(p, "/")+1:]
+			for _, a := range d.atts {
+				if a.ID == id {
+					json.NewEncoder(w).Encode(a)
+					return
+				}
+			}
+			w.WriteHeader(404)
 		case r.Method == http.MethodPost && strings.HasSuffix(p, "/createUploadSession"):
 			var in struct {
 				AttachmentItem struct {
@@ -213,6 +223,77 @@ func TestRemovingLargeAttachment(t *testing.T) {
 	}
 	if got := d.list(); len(got) != 0 {
 		t.Fatalf("removed file still on the draft: %+v", got)
+	}
+}
+
+// Images in the body go up as inline attachments with their Content-ID, and
+// later saves (also after a restart, when the client doesn't know its
+// uploads) pair them by Content-ID instead of uploading them again.
+func TestInlineImagesPairByContentID(t *testing.T) {
+	c, d := newDraftServer(t)
+	img := mail.OutgoingAttachment{Filename: "image.png", MimeType: "image/png", Data: []byte("PNG1"), ContentID: "img-1@gomail"}
+	file := mail.OutgoingAttachment{Filename: "image.png", Data: []byte("PNG2")}
+	save := func(c *Client, atts ...mail.OutgoingAttachment) {
+		t.Helper()
+		out := mail.Outgoing{Subject: "s", HTML: `<img src="cid:img-1@gomail">`, Attachments: atts, AttachmentsComplete: true}
+		if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(c, img, file)
+	save(c, img, file)
+	got := d.list()
+	if len(got) != 2 {
+		t.Fatalf("draft attachments %+v", got)
+	}
+	inline := 0
+	for _, a := range got {
+		if a.IsInline {
+			inline++
+			if a.ContentID != "img-1@gomail" {
+				t.Fatalf("content id %q", a.ContentID)
+			}
+		}
+	}
+	if inline != 1 {
+		t.Fatalf("inline parts %d: %+v", inline, got)
+	}
+	restarted := New(httpx.StaticToken("tok"), d.url)
+	restarted.SetSleep(func(context.Context, time.Duration) error { return nil })
+	save(restarted, img, file)
+	if got := d.list(); len(got) != 2 {
+		t.Fatalf("after a restart: %+v", got)
+	}
+	save(restarted, file) // the image was deleted from the body
+	if got := d.list(); len(got) != 1 || got[0].IsInline {
+		t.Fatalf("removed image still on the draft: %+v", got)
+	}
+}
+
+// A draft reopened in a later session (this client never uploaded its
+// image) whose image was deleted, or one from Outlook on the web whose
+// images came back under our Content-IDs: the images the body no longer
+// shows are removed, not sent as extra parts.
+func TestUnreferencedInlineImagesAreRemoved(t *testing.T) {
+	c, d := newDraftServer(t)
+	d.atts = []gAttachment{{ID: "web1", Name: "image001.png", Size: 300, IsInline: true, ContentID: "image001.png@01DA"}}
+	img := mail.OutgoingAttachment{Filename: "image001.png", MimeType: "image/png", Data: []byte("PNG1"), ContentID: "img-1@gomail"}
+	out := mail.Outgoing{Subject: "s", HTML: `<img src="cid:img-1@gomail">`, Attachments: []mail.OutgoingAttachment{img}, AttachmentsComplete: true}
+	if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+		t.Fatal(err)
+	}
+	got := d.list()
+	if len(got) != 1 || got[0].ContentID != "img-1@gomail" {
+		t.Fatalf("draft attachments %+v, want only the re-added image", got)
+	}
+	// Without the complete list (files still loading) nothing unknown goes.
+	d.atts = append(d.atts, gAttachment{ID: "web2", Name: "image002.png", Size: 300, IsInline: true, ContentID: "image002.png@01DA"})
+	out.AttachmentsComplete = false
+	if _, err := c.SaveDraft(context.Background(), out, "D"); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.list(); len(got) != 2 {
+		t.Fatalf("partial list removed %+v", got)
 	}
 }
 

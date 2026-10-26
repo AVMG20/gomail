@@ -23,7 +23,7 @@ import type { Label, Message, MessageLabel } from '@/lib/types'
 import { useAccountsStore } from '@/stores/accounts'
 import { useAiStore } from '@/stores/ai'
 import { useComposeStore } from '@/stores/compose'
-import { useMailStore } from '@/stores/mail'
+import { OUTGOING_PREFIX, useMailStore } from '@/stores/mail'
 import { useSettingsStore } from '@/stores/settings'
 import { FOLDER_ICONS } from './folderIcons'
 import LabelPopover from './LabelPopover.vue'
@@ -113,12 +113,18 @@ const liveRow = computed(() => {
   return r ? `${first.accountId}|${first.threadId}|${r.id}:${r.threadCount ?? 1}` : ''
 })
 const convOf = (k: string) => k.split('|').slice(0, 2).join('|')
-watch(liveRow, async (now, old) => {
-  const id = mail.openId
+watch(liveRow, (now, old) => {
   // Only for the conversation on screen: while another message is still loading, the old
   // thread's row changing must not cancel (and replace) that load.
   // Same conversation only (opening another one changes this too, and needs no refetch).
-  if (!old || !now || now === old || convOf(now) !== convOf(old) || !id || !threadMatches.value) return
+  if (!old || !now || now === old || convOf(now) !== convOf(old)) return
+  void refetch()
+})
+
+/** Fetch the conversation on screen again, keeping what the reader expanded; new messages open. */
+async function refetch() {
+  const id = mail.openId
+  if (!id || !threadMatches.value) return
   const t = ++token
   try {
     mail.invalidateThread(id)
@@ -130,13 +136,29 @@ watch(liveRow, async (now, old) => {
   } catch {
     /* keep showing what we have */
   }
+}
+
+/** Replies being sent into this conversation, shown from Send on (until the real one syncs in). */
+const outgoing = computed(() => {
+  const first = thread.value[0]
+  return first ? mail.outbox.filter((o) => o.message.accountId === first.accountId && o.message.threadId === first.threadId) : []
+})
+// A new one opens. When the account's mail changed (or it never came) the conversation is fetched
+// again: with the real message, which replaces it.
+const checked = new WeakMap<object, number>()
+watch(outgoing, (now, old) => {
+  const ids = now.map((o) => o.message.id)
+  if (ids.some((id) => !expanded.value.has(id))) expanded.value = new Set([...expanded.value, ...ids])
+  const poked = now.filter((o) => (o.checks ?? 0) !== (checked.get(o) ?? 0))
+  poked.forEach((o) => checked.set(o, o.checks ?? 0))
+  if (poked.length || old.some((o) => o.sent && !now.includes(o))) void refetch()
 })
 
 const current = computed(() => {
   void mail.threadRev // the thread copy is patched in place (labels, read state)
   return mail.openSummary ?? thread.value.find((m) => m.id === mail.openId) ?? null
 })
-const newest = computed(() => thread.value[thread.value.length - 1] ?? null)
+const newest = computed(() => [...thread.value].reverse().find((m) => !mail.isGoneDraft(m)) ?? null)
 /** Meeting invitation carried by the conversation (latest one wins). */
 const invite = computed(() => [...thread.value].reverse().find((m) => m.invite)?.invite ?? null)
 /** Experimental "All mail dark" is on: the toolbar offers the original colors for this conversation. */
@@ -248,19 +270,27 @@ const isDraft = computed(() => !!newest.value && isDraftMsg(newest.value))
  *  reply must not look like a sent message. Gmail gives each save a new id, so while a composer replies
  *  into this thread every draft in it is hidden. */
 const shownThread = computed(() => {
-  const ids = new Set(thread.value.map((m) => m.id))
-  const open = compose.drafts.filter((d) => !d.queued)
-  const openIds = new Set(open.map((d) => d.remoteId).filter(Boolean))
-  const replying = open.some((d) => d.replyToId && ids.has(d.replyToId))
-  const list = thread.value.filter((m) => !openIds.has(m.id) && !(replying && isDraftMsg(m)))
-  return list.length ? list : thread.value
+  // Drafts sent or discarded here are gone, also before the server and sync catch up.
+  const live = thread.value.filter((m) => !mail.isGoneDraft(m))
+  const ids = new Set(live.map((m) => m.id))
+  // Sends waiting out the undo delay too: their reply already shows as sent (below).
+  const open = compose.drafts
+  const openIds = new Set(open.flatMap((d) => [d.remoteId, d.messageId]).filter(Boolean))
+  // A draft opened with Edit draft lives in this conversation like a reply does (Gmail saves each
+  // autosave under a new id).
+  const first = thread.value[0]
+  const replying = open.some((d) => d.mode !== 'forward' && ((d.replyToId && ids.has(d.replyToId)) || (!!first && d.threadId === first.threadId && d.accountId === first.accountId)))
+  const list = live.filter((m) => !openIds.has(m.id) && !(replying && isDraftMsg(m)))
+  const shown = list.length ? list : live
+  const echoes = outgoing.value.map((o) => o.message).filter((m) => !shown.some((x) => x.id === m.id))
+  return echoes.length ? [...shown, ...echoes] : shown
 })
 function editDraft(m: Message | null = newest.value) {
   if (m) void compose.editDraft(m)
 }
 /** What Reply / Forward answer: the newest message that isn't a draft (an autosaved reply ends the
  *  thread), or with conversations off the message opened. */
-const replyTo = computed(() => (mail.openId ? compose.replyTargetFor(shownThread.value, mail.openId) ?? null : null))
+const replyTo = computed(() => (mail.openId ? compose.replyTargetFor(shownThread.value.filter((m) => !m.id.startsWith(OUTGOING_PREFIX)), mail.openId) ?? null : null))
 
 const labelingNow = computed(() => !!current.value && ai.labeling.has(current.value.id))
 </script>
@@ -312,7 +342,7 @@ const labelingNow = computed(() => !!current.value && ai.labeling.has(current.va
           <Button variant="ghost" size="icon-sm" :aria-label="originalColors ? 'Show in dark colors' : 'Show original colors'" :aria-pressed="originalColors" :class="originalColors && 'bg-muted text-foreground'" @click="toggleOriginalColors"><ContrastIcon /></Button>
         </Tip>
         <div class="flex-1" />
-        <Button v-if="isDraft" size="sm" class="mr-1 gap-1.5" @click="editDraft"><PencilIcon /> Edit draft</Button>
+        <Button v-if="isDraft" size="sm" class="mr-1 gap-1.5" @click="editDraft()"><PencilIcon /> Edit draft</Button>
         <Tip label="Reply" shortcut="r"><Button variant="ghost" size="icon-sm" aria-label="Reply" @click="respond('reply')"><CornerUpLeftIcon /></Button></Tip>
         <Tip v-if="!compactBar" label="Reply all" shortcut="a"><Button variant="ghost" size="icon-sm" aria-label="Reply all" @click="respond('replyAll')"><ReplyAllIcon /></Button></Tip>
         <Tip v-if="!compactBar" label="Forward" shortcut="f"><Button variant="ghost" size="icon-sm" aria-label="Forward" @click="respond('forward')"><ForwardIcon /></Button></Tip>

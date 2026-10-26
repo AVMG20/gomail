@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,9 @@ func stripDataURL(s string) string {
 	}
 	return strings.TrimSpace(s)
 }
+
+// contentIDRe is what an inline part's Content-ID may be (it goes into a header and cid: URLs).
+var contentIDRe = regexp.MustCompile(`^[A-Za-z0-9._@$+=-]{1,200}$`)
 
 func cleanAddrs(list []models.Address) ([]models.Address, error) {
 	out := make([]models.Address, 0, len(list))
@@ -99,7 +103,11 @@ func (s *Service) buildOutgoing(req models.ComposeRequest, draft bool) (models.A
 		if total > maxAttachmentBytes {
 			return acct, out, errors.New("attachments are larger than 25 MB in total")
 		}
-		out.Attachments = append(out.Attachments, mail.OutgoingAttachment{ID: a.ID, Filename: sanitizeFilename(filepath.Base(a.Filename)), MimeType: a.MimeType, Data: data})
+		cid := strings.Trim(a.ContentID, "<>")
+		if !contentIDRe.MatchString(cid) {
+			cid = "" // not a usable Content-ID: attach the file instead
+		}
+		out.Attachments = append(out.Attachments, mail.OutgoingAttachment{ID: a.ID, Filename: sanitizeFilename(filepath.Base(a.Filename)), MimeType: a.MimeType, Data: data, ContentID: cid})
 	}
 	if req.ReplyToID != "" && out.Mode != "new" {
 		orig, err := s.messageRaw(strings.TrimPrefix(req.ReplyToID, store.ConversationPrefix)) // loads threading headers
@@ -168,6 +176,7 @@ func (s *Service) Send(req models.ComposeRequest) error {
 			if err := p.SendDraft(ctx, out, h.remoteID); err != nil {
 				return fmt.Errorf("sending failed: %s", syncer.HumanError(acct, err))
 			}
+			s.dropLocalDraft(h, req.DraftID, true)
 			s.syncSoon(acct.ID, 2*time.Second)
 			return nil
 		}
@@ -236,6 +245,28 @@ type draftSaver struct {
 	// moved maps the handle of a draft that was recreated (deleted
 	// elsewhere) to its new handle, for saves still using the old one.
 	moved map[string]string
+	// opened maps the handle of a draft reopened from Drafts to that local
+	// message, so discarding or sending it by handle drops the cached copy.
+	opened map[string]string
+}
+
+// open records that the draft h was reopened from local message id.
+func (d *draftSaver) open(h draftHandle, id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.opened == nil {
+		d.opened = map[string]string{}
+	}
+	d.opened[h.String()] = id
+}
+
+// takeOpened returns (and forgets) the local message h was reopened from.
+func (d *draftSaver) takeOpened(h draftHandle) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id := d.opened[h.String()]
+	delete(d.opened, h.String())
+	return id
 }
 
 type draftEntry struct {
@@ -304,6 +335,10 @@ func (d *draftSaver) recreated(old draftHandle, rid string) draftHandle {
 		d.moved = map[string]string{}
 	}
 	d.moved[old.String()] = h.String()
+	if id, ok := d.opened[old.String()]; ok {
+		delete(d.opened, old.String())
+		d.opened[h.String()] = id
+	}
 	if e, ok := d.entries[old.String()]; ok {
 		delete(d.entries, old.String())
 		d.entries[h.String()] = e
@@ -329,6 +364,8 @@ func (s *Service) SaveDraft(req models.ComposeRequest, draftID string) (string, 
 				return "", fmt.Errorf("saving the draft failed: %s", syncer.HumanError(acct, err))
 			}
 			h = draftHandle{}
+		} else if !strings.HasPrefix(draftID, draftPrefix) {
+			s.drafts.open(h, strings.TrimPrefix(draftID, store.ConversationPrefix))
 		}
 	}
 	p, err := s.provider(acct.ID)
@@ -538,13 +575,37 @@ func (s *Service) DeleteDraft(id string) error {
 		acct, _ := s.store.Account(h.accountID)
 		return fmt.Errorf("deleting the draft failed: %s", syncer.HumanError(acct, err))
 	}
-	if !strings.HasPrefix(id, draftPrefix) {
-		// Remove the cached draft message right away.
-		_, _ = s.store.ApplySync(h.accountID, mail.SyncResult{Deleted: []string{mustRemoteID(s, id)}}, nil)
-		s.emit(models.EventMessagesChanged, models.AccountEvent{AccountID: h.accountID})
-	}
+	s.dropLocalDraft(h, id, false)
 	s.syncSoon(h.accountID, 2*time.Second)
 	return nil
+}
+
+// dropLocalDraft removes the cached copy of a sent or discarded draft right
+// away rather than at the next sync: the local message id (or the one the
+// draft was reopened from), and the message with the draft's id (Graph
+// drafts are messages). A sent Graph draft keeps its (immutable) id as the
+// sent message, so after a send only copies under another id go (a Gmail
+// draft's stale message).
+func (s *Service) dropLocalDraft(h draftHandle, id string, sent bool) {
+	var gone []string
+	if !sent {
+		gone = append(gone, h.remoteID)
+	}
+	local := s.drafts.takeOpened(h)
+	if !strings.HasPrefix(id, draftPrefix) {
+		local = strings.TrimPrefix(id, store.ConversationPrefix)
+	}
+	if local != "" {
+		if rid := mustRemoteID(s, local); rid != "" && rid != h.remoteID {
+			gone = append(gone, rid)
+		}
+	}
+	if len(gone) == 0 {
+		return
+	}
+	if res, err := s.store.ApplySync(h.accountID, mail.SyncResult{Deleted: gone}, nil); err == nil && res.Changed {
+		s.emit(models.EventMessagesChanged, models.AccountEvent{AccountID: h.accountID})
+	}
 }
 
 func mustRemoteID(s *Service, localID string) string {

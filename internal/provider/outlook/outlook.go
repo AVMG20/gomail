@@ -842,6 +842,14 @@ func draftFields(out mail.Outgoing) map[string]any {
 
 func attKey(name string, size int) string { return fmt.Sprintf("%s|%d", strings.ToLower(name), size) }
 
+// wantKey identifies a wanted attachment: inline images by Content-ID.
+func wantKey(a mail.OutgoingAttachment) string {
+	if a.ContentID != "" {
+		return "cid:" + strings.ToLower(a.ContentID)
+	}
+	return attKey(a.Filename, len(a.Data))
+}
+
 // SaveDraft creates or updates a draft. Replies and forwards are created
 // with createReply/createReplyAll/createForward so Exchange threads them
 // and keeps the forwarded attachments.
@@ -882,7 +890,7 @@ func (c *Client) SaveDraft(ctx context.Context, out mail.Outgoing, draftID strin
 		draftID, created = draft.ID, true
 	}
 	// Forwards keep the files createForward put on the draft.
-	if err := c.syncAttachments(ctx, draftID, out.Attachments, out.AttachmentsComplete && out.Mode != "forward"); err != nil {
+	if err := c.syncAttachments(ctx, draftID, out.Attachments, out.HTML, out.AttachmentsComplete && out.Mode != "forward"); err != nil {
 		if created {
 			c.discard(draftID)
 		}
@@ -899,15 +907,15 @@ const attSlack = 2 << 10
 // Files the draft got from createForward, or that this client doesn't know
 // about (uploaded before a restart, or elsewhere), are left alone unless
 // complete says atts is the draft's whole file list.
-func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mail.OutgoingAttachment, complete bool) error {
+func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mail.OutgoingAttachment, html string, complete bool) error {
 	type wanted struct {
-		key string // attKey of the content
+		key string // wantKey of the content
 		a   mail.OutgoingAttachment
 	}
 	var want []wanted
 	keys, seen := map[string]bool{}, map[string]bool{}
 	for _, a := range atts {
-		key := attKey(a.Filename, len(a.Data))
+		key := wantKey(a)
 		dup := key // the same file attached twice is uploaded once
 		if a.ID != "" {
 			dup = "id:" + a.ID
@@ -977,20 +985,49 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 		}
 	}
 	existing.Value = kept
+	// Inline images pair by Content-ID, which the list doesn't include: read
+	// it when an image isn't known to be ours.
+	cids := map[string]string{} // server attachment id -> content id
+	needCID := false
+	for _, w := range want {
+		needCID = needCID || w.a.ContentID != "" && ours[w.key] == ""
+	}
+	cidOf := func(e gAttachment) (string, error) {
+		if cid, ok := cids[e.ID]; ok {
+			return cid, nil
+		}
+		var full gAttachment
+		if err := c.api.JSON(ctx, http.MethodGet, c.msgPath(draftID)+"/attachments/"+url.PathEscape(e.ID), nil, &full); err != nil {
+			return "", err
+		}
+		cids[e.ID] = strings.Trim(full.ContentID, "<>")
+		return cids[e.ID], nil
+	}
+	for _, e := range existing.Value {
+		if needCID && e.IsInline {
+			if _, err := cidOf(e); err != nil {
+				return err
+			}
+		}
+	}
 	// Pair the wanted files with the draft's files: a file loaded from the
-	// draft by its attachment id, a file we uploaded by our record of it.
-	// Anything else is uploaded. Only for a client that sends neither ids
-	// nor the whole file list, the same name with a size that fits
-	// Graph's overhead counts too; with the whole list, that file may be
-	// an older version the user removed, which must not be sent instead.
+	// draft by its attachment id, a file or image we uploaded by our record
+	// of it, an image by its Content-ID. Anything else is uploaded. Only for
+	// a client that sends neither ids nor the whole file list, the same
+	// name with a size that fits Graph's overhead counts too; with the
+	// whole list, that file may be an older version the user removed,
+	// which must not be sent instead.
 	claimed := map[string]bool{} // server attachment id -> wanted
 	present := make([]bool, len(want))
 	for _, pass := range []func(e gAttachment, w wanted) bool{
 		func(e gAttachment, w wanted) bool { return w.a.ID != "" && e.ID == w.a.ID },
-		func(e gAttachment, w wanted) bool { return !e.IsInline && ours[w.key] == e.ID },
+		func(e gAttachment, w wanted) bool { return e.IsInline == (w.a.ContentID != "") && ours[w.key] == e.ID },
+		func(e gAttachment, w wanted) bool {
+			return w.a.ContentID != "" && e.IsInline && strings.EqualFold(cids[e.ID], w.a.ContentID)
+		},
 		func(e gAttachment, w wanted) bool {
 			n := len(w.a.Data)
-			return w.a.ID == "" && !complete && !e.IsInline && strings.EqualFold(e.Name, w.a.Filename) &&
+			return w.a.ID == "" && w.a.ContentID == "" && !complete && !e.IsInline && strings.EqualFold(e.Name, w.a.Filename) &&
 				int(e.Size) >= n && int(e.Size) <= n+attSlack
 		},
 	} {
@@ -1001,18 +1038,37 @@ func (c *Client) syncAttachments(ctx context.Context, draftID string, atts []mai
 			for _, e := range existing.Value {
 				if !claimed[e.ID] && pass(e, w) {
 					claimed[e.ID], present[i] = true, true
+					if w.a.ContentID != "" {
+						// Our image (its Content-ID came from this body): removed with it.
+						c.mu.Lock()
+						ours[w.key] = e.ID
+						c.mu.Unlock()
+					}
 					break
 				}
 			}
 		}
 	}
 	if complete {
-		// The user removed these in the reopened draft.
+		// The user removed these in the reopened draft: files, and inline
+		// images the body no longer shows (deleted, or reopened from another
+		// client and re-added under our Content-IDs).
+		body := strings.ToLower(html)
 		for _, e := range existing.Value {
-			if !claimed[e.ID] && !e.IsInline {
-				if err := remove(e.ID); err != nil {
+			if claimed[e.ID] {
+				continue
+			}
+			if e.IsInline {
+				cid, err := cidOf(e)
+				if err != nil {
 					return err
 				}
+				if cid != "" && strings.Contains(body, "cid:"+strings.ToLower(cid)) {
+					continue
+				}
+			}
+			if err := remove(e.ID); err != nil {
+				return err
 			}
 		}
 	}
@@ -1209,17 +1265,25 @@ func (c *Client) addAttachment(ctx context.Context, draftID string, a mail.Outgo
 		var created struct {
 			ID string `json:"id"`
 		}
-		err := c.api.JSON(ctx, http.MethodPost, c.msgPath(draftID)+"/attachments", map[string]any{
+		body := map[string]any{
 			"@odata.type": "#microsoft.graph.fileAttachment", "name": a.Filename, "contentType": ct,
 			"contentBytes": base64.StdEncoding.EncodeToString(a.Data),
-		}, &created)
+		}
+		if a.ContentID != "" {
+			body["isInline"], body["contentId"] = true, a.ContentID
+		}
+		err := c.api.JSON(ctx, http.MethodPost, c.msgPath(draftID)+"/attachments", body, &created)
 		return created.ID, err
 	}
 	var sess struct {
 		UploadURL string `json:"uploadUrl"`
 	}
+	item := map[string]any{"attachmentType": "file", "name": a.Filename, "size": len(a.Data), "contentType": ct}
+	if a.ContentID != "" {
+		item["isInline"], item["contentId"] = true, a.ContentID
+	}
 	if err := c.api.JSON(ctx, http.MethodPost, c.msgPath(draftID)+"/attachments/createUploadSession", map[string]any{
-		"AttachmentItem": map[string]any{"attachmentType": "file", "name": a.Filename, "size": len(a.Data), "contentType": ct},
+		"AttachmentItem": item,
 	}, &sess); err != nil {
 		return "", err
 	}
