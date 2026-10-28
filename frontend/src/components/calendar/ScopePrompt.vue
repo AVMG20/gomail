@@ -33,7 +33,7 @@ const verb = computed(() => ({ edit: 'Save changes to', move: 'Move', resize: 'C
         <DialogDescription class="mt-1.5 leading-relaxed">{{ confirmRequest?.description }}</DialogDescription>
       </div>
       <div class="flex justify-end gap-2">
-        <Button variant="ghost" size="sm" @click="answerConfirm(false)">Cancel</Button>
+        <Button variant="ghost" size="sm" @click="answerConfirm(false)">{{ confirmRequest?.cancel }}</Button>
         <Button size="sm" autofocus @click="answerConfirm(true)">{{ confirmRequest?.confirm }}</Button>
       </div>
     </DialogContent>

@@ -2,7 +2,7 @@
 // Full event editor: title, all-day, start/end, time zone (collapsed), repeat,
 // location, meeting link, guests, reminders, description and calendar.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { BellIcon, ChevronDownIcon, ClockIcon, GlobeIcon, LinkIcon, LoaderIcon, MapPinIcon, RepeatIcon, SparklesIcon, TextIcon, UsersIcon, VideoIcon, XIcon } from '@lucide/vue'
+import { BellIcon, ChevronDownIcon, ClockIcon, GlobeIcon, LinkIcon, LoaderIcon, MailIcon, MapPinIcon, RepeatIcon, SparklesIcon, TextIcon, UsersIcon, VideoIcon, XIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -67,6 +67,17 @@ const ruleChanged = () => freq.value !== freq0 || until.value !== (customRule ? 
 const location = ref(base.location ?? '')
 const meetingUrl = ref(base.meetingUrl ?? '')
 const guests = ref<Address[]>((base.attendees ?? []).map((a) => ({ name: a.name, email: a.email })))
+// Saving emails guests (Google and Outlook both send the invitations): people
+// not on the saved event yet get a new invitation, so that's said out loud.
+const invited0 = new Set((ev?.attendees ?? []).map((a) => a.email.toLowerCase()))
+const newGuests = computed(() => guests.value.filter((g) => !invited0.has(g.email.toLowerCase())))
+const guestHint = computed(() => {
+  const n = newGuests.value.length
+  if (n) return `${n === 1 ? newGuests.value[0].name || newGuests.value[0].email : `${n} ${isNew ? '' : 'new '}guests`} will get an email invitation when you ${isNew ? 'create the event' : 'save'}.`
+  if (guests.value.length) return 'Guests are emailed about changes you save.'
+  return ''
+})
+const saveLabel = computed(() => (newGuests.value.length ? (isNew ? 'Create & send invites' : 'Save & send invites') : isNew ? 'Create event' : 'Save'))
 const defaultReminder = settings.settings?.calendarDefaultReminder ?? 10
 const reminders = ref<number[]>(base.reminders ? [...base.reminders] : defaultReminder >= 0 ? [defaultReminder] : [])
 const description = ref(base.description ?? '')
@@ -220,6 +231,17 @@ async function save() {
   if (!input.title) input.title = 'Untitled event'
   saving.value = true
   try {
+    if (newGuests.value.length) {
+      const names = newGuests.value.map((g) => g.name || g.email)
+      const who = names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} others`
+      const ok = await askConfirm(
+        'Send email invitations?',
+        `${who} will get an email invitation to “${input.title}” and can reply to it.`,
+        'Send invites',
+        'Back to editing',
+      )
+      if (!ok) return
+    }
     if (isNew) {
       if (await cal.create(input)) close()
       return
@@ -411,8 +433,11 @@ function addReminder(v: unknown) {
         <!-- Guests -->
         <div class="flex gap-3">
           <UsersIcon class="text-muted-foreground mt-2 size-4 shrink-0" />
-          <div v-if="!readOnly" class="border-input min-w-0 flex-1 rounded-md border px-2">
-            <RecipientField ref="guestField" v-model="guests" label="Guests" />
+          <div v-if="!readOnly" class="min-w-0 flex-1">
+            <div class="border-input rounded-md border px-2">
+              <RecipientField ref="guestField" v-model="guests" label="Guests" />
+            </div>
+            <p v-if="guestHint" class="text-muted-foreground mt-1.5 flex items-center gap-1.5 text-xs"><MailIcon class="size-3.5 shrink-0" />{{ guestHint }}</p>
           </div>
           <p v-else class="text-muted-foreground min-w-0 flex-1 pt-1.5 text-sm break-words">{{ guests.length ? guests.map((g) => g.name || g.email).join(', ') : 'No guests' }}</p>
         </div>
@@ -456,7 +481,7 @@ function addReminder(v: unknown) {
 
       <div class="border-border flex items-center justify-end gap-2 border-t px-5 py-3">
         <Button variant="ghost" size="sm" @click="requestClose">Cancel</Button>
-        <Button v-if="!readOnly" size="sm" :disabled="saving" :title="`${isNew ? 'Create event' : 'Save'} (${shortcutLabel('mod+enter')})`" @click="save">{{ isNew ? 'Create event' : 'Save' }}</Button>
+        <Button v-if="!readOnly" size="sm" :disabled="saving" :title="`${saveLabel} (${shortcutLabel('mod+enter')})`" @click="save">{{ saveLabel }}</Button>
       </div>
       <ScopePrompt />
     </DialogContent>
