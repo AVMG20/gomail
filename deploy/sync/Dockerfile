@@ -13,8 +13,7 @@ COPY go.mod go.sum ./
 COPY cmd/gomail-sync ./cmd/gomail-sync
 COPY internal/syncapi ./internal/syncapi
 COPY internal/syncserver ./internal/syncserver
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    go build -ldflags="-s -w" -o /out/gomail-sync ./cmd/gomail-sync
+RUN go build -ldflags="-s -w" -o /out/gomail-sync ./cmd/gomail-sync
 # The data folder, owned by the runtime user (a new named volume copies it).
 RUN mkdir -p /out/data && chown 65532:65532 /out/data
 
