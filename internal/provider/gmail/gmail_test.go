@@ -417,3 +417,14 @@ func TestQuotaCost(t *testing.T) {
 		}
 	}
 }
+
+// Gmail serves text parts of format=full already converted to UTF-8 while the
+// header keeps the original charset; decoding them again garbled "€" to "â‚¬".
+func TestBodyTextKeepsGmailUTF8(t *testing.T) {
+	if got := bodyText([]byte("<strong>€ 81,94</strong> pizza’s"), `text/html; charset="Windows-1252"`); got != "<strong>€ 81,94</strong> pizza’s" {
+		t.Errorf("utf-8 data = %q", got)
+	}
+	if got := bodyText([]byte("\x80 81,94 pizza\x92s"), `text/html; charset="Windows-1252"`); got != "€ 81,94 pizza’s" {
+		t.Errorf("windows-1252 data = %q", got)
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/AVMG20/gomail/internal/httpx"
 	"github.com/AVMG20/gomail/internal/mail"
@@ -778,7 +779,7 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 			} else if p.Body.AttachmentID != "" {
 				data, _ = c.attachmentData(ctx, remoteID, p.Body.AttachmentID)
 			}
-			b.Calendar = mailmime.DecodeCharset(data, charsetOf(p.header("Content-Type")))
+			b.Calendar = bodyText(data, p.header("Content-Type"))
 			if p.Filename == "" {
 				return // the invitation itself, not a file the user attached
 			}
@@ -790,7 +791,7 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 				// Large bodies are served like attachments.
 				data, _ = c.attachmentData(ctx, remoteID, p.Body.AttachmentID)
 			}
-			text := mailmime.DecodeCharset(data, charsetOf(p.header("Content-Type")))
+			text := bodyText(data, p.header("Content-Type"))
 			if p.MimeType == "text/html" {
 				if b.HTML != "" {
 					b.HTML += "<hr>"
@@ -826,6 +827,19 @@ func (c *Client) Body(ctx context.Context, remoteID string) (*mail.Body, error) 
 	}
 	walk(&g.Payload, 0)
 	return b, nil
+}
+
+// bodyText converts a text part to UTF-8. With format=full Gmail serves
+// text parts already converted to UTF-8 while the Content-Type still names
+// the original charset, so decoding them again as e.g. Windows-1252 turns
+// "€" into "â‚¬". Valid UTF-8 is therefore taken as is; anything else (such
+// as large parts served raw through the attachments endpoint) is decoded
+// with the declared charset.
+func bodyText(data []byte, ct string) string {
+	if utf8.Valid(data) {
+		return string(data)
+	}
+	return mailmime.DecodeCharset(data, charsetOf(ct))
 }
 
 func charsetOf(ct string) string {

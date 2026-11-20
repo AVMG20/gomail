@@ -507,6 +507,15 @@ ALTER TABLE pending_calendars ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
 	`
 ALTER TABLE contacts ADD COLUMN match_key TEXT NOT NULL DEFAULT '';
 `,
+	// 22: Gmail bodies in a non-UTF-8 charset were decoded twice ("€" shown
+	// as "â‚¬", "’" as "â€™"). Drop the cached Gmail bodies with such
+	// sequences, so they are fetched again when opened.
+	`
+UPDATE messages SET body_html = NULL, body_text = NULL
+WHERE account_id IN (SELECT id FROM accounts WHERE provider = 'gmail')
+	AND (body_html LIKE '%â€%' OR body_html LIKE '%â‚¬%' OR body_html LIKE '%Ã%' OR body_html LIKE '%Â%'
+		OR body_text LIKE '%â€%' OR body_text LIKE '%â‚¬%' OR body_text LIKE '%Ã%' OR body_text LIKE '%Â%');
+`,
 }
 
 // goMigrations run after the SQL of the migration with the same number
